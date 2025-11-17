@@ -1,0 +1,12 @@
+[package]
+name = "vibe-graph-llmca"
+version = "0.1.0"
+edition.workspace = true
+description = "Cellular automaton fabric driving Vibe-Graph dynamics"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }
+serde_json = { workspace = true }

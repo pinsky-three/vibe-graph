@@ -1,0 +1,11 @@
+[package]
+name = "vibe-graph-git"
+version = "0.1.0"
+edition.workspace = true
+description = "Git fossilization layer for Vibe-Graph snapshots"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }

@@ -1,0 +1,11 @@
+[package]
+name = "vibe-graph-ssot"
+version = "0.1.0"
+edition.workspace = true
+description = "Source of structure tooling for building SourceCodeGraph instances"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }

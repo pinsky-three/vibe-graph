@@ -1,0 +1,10 @@
+[package]
+name = "vibe-graph-semantic"
+version = "0.1.0"
+edition.workspace = true
+description = "Semantic/narrative layer bridging structural graphs to concepts"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }

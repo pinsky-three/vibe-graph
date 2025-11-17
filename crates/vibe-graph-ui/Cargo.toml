@@ -1,0 +1,9 @@
+[package]
+name = "vibe-graph-ui"
+version = "0.1.0"
+edition.workspace = true
+description = "Placeholder UI surface for visualizing Vibe-Graph"
+publish = false
+
+[dependencies]
+vibe-graph-core = { path = "../vibe-graph-core" }

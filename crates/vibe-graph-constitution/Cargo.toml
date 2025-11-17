@@ -1,0 +1,9 @@
+[package]
+name = "vibe-graph-constitution"
+version = "0.1.0"
+edition.workspace = true
+description = "Governance and planning constraints for Vibe-Graph"
+publish = false
+
+[dependencies]
+vibe-graph-core = { path = "../vibe-graph-core" }

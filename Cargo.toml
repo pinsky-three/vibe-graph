@@ -1,6 +1,26 @@
-[package]
-name = "vibe-graph"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+  "crates/vibe-graph-core",
+  "crates/vibe-graph-ssot",
+  "crates/vibe-graph-semantic",
+  "crates/vibe-graph-llmca",
+  "crates/vibe-graph-constitution",
+  "crates/vibe-graph-sync",
+  "crates/vibe-graph-materializer",
+  "crates/vibe-graph-git",
+  "crates/vibe-graph-engine",
+  "crates/vibe-graph-cli",
+  "crates/vibe-graph-ui",
+]
+resolver = "2"
 
-[dependencies]
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = { version = "0.1", features = ["std"] }
+clap = { version = "4", features = ["derive"] }

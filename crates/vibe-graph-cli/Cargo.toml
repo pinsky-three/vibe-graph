@@ -1,0 +1,13 @@
+[package]
+name = "vibe-graph-cli"
+version = "0.1.0"
+edition.workspace = true
+description = "Command-line interface for interacting with Vibe-Graph"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }
+vibe-graph-ssot = { path = "../vibe-graph-ssot" }

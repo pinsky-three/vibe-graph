@@ -1,0 +1,15 @@
+[package]
+name = "vibe-graph-engine"
+version = "0.1.0"
+edition.workspace = true
+description = "Neural OS runtime engine that coordinates all Vibe-Graph subsystems"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }
+vibe-graph-llmca = { path = "../vibe-graph-llmca" }
+vibe-graph-constitution = { path = "../vibe-graph-constitution" }
+vibe-graph-sync = { path = "../vibe-graph-sync" }
+vibe-graph-git = { path = "../vibe-graph-git" }

@@ -1,0 +1,10 @@
+[package]
+name = "vibe-graph-sync"
+version = "0.1.0"
+edition.workspace = true
+description = "Local-first event log and sync primitives"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+vibe-graph-core = { path = "../vibe-graph-core" }
