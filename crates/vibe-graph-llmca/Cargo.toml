@@ -9,4 +9,12 @@ publish = false
 anyhow = { workspace = true }
 tracing = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }
+serde = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { version = "0.12.3", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "blocking",
+] }
+schemars = "0.8"
+toml = "0.8"

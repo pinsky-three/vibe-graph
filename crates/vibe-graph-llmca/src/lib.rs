@@ -1,11 +1,18 @@
 //! Cellular automaton fabric that operates over the `SourceCodeGraph`.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use anyhow::Result;
 use serde_json::Value;
 use tracing::debug;
 use vibe_graph_core::{CellState, Constitution, NodeId, SourceCodeGraph, Vibe};
+
+mod prompt_rule;
+
+pub use prompt_rule::{LlmResolver, PromptProgrammedRule, PromptTemplate};
+
+const DEFAULT_HISTORY_WINDOW: usize = 8;
 
 /// Active cell tracked by the automaton.
 #[derive(Debug, Clone)]
@@ -54,7 +61,9 @@ pub trait CellUpdateRule: Send + Sync {
 pub struct LlmcaSystem {
     graph: SourceCodeGraph,
     cells: HashMap<NodeId, Cell>,
+    adjacency: HashMap<NodeId, Vec<NodeId>>,
     update_rule: Box<dyn CellUpdateRule + Send + Sync>,
+    history_window: usize,
 }
 
 impl LlmcaSystem {
@@ -69,10 +78,14 @@ impl LlmcaSystem {
             })
             .collect();
 
+        let adjacency = build_adjacency(&graph);
+
         Self {
             graph,
             cells,
+            adjacency,
             update_rule,
+            history_window: DEFAULT_HISTORY_WINDOW,
         }
     }
 
@@ -81,21 +94,35 @@ impl LlmcaSystem {
         &self.graph
     }
 
+    /// Configure how many historical frames each cell retains.
+    pub fn set_history_window(&mut self, history_window: usize) {
+        self.history_window = history_window.max(1);
+    }
+
+    /// Retrieve the configured history window.
+    pub fn history_window(&self) -> usize {
+        self.history_window
+    }
+
     /// Apply one tick across all cells.
     pub fn tick(&mut self, vibes: &[Vibe], constitution: &Constitution) -> Result<()> {
         debug!(node_count = self.cells.len(), "llmca_tick_start");
-        let mut updates: HashMap<NodeId, CellState> = HashMap::new();
-        for cell in self.cells.values() {
-            let new_state = self.update_rule.update(cell, &[], vibes, constitution);
-            updates.insert(cell.node_id, new_state);
+        let started = Instant::now();
+        let mut updates: HashMap<NodeId, CellState> = HashMap::with_capacity(self.cells.len());
+
+        for (node_id, cell) in self.cells.iter() {
+            let neighbors = self.neighbors_for(node_id);
+            let new_state = self
+                .update_rule
+                .update(cell, &neighbors, vibes, constitution);
+            updates.insert(*node_id, new_state);
         }
 
-        for (node_id, state) in updates {
-            if let Some(cell) = self.cells.get_mut(&node_id) {
-                cell.history.push(cell.state.clone());
-                cell.state = state;
-            }
-        }
+        self.apply_updates(updates);
+        debug!(
+            duration_ms = started.elapsed().as_millis() as u64,
+            "llmca_tick_complete"
+        );
 
         Ok(())
     }
@@ -117,6 +144,28 @@ impl LlmcaSystem {
     pub fn cell_states(&self) -> Vec<CellState> {
         self.cells.values().map(|cell| cell.state.clone()).collect()
     }
+
+    fn neighbors_for(&self, node_id: &NodeId) -> Vec<Cell> {
+        self.adjacency
+            .get(node_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|neighbor_id| self.cells.get(neighbor_id).cloned())
+            .collect()
+    }
+
+    fn apply_updates(&mut self, updates: HashMap<NodeId, CellState>) {
+        for (node_id, state) in updates {
+            if let Some(cell) = self.cells.get_mut(&node_id) {
+                cell.history.push(cell.state.clone());
+                if cell.history.len() > self.history_window {
+                    let overflow = cell.history.len() - self.history_window;
+                    cell.history.drain(0..overflow);
+                }
+                cell.state = state;
+            }
+        }
+    }
 }
 
 /// Update rule that simply echoes the previous state; useful for smoke tests.
@@ -132,5 +181,118 @@ impl CellUpdateRule for NoOpUpdateRule {
         _constitution: &Constitution,
     ) -> CellState {
         cell.state.clone()
+    }
+}
+
+fn build_adjacency(graph: &SourceCodeGraph) -> HashMap<NodeId, Vec<NodeId>> {
+    let mut adjacency: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+
+    for edge in &graph.edges {
+        // Decision: treat edges as undirected so information flows in both directions.
+        adjacency.entry(edge.from).or_default().push(edge.to);
+        adjacency.entry(edge.to).or_default().push(edge.from);
+    }
+
+    adjacency
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashMap as StdHashMap;
+    use std::sync::{Arc, Mutex};
+    use vibe_graph_core::{EdgeId, GraphEdge, GraphNode, GraphNodeKind};
+
+    #[derive(Clone)]
+    struct RecordingRule {
+        seen: Arc<Mutex<Vec<(NodeId, usize)>>>,
+    }
+
+    impl RecordingRule {
+        fn new(seen: Arc<Mutex<Vec<(NodeId, usize)>>>) -> Self {
+            Self { seen }
+        }
+    }
+
+    impl CellUpdateRule for RecordingRule {
+        fn update(
+            &self,
+            cell: &Cell,
+            neighbors: &[Cell],
+            _vibes: &[Vibe],
+            _constitution: &Constitution,
+        ) -> CellState {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((cell.node_id, neighbors.len()));
+
+            let mut next = cell.state.clone();
+            next.payload = json!(neighbors.len());
+            next
+        }
+    }
+
+    fn sample_graph() -> SourceCodeGraph {
+        SourceCodeGraph {
+            nodes: vec![
+                GraphNode {
+                    id: NodeId(1),
+                    name: "a".into(),
+                    kind: GraphNodeKind::File,
+                    metadata: StdHashMap::new(),
+                },
+                GraphNode {
+                    id: NodeId(2),
+                    name: "b".into(),
+                    kind: GraphNodeKind::File,
+                    metadata: StdHashMap::new(),
+                },
+            ],
+            edges: vec![GraphEdge {
+                id: EdgeId(10),
+                from: NodeId(1),
+                to: NodeId(2),
+                relationship: "depends_on".into(),
+                metadata: StdHashMap::new(),
+            }],
+            metadata: StdHashMap::new(),
+        }
+    }
+
+    #[test]
+    fn tick_passes_neighbors_to_update_rule() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rule = RecordingRule::new(Arc::clone(&calls));
+        let graph = sample_graph();
+        let mut system = LlmcaSystem::new(graph, Box::new(rule));
+
+        system.tick(&[], &Constitution::default()).unwrap();
+
+        let recorded = calls.lock().unwrap().clone();
+        assert!(recorded.contains(&(NodeId(1), 1)));
+        assert!(recorded.contains(&(NodeId(2), 1)));
+    }
+
+    #[test]
+    fn history_window_is_respected() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rule = RecordingRule::new(calls);
+        let graph = sample_graph();
+        let mut system = LlmcaSystem::new(graph, Box::new(rule));
+        system.set_history_window(2);
+
+        let constitution = Constitution::default();
+        for _ in 0..5 {
+            system.tick(&[], &constitution).unwrap();
+        }
+
+        for cell in system.cells.values() {
+            assert!(
+                cell.history.len() <= 2,
+                "history grew beyond configured window"
+            );
+        }
     }
 }
