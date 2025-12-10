@@ -1,6 +1,7 @@
 //! Vibe-Graph CLI - A tool for managing and analyzing software projects.
 //!
 //! Auto-detects whether you're in a single repository or a workspace with multiple repos.
+//! Persists analysis results in a `.self` folder for fast subsequent operations.
 
 use std::path::PathBuf;
 
@@ -12,9 +13,11 @@ use tracing_subscriber::fmt::format::FmtSpan;
 mod commands;
 mod config;
 mod project;
+mod store;
 
 use commands::{compose::OutputFormat, config as config_cmd, org, sync};
 use config::Config;
+use store::Store;
 
 /// Vibe-Graph CLI - Analyze and compose documentation from code.
 ///
@@ -50,6 +53,8 @@ enum Commands {
     /// - A single git repository
     /// - A directory with multiple git repos (workspace)
     /// - A plain directory
+    ///
+    /// Results are persisted in a `.self` folder for fast subsequent operations.
     Sync {
         /// Path to analyze (defaults to current directory).
         #[arg(default_value = ".")]
@@ -62,9 +67,32 @@ enum Commands {
         /// Output format: md (markdown) or json.
         #[arg(short, long, default_value = "md")]
         format: String,
+
+        /// Skip saving to .self folder.
+        #[arg(long)]
+        no_save: bool,
+
+        /// Create a timestamped snapshot.
+        #[arg(long)]
+        snapshot: bool,
     },
 
-    /// Compose output from previously synced workspace.
+    /// Load previously synced data from .self folder.
+    Load {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output composed result to file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format: md (markdown) or json.
+        #[arg(short, long, default_value = "md")]
+        format: String,
+    },
+
+    /// Compose output from workspace (syncs if needed).
     Compose {
         /// Path to compose (defaults to current directory).
         #[arg(default_value = ".")]
@@ -77,6 +105,17 @@ enum Commands {
         /// Output format: md (markdown) or json.
         #[arg(short, long, default_value = "md")]
         format: String,
+
+        /// Force resync even if .self exists.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Clean the .self folder.
+    Clean {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
 
     /// Work with remote GitHub organizations.
@@ -195,6 +234,8 @@ async fn main() -> Result<()> {
         path: PathBuf::from("."),
         output: None,
         format: "md".to_string(),
+        no_save: false,
+        snapshot: false,
     });
 
     match command {
@@ -202,10 +243,60 @@ async fn main() -> Result<()> {
             path,
             output,
             format,
+            no_save,
+            snapshot,
         } => {
+            let workspace = sync::detect_workspace(&path)?;
+            let store = Store::new(&workspace.root);
+
             let mut project = sync::execute(&config, &path, cli.verbose)?;
 
+            // Save to .self unless --no-save
+            if !no_save {
+                store.save(&project, &workspace.kind)?;
+                println!("💾 Saved to {}", store.self_dir().display());
+
+                if snapshot {
+                    let snapshot_path = store.snapshot(&project)?;
+                    println!("📸 Snapshot: {}", snapshot_path.display());
+                }
+            }
+
             // If output specified, compose the result
+            if let Some(output_path) = output {
+                let format: OutputFormat = format.parse()?;
+                commands::compose::execute(&config, &mut project, Some(output_path), format)?;
+            }
+        }
+
+        Commands::Load {
+            path,
+            output,
+            format,
+        } => {
+            let path = path.canonicalize().unwrap_or(path);
+            let store = Store::new(&path);
+
+            if !store.exists() {
+                anyhow::bail!(
+                    "No .self folder found at {}. Run `vg sync` first.",
+                    path.display()
+                );
+            }
+
+            let mut project = store
+                .load()?
+                .ok_or_else(|| anyhow::anyhow!("No project data found in .self"))?;
+
+            if let Some(manifest) = store.load_manifest()? {
+                println!("📂 Loaded: {}", manifest.name);
+                println!("   Last sync: {:?}", manifest.last_sync);
+                println!(
+                    "   Repos: {}, Files: {}",
+                    manifest.repo_count, manifest.source_count
+                );
+            }
+
             if let Some(output_path) = output {
                 let format: OutputFormat = format.parse()?;
                 commands::compose::execute(&config, &mut project, Some(output_path), format)?;
@@ -216,11 +307,41 @@ async fn main() -> Result<()> {
             path,
             output,
             format,
+            force,
         } => {
-            let mut project = sync::execute(&config, &path, cli.verbose)?;
+            let path = path.canonicalize().unwrap_or(path);
+            let store = Store::new(&path);
+
+            // Try to load from .self unless --force
+            let mut project = if !force && store.exists() {
+                if let Some(loaded) = store.load()? {
+                    println!("📂 Using cached data from .self");
+                    loaded
+                } else {
+                    sync::execute(&config, &path, cli.verbose)?
+                }
+            } else {
+                let workspace = sync::detect_workspace(&path)?;
+                let project = sync::execute(&config, &path, cli.verbose)?;
+                store.save(&project, &workspace.kind)?;
+                project
+            };
+
             let format: OutputFormat = format.parse()?;
             let output = output.or_else(|| Some(PathBuf::from(format!("{}.md", project.name))));
             commands::compose::execute(&config, &mut project, output, format)?;
+        }
+
+        Commands::Clean { path } => {
+            let path = path.canonicalize().unwrap_or(path);
+            let store = Store::new(&path);
+
+            if store.exists() {
+                store.clean()?;
+                println!("🧹 Cleaned .self folder");
+            } else {
+                println!("No .self folder found");
+            }
         }
 
         Commands::Remote(remote_cmd) => match remote_cmd {
@@ -283,6 +404,7 @@ async fn main() -> Result<()> {
 
         Commands::Status { path } => {
             let workspace = sync::detect_workspace(&path)?;
+            let store = Store::new(&workspace.root);
 
             println!("📊 Vibe-Graph Status");
             println!("{:─<50}", "");
@@ -290,6 +412,38 @@ async fn main() -> Result<()> {
             println!("📁 Workspace:  {}", workspace.name);
             println!("📍 Path:       {}", workspace.root.display());
             println!("🔍 Type:       {}", workspace.kind);
+
+            // Show .self status
+            let stats = store.stats()?;
+            println!();
+            if stats.exists {
+                println!("💾 .self:      initialized");
+                if let Some(manifest) = &stats.manifest {
+                    println!(
+                        "   Last sync:  {:?}",
+                        manifest
+                            .last_sync
+                            .elapsed()
+                            .map(|d| format!("{:.0?} ago", d))
+                            .unwrap_or_else(|_| "unknown".to_string())
+                    );
+                    println!("   Repos:      {}", manifest.repo_count);
+                    println!("   Files:      {}", manifest.source_count);
+                    println!(
+                        "   Size:       {}",
+                        humansize::format_size(manifest.total_size, humansize::DECIMAL)
+                    );
+                }
+                if stats.snapshot_count > 0 {
+                    println!("   Snapshots:  {}", stats.snapshot_count);
+                }
+                println!(
+                    "   Store size: {}",
+                    humansize::format_size(stats.total_size, humansize::DECIMAL)
+                );
+            } else {
+                println!("💾 .self:      not initialized (run `vg sync`)");
+            }
 
             if !workspace.repo_paths.is_empty() && workspace.kind != sync::WorkspaceKind::SingleRepo
             {
