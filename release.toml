@@ -3,7 +3,7 @@
 #   cargo release patch|minor|major -p vibe-graph-core  # publish core first
 #   cargo release patch|minor|major -p vibe-graph-cli   # then publish cli
 
-pre-release-commit-message = "chore: release {{crate_name}} v{{version}}"
+pre-release-commit-message = "chore: release bump"
 tag-message = '{{crate_name}} v{{version}}'
 tag-name = '{{crate_name}}-v{{version}}'
 
