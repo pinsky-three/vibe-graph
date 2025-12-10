@@ -1,6 +1,9 @@
 # vibe-graph-cli (`vg`)
 
-A CLI for analyzing codebases - works with single repositories or multi-repo workspaces. Auto-detects your project structure and persists analysis results for fast subsequent operations.
+[![Crates.io](https://img.shields.io/crates/v/vibe-graph-cli.svg)](https://crates.io/crates/vibe-graph-cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](../../LICENSE)
+
+CLI for analyzing codebases—works with single repositories, multi-repo workspaces, or plain directories. Auto-detects structure, builds dependency graphs, and provides interactive visualization.
 
 ## Installation
 
@@ -11,70 +14,61 @@ cargo install vibe-graph-cli
 ## Quick Start
 
 ```bash
-# Analyze current directory (auto-detects single repo vs workspace)
-vg
-
-# Same as above, explicit
+# Analyze current directory
 vg sync
 
-# Show workspace status
-vg status
+# Build the dependency graph
+vg graph
+
+# Launch interactive visualization
+vg serve
+# → http://localhost:3000
 
 # Generate documentation
-vg compose -o output.md
+vg compose -o docs.md
 ```
-
-## Features
-
-- **Auto-detection**: Automatically detects if you're in a single git repo, multi-repo workspace, or plain directory
-- **Persistence**: Saves analysis to `.self` folder for fast subsequent operations
-- **Compose output**: Generate markdown or JSON documentation from your codebase
-- **Graph visualization**: Interactive web-based visualization of codebase structure
-- **GitHub integration**: Clone and analyze entire GitHub organizations
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `vg` / `vg sync` | Analyze workspace and save to `.self` |
+| `vg sync` | Analyze workspace, save to `.self/` |
 | `vg sync --snapshot` | Create timestamped snapshot |
-| `vg load` | Load from `.self` without rescanning |
-| `vg compose` | Generate documentation (uses cache if available) |
+| `vg load` | Load from `.self/` without rescanning |
+| `vg graph` | Build SourceCodeGraph with cross-file references |
+| `vg graph -o FILE` | Also export graph to custom path |
+| `vg serve` | Interactive visualization at localhost:3000 |
+| `vg serve --port 8080` | Use custom port |
+| `vg compose` | Generate markdown docs (uses cache) |
 | `vg compose --force` | Force rescan before composing |
-| `vg graph` | Build SourceCodeGraph from synced data |
-| `vg graph -o graph.json` | Export graph to JSON |
-| `vg serve` | Serve interactive visualization on localhost:3000 |
 | `vg status` | Show workspace and `.self` status |
-| `vg clean` | Remove `.self` folder |
+| `vg clean` | Remove `.self/` folder |
 | `vg remote list <ORG>` | List GitHub org repositories |
 | `vg remote clone <ORG>` | Clone all repos from GitHub org |
 | `vg config show` | Show configuration |
 
 ## Graph Visualization
 
-The `serve` command starts a local web server with an interactive graph visualization:
+The `serve` command starts a local web server with an interactive force-directed graph:
 
 ```bash
-# Sync first, then serve
-vg sync
-vg serve
-# Open http://localhost:3000
+vg sync && vg serve
 ```
 
 ### Build Variants
 
-| Build | Command | Size | Visualization |
-|-------|---------|------|---------------|
-| Minimal | `cargo build --release` | ~8MB | D3.js (CDN) |
-| Full | `cargo build --release --features embedded-viz` | ~11MB | egui (embedded WASM) |
+| Build | Command | Size | Features |
+|-------|---------|------|----------|
+| **Minimal** | `cargo build --release` | ~8 MB | D3.js via CDN |
+| **Full** | `cargo build --release --features embedded-viz` | ~11 MB | egui WASM (offline) |
 
-The minimal build uses D3.js loaded from CDN. The full build embeds the complete egui-based visualization (~3MB WASM) for offline use.
+The minimal build requires internet for D3.js. The full build embeds ~3 MB of WASM for complete offline operation.
 
 ```bash
 # Build full version with embedded visualization
-make build-full
+cd ../.. && make build-full
 
-# Or manually
+# Or manually (after building WASM assets)
 cargo build --release -p vibe-graph-cli --features embedded-viz
 ```
 
@@ -82,58 +76,79 @@ cargo build --release -p vibe-graph-cli --features embedded-viz
 
 | Structure | Detection |
 |-----------|-----------|
-| `.git` in root | Single repository |
-| Subdirs with `.git` | Multi-repo workspace |
+| `.git` in current dir | Single repository |
+| Subdirs containing `.git` | Multi-repo workspace |
 | No `.git` found | Plain directory |
 
-## Example Output
+## Example Session
 
 ```
-$ vg
+$ cd my-project
+$ vg sync
 📁 Workspace: my-project
 📍 Path: /home/user/my-project
 🔍 Detected: single repository
 
 ✅ Sync complete
    Repositories: 1
-   Total files:  42
-   Total size:   156.3 kB
-💾 Saved to /home/user/my-project/.self
+   Total files:  142
+   Total size:   1.2 MB
+💾 Saved to .self/
 
-$ vg status
-📊 Vibe-Graph Status
-──────────────────────────────────────────────────
+$ vg graph
+📊 Building SourceCodeGraph...
+   Nodes: 156 (142 files, 14 directories)
+   Edges: 89 (14 hierarchy, 75 references)
+💾 Graph saved to .self/graph.json
 
-📁 Workspace:  my-project
-💾 .self:      initialized
-   Last sync:  "15s ago"
-   Repos:      1
-   Files:      42
+$ vg serve
+🚀 Starting visualization server...
+   Mode: D3.js (fallback)
+   Graph: 156 nodes, 89 edges
+📡 Open http://localhost:3000
 ```
-
-## Configuration
-
-Environment variables or `vg config set`:
-
-| Variable | Description |
-|----------|-------------|
-| `GITHUB_TOKEN` | GitHub PAT for org commands |
-| `GITHUB_USERNAME` | GitHub username |
-| `VG_CACHE_DIR` | Cache directory |
-| `VG_MAX_CONTENT_SIZE_KB` | Max file size to include content (default: 50) |
 
 ## The `.self` Folder
 
-Analysis results are persisted in a `.self` folder:
+Analysis results persist in `.self/`:
 
 ```
 .self/
-├── manifest.json     # Workspace metadata
-├── project.json      # Serialized analysis
-└── snapshots/        # Historical snapshots
+├── manifest.json   # Workspace metadata
+├── project.json    # Full analysis data
+├── graph.json      # SourceCodeGraph with references
+└── snapshots/      # Historical snapshots (--snapshot flag)
 ```
 
 Add `.self/` to your `.gitignore`.
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | GitHub PAT for `remote` commands |
+| `GITHUB_USERNAME` | GitHub username |
+| `VG_CACHE_DIR` | Custom cache directory |
+| `VG_MAX_CONTENT_SIZE_KB` | Max file size to include content (default: 50) |
+
+### Config Commands
+
+```bash
+vg config show              # Display current config
+vg config set KEY VALUE     # Set config value
+```
+
+## Reference Detection
+
+The graph builder detects cross-file references for:
+
+| Language | Patterns |
+|----------|----------|
+| **Rust** | `use crate::`, `mod`, `use super::` |
+| **Python** | `import`, `from ... import` |
+| **TypeScript/JavaScript** | `import`, `require()` |
 
 ## License
 
