@@ -96,10 +96,28 @@ pub fn build_source_graph(project: &Project, config: &Config) -> Result<SourceCo
     // Track all directories we've seen
     let mut all_dirs: HashSet<PathBuf> = HashSet::new();
 
+    // Find workspace root (common ancestor of all repos)
+    let workspace_root = find_workspace_root(&project.repositories);
+    if let Some(ref root) = workspace_root {
+        all_dirs.insert(root.clone());
+    }
+
     // Step 1: Collect directories and add file nodes
     for repo in &project.repositories {
         // Include the repo root itself as a directory node
         all_dirs.insert(repo.local_path.clone());
+
+        // Add intermediate directories between workspace root and repo root
+        if let Some(ref ws_root) = workspace_root {
+            let mut current = repo.local_path.parent();
+            while let Some(dir_path) = current {
+                if dir_path == ws_root.as_path() {
+                    break;
+                }
+                all_dirs.insert(dir_path.to_path_buf());
+                current = dir_path.parent();
+            }
+        }
 
         for source in &repo.sources {
             // Collect parent directories
@@ -189,4 +207,50 @@ pub fn build_source_graph(project: &Project, config: &Config) -> Result<SourceCo
     );
 
     Ok(builder.build())
+}
+
+/// Find the common workspace root (closest common ancestor) of all repositories.
+fn find_workspace_root(repositories: &[crate::project::Repository]) -> Option<PathBuf> {
+    if repositories.is_empty() {
+        return None;
+    }
+
+    if repositories.len() == 1 {
+        // Single repo: workspace root is the repo itself
+        return Some(repositories[0].local_path.clone());
+    }
+
+    // Find common ancestor of all repo paths
+    let mut common: Option<PathBuf> = None;
+
+    for repo in repositories {
+        let path = &repo.local_path;
+        match &common {
+            None => {
+                common = path.parent().map(|p| p.to_path_buf());
+            }
+            Some(current_common) => {
+                // Find common prefix between current_common and path
+                let mut new_common = PathBuf::new();
+                let common_components: Vec<_> = current_common.components().collect();
+                let path_components: Vec<_> = path.components().collect();
+
+                for (c1, c2) in common_components.iter().zip(path_components.iter()) {
+                    if c1 == c2 {
+                        new_common.push(c1.as_os_str());
+                    } else {
+                        break;
+                    }
+                }
+
+                if new_common.as_os_str().is_empty() {
+                    // No common prefix (different drives on Windows, etc.)
+                    return None;
+                }
+                common = Some(new_common);
+            }
+        }
+    }
+
+    common
 }
