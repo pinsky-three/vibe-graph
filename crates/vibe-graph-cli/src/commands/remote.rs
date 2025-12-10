@@ -199,9 +199,9 @@ pub async fn list(config: &Config, store: &Store) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No remote configured. Run `vg remote add <org>` first."))?;
 
     let info = RemoteInfo::parse(&remote);
-    let org = info
-        .org_name
-        .ok_or_else(|| anyhow::anyhow!("Could not determine organization from remote: {}", remote))?;
+    let org = info.org_name.ok_or_else(|| {
+        anyhow::anyhow!("Could not determine organization from remote: {}", remote)
+    })?;
 
     let octocrab = Octocrab::builder()
         .personal_token(config.github_token.clone().unwrap())
@@ -262,9 +262,9 @@ pub async fn clone(config: &Config, store: &Store, ignore_list: &[String]) -> Re
         .ok_or_else(|| anyhow::anyhow!("No remote configured. Run `vg remote add <org>` first."))?;
 
     let info = RemoteInfo::parse(&remote);
-    let org = info
-        .org_name
-        .ok_or_else(|| anyhow::anyhow!("Could not determine organization from remote: {}", remote))?;
+    let org = info.org_name.ok_or_else(|| {
+        anyhow::anyhow!("Could not determine organization from remote: {}", remote)
+    })?;
 
     let octocrab = Octocrab::builder()
         .personal_token(config.github_token.clone().unwrap())

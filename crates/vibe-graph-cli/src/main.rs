@@ -435,7 +435,10 @@ async fn main() -> Result<()> {
                     remote::list(&config, &store).await?;
                 }
 
-                RemoteCommands::Clone { ignore, ignore_file } => {
+                RemoteCommands::Clone {
+                    ignore,
+                    ignore_file,
+                } => {
                     let ignore_list = build_ignore_list(ignore, ignore_file)?;
                     let _project = remote::clone(&config, &store, &ignore_list).await?;
                 }

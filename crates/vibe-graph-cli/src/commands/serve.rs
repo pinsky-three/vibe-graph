@@ -152,7 +152,7 @@ fn load_wasm_assets(wasm_dir: Option<PathBuf>) -> (Option<Vec<u8>>, Option<Vec<u
     #[cfg(feature = "embedded-viz")]
     {
         println!("📦 Using embedded WASM visualization");
-        return (Some(EMBEDDED_WASM.to_vec()), Some(EMBEDDED_JS.to_vec()));
+        (Some(EMBEDDED_WASM.to_vec()), Some(EMBEDDED_JS.to_vec()))
     }
 
     // Priority 3: No WASM available, will use D3.js fallback
