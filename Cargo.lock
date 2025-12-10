@@ -2169,8 +2169,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "vibe-graph-core",
- "vibe-graph-ssot",
  "walkdir",
 ]
 

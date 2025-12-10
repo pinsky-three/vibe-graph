@@ -2,8 +2,14 @@
 name = "vibe-graph-cli"
 version = "0.1.0"
 edition.workspace = true
-description = "Command-line interface for interacting with Vibe-Graph"
-publish = false
+description = "CLI for analyzing codebases - single repos or multi-repo workspaces. Auto-detects structure, persists analysis in .self folder."
+license = "MIT"
+repository = "https://github.com/pinsky-three/vibe-graph"
+homepage = "https://github.com/pinsky-three/vibe-graph"
+readme = "README.md"
+keywords = ["cli", "codebase", "analysis", "documentation", "workspace"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["src/**/*", "templates/**/*", "LICENSE", "README.md"]
 
 [[bin]]
 name = "vg"
@@ -25,6 +31,3 @@ dotenvy = { workspace = true }
 directories = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-vibe-graph-core = { path = "../vibe-graph-core" }
-vibe-graph-ssot = { path = "../vibe-graph-ssot" }
