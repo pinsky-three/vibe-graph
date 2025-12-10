@@ -5,9 +5,26 @@ edition.workspace = true
 description = "Command-line interface for interacting with Vibe-Graph"
 publish = false
 
+[[bin]]
+name = "vg"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+git2 = { workspace = true }
+octocrab = { workspace = true }
+askama = { workspace = true }
+walkdir = { workspace = true }
+file-format = { workspace = true }
+humansize = { workspace = true }
+dotenvy = { workspace = true }
+directories = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 vibe-graph-core = { path = "../vibe-graph-core" }
 vibe-graph-ssot = { path = "../vibe-graph-ssot" }

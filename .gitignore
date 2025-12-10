@@ -1,1 +1,6 @@
 /target
+.DS_Store
+.env
+*.md
+!README.md
+output/
