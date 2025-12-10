@@ -16,15 +16,29 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn wasm_main() {
+    use wasm_bindgen::JsCast;
+
     // Better panic messages in the browser console
     console_error_panic_hook::set_once();
 
     let web_options = eframe::WebOptions::default();
 
     wasm_bindgen_futures::spawn_local(async {
+        // Get the canvas element from the DOM
+        let document = web_sys::window()
+            .expect("No window")
+            .document()
+            .expect("No document");
+
+        let canvas = document
+            .get_element_by_id("vibe-graph-canvas")
+            .expect("No canvas element with id 'vibe-graph-canvas'")
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("Element is not a canvas");
+
         eframe::WebRunner::new()
             .start(
-                "vibe-graph-canvas",
+                canvas,
                 web_options,
                 Box::new(|cc| Ok(Box::new(VibeGraphApp::new(cc)))),
             )

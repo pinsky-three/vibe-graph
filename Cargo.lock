@@ -5111,6 +5111,8 @@ dependencies = [
  "eframe",
  "egui",
  "egui_graphs",
+ "getrandom 0.3.4",
+ "js-sys",
  "petgraph",
  "serde",
  "serde_json",
