@@ -59,13 +59,20 @@ pub async fn execute(
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
-    // Build the graph
+    // Load or build the graph (uses cached .self/graph.json if available)
     let graph = if store.exists() {
-        graph::execute(config, &path, None)?
+        println!("📊 Loading graph...");
+        graph::execute_or_load(config, &path)?
     } else {
         println!("⚠️  No .self folder found, using sample graph");
         sample_graph()
     };
+
+    println!(
+        "✅ Graph: {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     // Serialize graph to JSON
     let graph_json = serde_json::to_string(&graph).context("Failed to serialize graph")?;
@@ -105,11 +112,6 @@ pub async fn execute(
     println!();
     println!("🚀 Vibe Graph Server");
     println!("   URL: http://localhost:{}", port);
-    println!(
-        "   Graph: {} nodes, {} edges",
-        graph.node_count(),
-        graph.edge_count()
-    );
 
     let viz_mode = if has_wasm {
         "egui (WASM)"

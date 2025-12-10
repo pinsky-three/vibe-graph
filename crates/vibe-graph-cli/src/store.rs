@@ -10,6 +10,7 @@
 //! .self/
 //! ├── manifest.json     # Workspace metadata and last sync info
 //! ├── project.json      # Serialized Project structure
+//! ├── graph.json        # SourceCodeGraph with nodes and edges
 //! └── snapshots/        # Historical snapshots (optional)
 //!     └── {timestamp}.json
 //! ```
@@ -20,6 +21,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
+use vibe_graph_core::SourceCodeGraph;
 
 use crate::commands::sync::WorkspaceKind;
 use crate::project::Project;
@@ -32,6 +34,9 @@ const MANIFEST_FILE: &str = "manifest.json";
 
 /// Project data file.
 const PROJECT_FILE: &str = "project.json";
+
+/// Graph data file.
+const GRAPH_FILE: &str = "graph.json";
 
 /// Snapshots directory.
 const SNAPSHOTS_DIR: &str = "snapshots";
@@ -213,6 +218,56 @@ impl Store {
         let manifest: Manifest = serde_json::from_str(&json)?;
 
         Ok(Some(manifest))
+    }
+
+    /// Save a SourceCodeGraph to the store.
+    pub fn save_graph(&self, graph: &SourceCodeGraph) -> Result<PathBuf> {
+        self.init()?;
+
+        let graph_path = self.self_dir.join(GRAPH_FILE);
+        let json =
+            serde_json::to_string_pretty(graph).with_context(|| "Failed to serialize graph")?;
+        std::fs::write(&graph_path, &json)
+            .with_context(|| format!("Failed to write {}", graph_path.display()))?;
+
+        info!(
+            path = %graph_path.display(),
+            nodes = graph.node_count(),
+            edges = graph.edge_count(),
+            "Saved graph to .self"
+        );
+
+        Ok(graph_path)
+    }
+
+    /// Load a SourceCodeGraph from the store.
+    pub fn load_graph(&self) -> Result<Option<SourceCodeGraph>> {
+        let graph_path = self.self_dir.join(GRAPH_FILE);
+
+        if !graph_path.exists() {
+            return Ok(None);
+        }
+
+        let json = std::fs::read_to_string(&graph_path)
+            .with_context(|| format!("Failed to read {}", graph_path.display()))?;
+
+        let graph: SourceCodeGraph = serde_json::from_str(&json)
+            .with_context(|| format!("Failed to parse {}", graph_path.display()))?;
+
+        info!(
+            path = %graph_path.display(),
+            nodes = graph.node_count(),
+            edges = graph.edge_count(),
+            "Loaded graph from .self"
+        );
+
+        Ok(Some(graph))
+    }
+
+    /// Check if a graph exists in the store.
+    #[allow(dead_code)]
+    pub fn has_graph(&self) -> bool {
+        self.self_dir.join(GRAPH_FILE).exists()
     }
 
     /// List available snapshots.

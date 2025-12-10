@@ -16,6 +16,7 @@ use crate::project::Project;
 use crate::store::Store;
 
 /// Execute the graph command: build SourceCodeGraph from project data.
+/// Always saves to .self/graph.json, optionally also to a custom output path.
 pub fn execute(config: &Config, path: &Path, output: Option<PathBuf>) -> Result<SourceCodeGraph> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
@@ -41,12 +42,47 @@ pub fn execute(config: &Config, path: &Path, output: Option<PathBuf>) -> Result<
     println!("   Nodes: {}", graph.node_count());
     println!("   Edges: {}", graph.edge_count());
 
-    // Output to file if specified
+    // Always save to .self/graph.json
+    let graph_path = store.save_graph(&graph)?;
+    println!("💾 Saved to: {}", graph_path.display());
+
+    // Also output to custom path if specified
     if let Some(output_path) = output {
         let json = serde_json::to_string_pretty(&graph)?;
         std::fs::write(&output_path, &json)?;
-        println!("💾 Saved to: {}", output_path.display());
+        println!("💾 Also saved to: {}", output_path.display());
     }
+
+    Ok(graph)
+}
+
+/// Execute graph command silently (for internal use by serve).
+/// Returns cached graph if available and fresh, otherwise builds new one.
+pub fn execute_or_load(config: &Config, path: &Path) -> Result<SourceCodeGraph> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let store = Store::new(&path);
+
+    if !store.exists() {
+        anyhow::bail!(
+            "No .self folder found at {}. Run `vg sync` first.",
+            path.display()
+        );
+    }
+
+    // Try to load cached graph first
+    if let Some(graph) = store.load_graph()? {
+        return Ok(graph);
+    }
+
+    // No cached graph, build it
+    let project = store
+        .load()?
+        .ok_or_else(|| anyhow::anyhow!("No project data found in .self"))?;
+
+    let graph = build_source_graph(&project, config)?;
+
+    // Save for next time
+    store.save_graph(&graph)?;
 
     Ok(graph)
 }
@@ -130,7 +166,8 @@ pub fn build_source_graph(project: &Project, config: &Config) -> Result<SourceCo
 
             for reference in refs {
                 if let Some(source_id) = builder.get_node_id(&reference.source_path) {
-                    if let Some(target_id) = builder.find_node_by_path_suffix(&reference.target_route)
+                    if let Some(target_id) =
+                        builder.find_node_by_path_suffix(&reference.target_route)
                     {
                         // Avoid self-loops
                         if source_id != target_id {
