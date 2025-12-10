@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Local-first event log and sync primitives"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 serde = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }

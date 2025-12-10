@@ -5,5 +5,8 @@ edition.workspace = true
 description = "Governance and planning constraints for Vibe-Graph"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 vibe-graph-core = { path = "../vibe-graph-core" }

@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Neural OS runtime engine that coordinates all Vibe-Graph subsystems"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }

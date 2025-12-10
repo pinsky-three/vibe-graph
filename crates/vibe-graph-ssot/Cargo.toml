@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Source of structure tooling for building SourceCodeGraph instances"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }

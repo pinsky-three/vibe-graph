@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Cellular automaton fabric driving Vibe-Graph dynamics"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }

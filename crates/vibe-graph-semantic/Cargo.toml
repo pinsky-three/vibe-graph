@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Semantic/narrative layer bridging structural graphs to concepts"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 serde = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }

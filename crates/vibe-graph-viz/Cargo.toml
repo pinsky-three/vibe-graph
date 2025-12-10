@@ -5,6 +5,9 @@ edition.workspace = true
 description = "WASM-compatible egui visualization for Vibe-Graph"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

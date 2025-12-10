@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Materialization bridge that applies proposed graph changes"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 anyhow = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }

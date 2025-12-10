@@ -5,5 +5,8 @@ edition.workspace = true
 description = "Placeholder UI surface for visualizing Vibe-Graph"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 vibe-graph-core = { path = "../vibe-graph-core" }

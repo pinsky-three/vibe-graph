@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Git fossilization layer for Vibe-Graph snapshots"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }

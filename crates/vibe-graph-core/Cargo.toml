@@ -5,6 +5,9 @@ edition.workspace = true
 description = "Core domain model for the Vibe-Graph neural OS"
 publish = false
 
+[package.metadata.release]
+release = false
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
