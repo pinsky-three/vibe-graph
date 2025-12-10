@@ -1,7 +1,7 @@
 /target
 .DS_Store
 .env
-*.md
-!README.md
+# *.md
+# !README.md
 output/
 .self/
