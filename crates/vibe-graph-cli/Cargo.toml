@@ -37,6 +37,6 @@ dotenvy = { workspace = true }
 directories = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-vibe-graph-core = { path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.1.0", path = "../vibe-graph-core" }
 axum = { workspace = true }
 tower-http = { workspace = true }

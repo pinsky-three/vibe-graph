@@ -1,13 +1,15 @@
 # cargo-release configuration
-# Run: cargo release patch|minor|major -p vibe-graph-cli
+# Usage:
+#   cargo release patch|minor|major -p vibe-graph-core  # publish core first
+#   cargo release patch|minor|major -p vibe-graph-cli   # then publish cli
 
-# Note: commit message templates don't support {{version}} variable
-# Using simple static message
-pre-release-commit-message = "chore(cli): bump version"
-
-tag-message = 'vibe-graph-cli v{{version}}'
-tag-name = 'cli-v{{version}}'
+pre-release-commit-message = "chore: release {{crate_name}} v{{version}}"
+tag-message = '{{crate_name}} v{{version}}'
+tag-name = '{{crate_name}}-v{{version}}'
 
 push = true
 publish = true
 tag = true
+
+# Dependent version bumping - when core is updated, update cli's dependency
+dependent-version = "upgrade"

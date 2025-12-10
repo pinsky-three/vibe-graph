@@ -3,10 +3,10 @@ name = "vibe-graph-core"
 version = "0.1.0"
 edition.workspace = true
 description = "Core domain model for the Vibe-Graph neural OS"
-publish = false
-
-[package.metadata.release]
-release = false
+license = "MIT"
+repository = "https://github.com/pinsky-three/vibe-graph"
+keywords = ["graph", "codebase", "analysis", "source-code"]
+categories = ["data-structures", "development-tools"]
 
 [dependencies]
 serde = { workspace = true }
