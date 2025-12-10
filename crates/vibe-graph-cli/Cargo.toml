@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-cli"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 description = "CLI for analyzing codebases - single repos or multi-repo workspaces. Auto-detects structure, persists analysis in .self folder."
 license = "MIT"
