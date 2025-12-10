@@ -9,11 +9,17 @@ homepage = "https://github.com/pinsky-three/vibe-graph"
 readme = "README.md"
 keywords = ["cli", "codebase", "analysis", "documentation", "workspace"]
 categories = ["command-line-utilities", "development-tools"]
-include = ["src/**/*", "templates/**/*", "LICENSE", "README.md"]
+include = ["src/**/*", "templates/**/*", "assets/**/*", "LICENSE", "README.md"]
 
 [[bin]]
 name = "vg"
 path = "src/main.rs"
+
+[features]
+default = []
+# Embed WASM visualization assets directly in the binary (~3.5MB increase)
+# Build with: cargo build --release --features embedded-viz
+embedded-viz = []
 
 [dependencies]
 anyhow = { workspace = true }

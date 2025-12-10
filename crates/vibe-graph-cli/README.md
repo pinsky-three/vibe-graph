@@ -29,6 +29,7 @@ vg compose -o output.md
 - **Auto-detection**: Automatically detects if you're in a single git repo, multi-repo workspace, or plain directory
 - **Persistence**: Saves analysis to `.self` folder for fast subsequent operations
 - **Compose output**: Generate markdown or JSON documentation from your codebase
+- **Graph visualization**: Interactive web-based visualization of codebase structure
 - **GitHub integration**: Clone and analyze entire GitHub organizations
 
 ## Commands
@@ -40,11 +41,42 @@ vg compose -o output.md
 | `vg load` | Load from `.self` without rescanning |
 | `vg compose` | Generate documentation (uses cache if available) |
 | `vg compose --force` | Force rescan before composing |
+| `vg graph` | Build SourceCodeGraph from synced data |
+| `vg graph -o graph.json` | Export graph to JSON |
+| `vg serve` | Serve interactive visualization on localhost:3000 |
 | `vg status` | Show workspace and `.self` status |
 | `vg clean` | Remove `.self` folder |
 | `vg remote list <ORG>` | List GitHub org repositories |
 | `vg remote clone <ORG>` | Clone all repos from GitHub org |
 | `vg config show` | Show configuration |
+
+## Graph Visualization
+
+The `serve` command starts a local web server with an interactive graph visualization:
+
+```bash
+# Sync first, then serve
+vg sync
+vg serve
+# Open http://localhost:3000
+```
+
+### Build Variants
+
+| Build | Command | Size | Visualization |
+|-------|---------|------|---------------|
+| Minimal | `cargo build --release` | ~8MB | D3.js (CDN) |
+| Full | `cargo build --release --features embedded-viz` | ~11MB | egui (embedded WASM) |
+
+The minimal build uses D3.js loaded from CDN. The full build embeds the complete egui-based visualization (~3MB WASM) for offline use.
+
+```bash
+# Build full version with embedded visualization
+make build-full
+
+# Or manually
+cargo build --release -p vibe-graph-cli --features embedded-viz
+```
 
 ## Workspace Detection
 

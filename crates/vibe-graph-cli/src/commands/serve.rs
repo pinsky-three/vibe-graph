@@ -2,6 +2,19 @@
 //!
 //! Serves a WASM-based egui visualization on localhost:3000.
 //! The graph data is embedded in the HTML page and loaded by the WASM module.
+//!
+//! ## Build variants
+//!
+//! - **Default**: D3.js fallback visualization (minimal deps, works offline)
+//! - **embedded-viz feature**: Full egui visualization embedded in binary (~3.5MB larger)
+//!
+//! ```bash
+//! # Minimal build (D3.js fallback)
+//! cargo build --release
+//!
+//! # Full build with embedded WASM visualization
+//! cargo build --release --features embedded-viz
+//! ```
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -22,6 +35,12 @@ use vibe_graph_core::SourceCodeGraph;
 use crate::commands::graph;
 use crate::config::Config;
 use crate::store::Store;
+
+// Embedded WASM assets (only included when feature is enabled)
+#[cfg(feature = "embedded-viz")]
+static EMBEDDED_WASM: &[u8] = include_bytes!("../../assets/vibe_graph_viz_bg.wasm");
+#[cfg(feature = "embedded-viz")]
+static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_viz.js");
 
 /// Application state shared across handlers.
 struct AppState {
@@ -49,25 +68,16 @@ pub async fn execute(
     };
 
     // Serialize graph to JSON
-    let graph_json = serde_json::to_string(&graph)
-        .context("Failed to serialize graph")?;
+    let graph_json = serde_json::to_string(&graph).context("Failed to serialize graph")?;
 
-    // Try to load WASM artifacts if provided
-    let (wasm_bytes, js_bytes) = if let Some(dir) = wasm_dir {
-        let wasm_path = dir.join("vibe_graph_viz_bg.wasm");
-        let js_path = dir.join("vibe_graph_viz.js");
+    // Load WASM artifacts with priority:
+    // 1. --wasm-dir flag (explicit override)
+    // 2. Embedded assets (if compiled with embedded-viz feature)
+    // 3. None (fallback to D3.js)
+    let (wasm_bytes, js_bytes) = load_wasm_assets(wasm_dir);
 
-        let wasm = std::fs::read(&wasm_path).ok();
-        let js = std::fs::read(&js_path).ok();
-
-        if wasm.is_some() {
-            println!("📦 Loaded WASM from: {}", wasm_path.display());
-        }
-
-        (wasm, js)
-    } else {
-        (None, None)
-    };
+    // Determine visualization mode before moving into state
+    let has_wasm = wasm_bytes.is_some();
 
     let state = Arc::new(AppState {
         graph_json,
@@ -90,10 +100,23 @@ pub async fn execute(
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+    // Print server info
     println!();
     println!("🚀 Vibe Graph Server");
     println!("   URL: http://localhost:{}", port);
-    println!("   Graph: {} nodes, {} edges", graph.node_count(), graph.edge_count());
+    println!(
+        "   Graph: {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
+
+    let viz_mode = if has_wasm {
+        "egui (WASM)"
+    } else {
+        "D3.js (fallback)"
+    };
+    println!("   Visualization: {}", viz_mode);
     println!();
     println!("   Press Ctrl+C to stop");
     println!();
@@ -102,6 +125,40 @@ pub async fn execute(
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Load WASM assets with priority:
+/// 1. --wasm-dir flag (explicit override for development)
+/// 2. Embedded assets (if compiled with embedded-viz feature)
+/// 3. None (fallback to D3.js visualization)
+fn load_wasm_assets(wasm_dir: Option<PathBuf>) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    // Priority 1: Explicit --wasm-dir flag
+    if let Some(dir) = wasm_dir {
+        let wasm_path = dir.join("vibe_graph_viz_bg.wasm");
+        let js_path = dir.join("vibe_graph_viz.js");
+
+        let wasm = std::fs::read(&wasm_path).ok();
+        let js = std::fs::read(&js_path).ok();
+
+        if wasm.is_some() {
+            println!("📦 Loaded WASM from: {}", wasm_path.display());
+            return (wasm, js);
+        }
+    }
+
+    // Priority 2: Embedded assets (feature-gated)
+    #[cfg(feature = "embedded-viz")]
+    {
+        println!("📦 Using embedded WASM visualization");
+        return (Some(EMBEDDED_WASM.to_vec()), Some(EMBEDDED_JS.to_vec()));
+    }
+
+    // Priority 3: No WASM available, will use D3.js fallback
+    #[cfg(not(feature = "embedded-viz"))]
+    {
+        println!("💡 Using D3.js fallback (build with --features embedded-viz for egui)");
+        (None, None)
+    }
 }
 
 /// Handler for the index page.
@@ -148,11 +205,7 @@ async fn js_handler(State(state): State<Arc<AppState>>) -> Response {
             bytes.clone(),
         )
             .into_response(),
-        None => (
-            axum::http::StatusCode::NOT_FOUND,
-            "JS glue not available",
-        )
-            .into_response(),
+        None => (axum::http::StatusCode::NOT_FOUND, "JS glue not available").into_response(),
     }
 }
 
@@ -350,12 +403,18 @@ fn generate_fallback_html(graph_json: &str) -> String {
             </div>
 
             <div id="note">
-                <strong>💡 Tip:</strong> For the full interactive egui experience, build the WASM module:
+                <strong>💡 Tip:</strong> For the full interactive egui experience, either:
+                <br><br>
+                <strong>Option 1:</strong> Build CLI with embedded visualization:
                 <code style="display: block; margin-top: 8px; background: #1a1a2e; padding: 8px; border-radius: 4px;">
-                    cd crates/vibe-graph-viz<br>
-                    wasm-pack build --target web
+                    cargo build --release --features embedded-viz
                 </code>
-                Then restart with: <code>vg serve --wasm-dir crates/vibe-graph-viz/pkg</code>
+                <br>
+                <strong>Option 2:</strong> Build WASM separately:
+                <code style="display: block; margin-top: 8px; background: #1a1a2e; padding: 8px; border-radius: 4px;">
+                    cd crates/vibe-graph-viz && wasm-pack build --target web
+                </code>
+                Then: <code>vg serve --wasm-dir crates/vibe-graph-viz/pkg</code>
             </div>
         </div>
     </div>
@@ -503,7 +562,10 @@ fn sample_graph() -> SourceCodeGraph {
 
     let mut metadata = HashMap::new();
     metadata.insert("name".to_string(), "Sample Project".to_string());
-    metadata.insert("note".to_string(), "Run 'vg sync' to analyze your codebase".to_string());
+    metadata.insert(
+        "note".to_string(),
+        "Run 'vg sync' to analyze your codebase".to_string(),
+    );
 
     SourceCodeGraph {
         nodes: vec![
