@@ -48,6 +48,7 @@ impl Project {
     }
 
     /// Create a new project from a local path.
+    #[allow(dead_code)]
     pub fn local(path: PathBuf) -> Self {
         let name = path
             .file_name()
@@ -118,8 +119,7 @@ impl Repository {
     }
 
     /// Get total size of all sources in this repository.
-    #[allow(dead_code)]
-    pub fn total_size(&self) -> u64 {
+    pub fn _total_size(&self) -> u64 {
         self.sources.iter().filter_map(|s| s.size).sum()
     }
 }

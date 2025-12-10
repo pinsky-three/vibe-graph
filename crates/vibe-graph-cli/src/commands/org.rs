@@ -155,6 +155,7 @@ pub async fn clone(config: &Config, org: &str, ignore_list: &[String]) -> Result
 }
 
 /// Sync (pull latest) all repositories in an organization.
+#[allow(dead_code)]
 pub async fn sync(config: &Config, org: &str) -> Result<()> {
     let cache_dir = config.org_cache_dir(org);
 

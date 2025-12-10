@@ -1,6 +1,6 @@
 //! Vibe-Graph CLI - A tool for managing and analyzing software projects.
 //!
-//! Supports single repositories and organizations (multiple repositories).
+//! Auto-detects whether you're in a single repository or a workspace with multiple repos.
 
 use std::path::PathBuf;
 
@@ -13,18 +13,20 @@ mod commands;
 mod config;
 mod project;
 
-use commands::{compose::OutputFormat, config as config_cmd, org, scan};
+use commands::{compose::OutputFormat, config as config_cmd, org, sync};
 use config::Config;
 
-/// Vibe-Graph CLI - Interact with software projects and organizations.
+/// Vibe-Graph CLI - Analyze and compose documentation from code.
+///
+/// Run `vg` or `vg sync` to analyze the current directory.
+/// Automatically detects single repos vs multi-repo workspaces.
 #[derive(Parser, Debug)]
 #[command(
     name = "vg",
     author,
     version,
-    about = "Vibe-Graph CLI for project analysis and composition",
-    long_about = "A tool for scanning, analyzing, and composing documentation from \
-                  single repositories or entire GitHub organizations."
+    about = "Vibe-Graph: Analyze and compose code documentation",
+    long_about = None
 )]
 struct Cli {
     /// Enable verbose output
@@ -36,35 +38,25 @@ struct Cli {
     quiet: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 /// Available CLI commands.
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Scan a local repository and show its structure.
-    Scan {
-        /// Path to the repository to scan (defaults to current directory).
+    /// Sync and analyze the current workspace (default command).
+    ///
+    /// Auto-detects if the path is:
+    /// - A single git repository
+    /// - A directory with multiple git repos (workspace)
+    /// - A plain directory
+    Sync {
+        /// Path to analyze (defaults to current directory).
         #[arg(default_value = ".")]
         path: PathBuf,
-    },
 
-    /// Work with GitHub organizations (multiple repositories).
-    #[command(subcommand)]
-    Org(OrgCommands),
-
-    /// Compose output from a project.
-    Compose {
-        /// Path to scan and compose (local directory).
+        /// Output composed result to file.
         #[arg(short, long)]
-        path: Option<PathBuf>,
-
-        /// GitHub organization to compose (requires prior clone).
-        #[arg(long, conflicts_with = "path")]
-        org: Option<String>,
-
-        /// Output file path.
-        #[arg(short = 'o', long)]
         output: Option<PathBuf>,
 
         /// Output format: md (markdown) or json.
@@ -72,24 +64,47 @@ enum Commands {
         format: String,
     },
 
+    /// Compose output from previously synced workspace.
+    Compose {
+        /// Path to compose (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output file path.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format: md (markdown) or json.
+        #[arg(short, long, default_value = "md")]
+        format: String,
+    },
+
+    /// Work with remote GitHub organizations.
+    #[command(subcommand)]
+    Remote(RemoteCommands),
+
     /// Manage CLI configuration.
     #[command(subcommand)]
     Config(ConfigCommands),
 
-    /// Show status of current workspace.
-    Status,
+    /// Show workspace status and info.
+    Status {
+        /// Path to check (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
-/// Organization subcommands.
+/// Remote (GitHub) organization commands.
 #[derive(Subcommand, Debug)]
-enum OrgCommands {
-    /// List repositories in an organization.
+enum RemoteCommands {
+    /// List repositories in a GitHub organization.
     List {
         /// GitHub organization name.
         org: String,
     },
 
-    /// Clone all repositories from an organization.
+    /// Clone all repositories from a GitHub organization.
     Clone {
         /// GitHub organization name.
         org: String,
@@ -103,19 +118,13 @@ enum OrgCommands {
         ignore_file: Option<PathBuf>,
     },
 
-    /// Sync (pull latest) all repositories.
-    Sync {
-        /// GitHub organization name.
-        org: String,
-    },
-
-    /// Compose all repositories into a single output.
+    /// Compose all repositories from a GitHub organization.
     Compose {
         /// GitHub organization name.
         org: String,
 
         /// Output file path.
-        #[arg(short = 'o', long)]
+        #[arg(short, long)]
         output: Option<PathBuf>,
 
         /// Output format: md (markdown) or json.
@@ -169,7 +178,7 @@ async fn main() -> Result<()> {
     } else if cli.verbose {
         Level::DEBUG
     } else {
-        Level::INFO
+        Level::WARN // Default to less noise
     };
 
     tracing_subscriber::fmt()
@@ -179,19 +188,47 @@ async fn main() -> Result<()> {
         .init();
 
     // Load configuration
-    let mut config = Config::load()?;
+    let config = Config::load()?;
 
-    match cli.command {
-        Commands::Scan { path } => {
-            scan::execute(path, cli.verbose)?;
+    // Default to sync if no command given
+    let command = cli.command.unwrap_or(Commands::Sync {
+        path: PathBuf::from("."),
+        output: None,
+        format: "md".to_string(),
+    });
+
+    match command {
+        Commands::Sync {
+            path,
+            output,
+            format,
+        } => {
+            let mut project = sync::execute(&config, &path, cli.verbose)?;
+
+            // If output specified, compose the result
+            if let Some(output_path) = output {
+                let format: OutputFormat = format.parse()?;
+                commands::compose::execute(&config, &mut project, Some(output_path), format)?;
+            }
         }
 
-        Commands::Org(org_cmd) => match org_cmd {
-            OrgCommands::List { org } => {
+        Commands::Compose {
+            path,
+            output,
+            format,
+        } => {
+            let mut project = sync::execute(&config, &path, cli.verbose)?;
+            let format: OutputFormat = format.parse()?;
+            let output = output.or_else(|| Some(PathBuf::from(format!("{}.md", project.name))));
+            commands::compose::execute(&config, &mut project, output, format)?;
+        }
+
+        Commands::Remote(remote_cmd) => match remote_cmd {
+            RemoteCommands::List { org } => {
                 org::list(&config, &org).await?;
             }
 
-            OrgCommands::Clone {
+            RemoteCommands::Clone {
                 org,
                 ignore,
                 ignore_file,
@@ -199,17 +236,13 @@ async fn main() -> Result<()> {
                 let ignore_list = build_ignore_list(ignore, ignore_file)?;
                 let project = org::clone(&config, &org, &ignore_list).await?;
                 println!(
-                    "\nSuccessfully cloned {} with {} repositories",
+                    "\n✅ Cloned {} with {} repositories",
                     project.name,
                     project.repositories.len()
                 );
             }
 
-            OrgCommands::Sync { org } => {
-                org::sync(&config, &org).await?;
-            }
-
-            OrgCommands::Compose {
+            RemoteCommands::Compose {
                 org,
                 output,
                 format,
@@ -223,72 +256,62 @@ async fn main() -> Result<()> {
             }
         },
 
-        Commands::Compose {
-            path,
-            org,
-            output,
-            format,
-        } => {
-            let format: OutputFormat = format.parse()?;
-
-            if let Some(org_name) = org {
-                // Compose from cached org
-                let mut project = org::clone(&config, &org_name, &[]).await?;
-                commands::compose::execute(&config, &mut project, output, format)?;
-            } else {
-                // Compose from local path
-                let path = path.unwrap_or_else(|| PathBuf::from("."));
-                let mut project = scan::scan_local_path(&path)?;
-                commands::compose::execute(&config, &mut project, output, format)?;
+        Commands::Config(config_cmd_inner) => {
+            let mut config = config;
+            match config_cmd_inner {
+                ConfigCommands::Show => {
+                    config_cmd::show(&config)?;
+                }
+                ConfigCommands::Set { key, value } => {
+                    config_cmd::set(&mut config, &key, &value)?;
+                }
+                ConfigCommands::Get { key } => {
+                    config_cmd::get(&config, &key)?;
+                }
+                ConfigCommands::Reset => {
+                    config_cmd::reset()?;
+                }
+                ConfigCommands::Path => {
+                    if let Some(path) = Config::config_file_path() {
+                        println!("{}", path.display());
+                    } else {
+                        println!("(no config file path available)");
+                    }
+                }
             }
         }
 
-        Commands::Config(config_cmd) => match config_cmd {
-            ConfigCommands::Show => {
-                config_cmd::show(&config)?;
-            }
-            ConfigCommands::Set { key, value } => {
-                config_cmd::set(&mut config, &key, &value)?;
-            }
-            ConfigCommands::Get { key } => {
-                config_cmd::get(&config, &key)?;
-            }
-            ConfigCommands::Reset => {
-                config_cmd::reset()?;
-            }
-            ConfigCommands::Path => {
-                if let Some(path) = Config::config_file_path() {
-                    println!("{}", path.display());
-                } else {
-                    println!("(no config file path available)");
+        Commands::Status { path } => {
+            let workspace = sync::detect_workspace(&path)?;
+
+            println!("📊 Vibe-Graph Status");
+            println!("{:─<50}", "");
+            println!();
+            println!("📁 Workspace:  {}", workspace.name);
+            println!("📍 Path:       {}", workspace.root.display());
+            println!("🔍 Type:       {}", workspace.kind);
+
+            if !workspace.repo_paths.is_empty() && workspace.kind != sync::WorkspaceKind::SingleRepo
+            {
+                println!();
+                println!("📦 Repositories:");
+                for repo_path in &workspace.repo_paths {
+                    let name = repo_path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    println!("   • {}", name);
                 }
             }
-        },
 
-        Commands::Status => {
-            println!("Vibe-Graph Status");
-            println!("{:-<40}", "");
+            println!();
             println!(
-                "Config: {}",
+                "⚙️  Config:     {}",
                 Config::config_file_path()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default()
             );
-            println!("Cache:  {}", config.cache_dir.display());
-
-            // List cached organizations
-            let orgs_dir = config.cache_dir.join("orgs");
-            if orgs_dir.exists() {
-                println!("\nCached organizations:");
-                for entry in std::fs::read_dir(&orgs_dir)? {
-                    let entry = entry?;
-                    if entry.path().is_dir() {
-                        let org_name = entry.file_name().to_string_lossy().to_string();
-                        let repo_count = std::fs::read_dir(entry.path())?.count();
-                        println!("  {} ({} repos)", org_name, repo_count);
-                    }
-                }
-            }
+            println!("📂 Cache:      {}", config.cache_dir.display());
         }
     }
 
