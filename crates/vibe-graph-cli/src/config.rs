@@ -13,13 +13,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// GitHub personal access token for API access.
-    #[serde(skip_serializing)]
+    /// Note: Stored in plaintext in config file. Use env var GITHUB_TOKEN for better security.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub github_token: Option<String>,
 
     /// GitHub username for authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub github_username: Option<String>,
 
     /// Default GitHub organization to operate on.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub github_organization: Option<String>,
 
     /// Directory where repositories are cloned/cached.
