@@ -15,7 +15,7 @@ mod config;
 mod project;
 mod store;
 
-use commands::{compose::OutputFormat, config as config_cmd, graph, org, serve, sync};
+use commands::{compose::OutputFormat, config as config_cmd, graph, remote, serve, sync};
 use config::Config;
 use store::Store;
 
@@ -166,20 +166,30 @@ enum Commands {
     },
 }
 
-/// Remote (GitHub) organization commands.
+/// Remote repository commands.
 #[derive(Subcommand, Debug)]
 enum RemoteCommands {
-    /// List repositories in a GitHub organization.
-    List {
-        /// GitHub organization name.
-        org: String,
+    /// Show configured remote.
+    Show,
+
+    /// Add/set a GitHub organization as the remote.
+    ///
+    /// For workspaces, this sets the GitHub org to use for list/clone commands.
+    /// Accepts: org-name, github.com/org-name, or https://github.com/org-name
+    Add {
+        /// GitHub organization name or URL.
+        /// Examples: pinsky-three, github.com/pinsky-three
+        remote: String,
     },
 
-    /// Clone all repositories from a GitHub organization.
-    Clone {
-        /// GitHub organization name.
-        org: String,
+    /// Remove the configured remote.
+    Remove,
 
+    /// List repositories in the configured remote organization.
+    List,
+
+    /// Clone all repositories from the configured remote organization.
+    Clone {
         /// Repositories to ignore (can be specified multiple times).
         #[arg(short, long)]
         ignore: Vec<String>,
@@ -189,11 +199,8 @@ enum RemoteCommands {
         ignore_file: Option<PathBuf>,
     },
 
-    /// Compose all repositories from a GitHub organization.
+    /// Compose all repositories from the configured remote organization.
     Compose {
-        /// GitHub organization name.
-        org: String,
-
         /// Output file path.
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -283,10 +290,21 @@ async fn main() -> Result<()> {
 
             let mut project = sync::execute(&config, &path, cli.verbose)?;
 
+            // Detect git remote for single repos
+            let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
+                remote::detect_git_remote(&workspace.root)
+            } else {
+                None
+            };
+
             // Save to .self unless --no-save
             if !no_save {
-                store.save(&project, &workspace.kind)?;
+                store.save(&project, &workspace.kind, detected_remote.clone())?;
                 println!("💾 Saved to {}", store.self_dir().display());
+
+                if let Some(ref remote_url) = detected_remote {
+                    println!("🔗 Remote: {}", remote_url);
+                }
 
                 if snapshot {
                     let snapshot_path = store.snapshot(&project)?;
@@ -355,7 +373,13 @@ async fn main() -> Result<()> {
             } else {
                 let workspace = sync::detect_workspace(&path)?;
                 let project = sync::execute(&config, &path, cli.verbose)?;
-                store.save(&project, &workspace.kind)?;
+                // Detect remote for single repos
+                let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
+                    remote::detect_git_remote(&workspace.root)
+                } else {
+                    None
+                };
+                store.save(&project, &workspace.kind, detected_remote)?;
                 project
             };
 
@@ -388,38 +412,47 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Remote(remote_cmd) => match remote_cmd {
-            RemoteCommands::List { org } => {
-                org::list(&config, &org).await?;
-            }
+        Commands::Remote(remote_cmd) => {
+            // Most remote commands need the store
+            let path = PathBuf::from(".");
+            let workspace = sync::detect_workspace(&path)?;
+            let store = Store::new(&workspace.root);
 
-            RemoteCommands::Clone {
-                org,
-                ignore,
-                ignore_file,
-            } => {
-                let ignore_list = build_ignore_list(ignore, ignore_file)?;
-                let project = org::clone(&config, &org, &ignore_list).await?;
-                println!(
-                    "\n✅ Cloned {} with {} repositories",
-                    project.name,
-                    project.repositories.len()
-                );
-            }
+            match remote_cmd {
+                RemoteCommands::Show => {
+                    remote::show(&store)?;
+                }
 
-            RemoteCommands::Compose {
-                org,
-                output,
-                format,
-                ignore,
-                ignore_file,
-            } => {
-                let ignore_list = build_ignore_list(ignore, ignore_file)?;
-                let mut project = org::clone(&config, &org, &ignore_list).await?;
-                let format: OutputFormat = format.parse()?;
-                commands::compose::execute(&config, &mut project, output, format)?;
+                RemoteCommands::Add { remote: remote_url } => {
+                    remote::add(&store, &remote_url)?;
+                }
+
+                RemoteCommands::Remove => {
+                    remote::remove(&store)?;
+                }
+
+                RemoteCommands::List => {
+                    remote::list(&config, &store).await?;
+                }
+
+                RemoteCommands::Clone { ignore, ignore_file } => {
+                    let ignore_list = build_ignore_list(ignore, ignore_file)?;
+                    let _project = remote::clone(&config, &store, &ignore_list).await?;
+                }
+
+                RemoteCommands::Compose {
+                    output,
+                    format,
+                    ignore,
+                    ignore_file,
+                } => {
+                    let ignore_list = build_ignore_list(ignore, ignore_file)?;
+                    let mut project = remote::clone(&config, &store, &ignore_list).await?;
+                    let format: OutputFormat = format.parse()?;
+                    commands::compose::execute(&config, &mut project, output, format)?;
+                }
             }
-        },
+        }
 
         Commands::Config(config_cmd_inner) => {
             let mut config = config;
@@ -477,6 +510,11 @@ async fn main() -> Result<()> {
                         "   Size:       {}",
                         humansize::format_size(manifest.total_size, humansize::DECIMAL)
                     );
+
+                    // Show remote if configured
+                    if let Some(ref remote_url) = manifest.remote {
+                        println!("   Remote:     {}", remote_url);
+                    }
                 }
                 if stats.snapshot_count > 0 {
                     println!("   Snapshots:  {}", stats.snapshot_count);

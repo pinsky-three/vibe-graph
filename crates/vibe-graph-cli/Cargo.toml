@@ -16,7 +16,7 @@ name = "vg"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["embedded-viz"]
 # Embed WASM visualization assets directly in the binary (~3.5MB increase)
 # Build with: cargo build --release --features embedded-viz
 embedded-viz = []

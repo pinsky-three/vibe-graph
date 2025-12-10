@@ -67,11 +67,20 @@ pub struct Manifest {
 
     /// Total size in bytes.
     pub total_size: u64,
+
+    /// Remote URL or GitHub organization (auto-detected for single repos).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 impl Manifest {
     /// Create a new manifest from a project.
-    pub fn from_project(project: &Project, root: &Path, kind: &WorkspaceKind) -> Self {
+    pub fn from_project(
+        project: &Project,
+        root: &Path,
+        kind: &WorkspaceKind,
+        remote: Option<String>,
+    ) -> Self {
         Self {
             version: 1,
             name: project.name.clone(),
@@ -81,6 +90,7 @@ impl Manifest {
             repo_count: project.repositories.len(),
             source_count: project.total_sources(),
             total_size: project.total_size(),
+            remote,
         }
     }
 }
@@ -130,7 +140,12 @@ impl Store {
     }
 
     /// Save a project to the store.
-    pub fn save(&self, project: &Project, kind: &WorkspaceKind) -> Result<()> {
+    pub fn save(
+        &self,
+        project: &Project,
+        kind: &WorkspaceKind,
+        remote: Option<String>,
+    ) -> Result<()> {
         self.init()?;
 
         // Create a version of the project without content for storage
@@ -144,12 +159,8 @@ impl Store {
             .with_context(|| format!("Failed to write {}", project_path.display()))?;
 
         // Save manifest
-        let manifest = Manifest::from_project(project, &self.root, kind);
-        let manifest_path = self.self_dir.join(MANIFEST_FILE);
-        let manifest_json = serde_json::to_string_pretty(&manifest)
-            .with_context(|| "Failed to serialize manifest")?;
-        std::fs::write(&manifest_path, &manifest_json)
-            .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
+        let manifest = Manifest::from_project(project, &self.root, kind, remote);
+        self.save_manifest(&manifest)?;
 
         info!(
             path = %self.self_dir.display(),
@@ -158,6 +169,20 @@ impl Store {
             "Saved project to .self"
         );
 
+        Ok(())
+    }
+
+    /// Save the manifest to the store.
+    pub fn save_manifest(&self, manifest: &Manifest) -> Result<()> {
+        self.init()?;
+
+        let manifest_path = self.self_dir.join(MANIFEST_FILE);
+        let manifest_json = serde_json::to_string_pretty(manifest)
+            .with_context(|| "Failed to serialize manifest")?;
+        std::fs::write(&manifest_path, &manifest_json)
+            .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
+
+        debug!(path = %manifest_path.display(), "Saved manifest");
         Ok(())
     }
 
