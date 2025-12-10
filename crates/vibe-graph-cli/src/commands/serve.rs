@@ -106,7 +106,7 @@ pub async fn execute(
         .layer(cors)
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     // Print server info
     println!();
