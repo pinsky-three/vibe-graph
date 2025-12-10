@@ -126,16 +126,22 @@ impl Config {
             .map(|dirs| dirs.config_dir().join("config.json"))
     }
 
-    /// Validate that required configuration is present for GitHub operations.
-    pub fn validate_github(&self) -> Result<()> {
+    /// Validate that GitHub token is present (for read operations like listing).
+    pub fn validate_github_token(&self) -> Result<()> {
         if self.github_token.is_none() {
             anyhow::bail!(
                 "GitHub token required. Set GITHUB_TOKEN environment variable or run `vg config set github-token <token>`"
             );
         }
+        Ok(())
+    }
+
+    /// Validate that required configuration is present for GitHub write operations (cloning).
+    pub fn validate_github(&self) -> Result<()> {
+        self.validate_github_token()?;
         if self.github_username.is_none() {
             anyhow::bail!(
-                "GitHub username required. Set GITHUB_USERNAME environment variable or run `vg config set github-username <username>`"
+                "GitHub username required for cloning. Set GITHUB_USERNAME environment variable or run `vg config set github-username <username>`"
             );
         }
         Ok(())

@@ -188,7 +188,7 @@ pub fn remove(store: &Store) -> Result<()> {
 
 /// List repositories in the configured remote organization.
 pub async fn list(config: &Config, store: &Store) -> Result<()> {
-    config.validate_github()?;
+    config.validate_github_token()?;
 
     let manifest = store
         .load_manifest()?

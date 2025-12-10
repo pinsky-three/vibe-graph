@@ -44,7 +44,9 @@ pub fn set(config: &mut Config, key: &str, value: &str) -> Result<()> {
         "github-token" | "token" => {
             config.github_token = Some(value.to_string());
             println!("✅ Set github-token");
-            println!("⚠️  Token stored in config file. For better security, use GITHUB_TOKEN env var.");
+            println!(
+                "⚠️  Token stored in config file. For better security, use GITHUB_TOKEN env var."
+            );
         }
         "github-username" | "username" => {
             config.github_username = Some(value.to_string());
