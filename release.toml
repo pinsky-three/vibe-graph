@@ -1,0 +1,13 @@
+# cargo-release configuration
+# Run: cargo release patch|minor|major -p vibe-graph-cli
+
+# Note: commit message templates don't support {{version}} variable
+# Using simple static message
+pre-release-commit-message = "chore(cli): bump version"
+
+tag-message = 'vibe-graph-cli v{{version}}'
+tag-name = 'cli-v{{version}}'
+
+push = true
+publish = true
+tag = true
