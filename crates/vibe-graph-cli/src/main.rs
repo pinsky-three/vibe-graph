@@ -15,7 +15,7 @@ mod config;
 mod project;
 mod store;
 
-use commands::{compose::OutputFormat, config as config_cmd, org, sync};
+use commands::{compose::OutputFormat, config as config_cmd, graph, org, serve, sync};
 use config::Config;
 use store::Store;
 
@@ -109,6 +109,38 @@ enum Commands {
         /// Force resync even if .self exists.
         #[arg(long)]
         force: bool,
+    },
+
+    /// Build a SourceCodeGraph from synced data.
+    ///
+    /// Creates a graph representation of the codebase with nodes for files/directories
+    /// and edges for references (imports, uses) and hierarchy.
+    Graph {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output graph to JSON file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Serve an interactive visualization of the codebase graph.
+    ///
+    /// Opens a localhost server with a web-based visualization.
+    /// Supports WASM-based egui app if built, or falls back to D3.js.
+    Serve {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Port to serve on.
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Path to WASM build artifacts (from wasm-pack).
+        #[arg(long)]
+        wasm_dir: Option<PathBuf>,
     },
 
     /// Clean the .self folder.
@@ -330,6 +362,18 @@ async fn main() -> Result<()> {
             let format: OutputFormat = format.parse()?;
             let output = output.or_else(|| Some(PathBuf::from(format!("{}.md", project.name))));
             commands::compose::execute(&config, &mut project, output, format)?;
+        }
+
+        Commands::Graph { path, output } => {
+            graph::execute(&config, &path, output)?;
+        }
+
+        Commands::Serve {
+            path,
+            port,
+            wasm_dir,
+        } => {
+            serve::execute(&config, &path, port, wasm_dir).await?;
         }
 
         Commands::Clean { path } => {
