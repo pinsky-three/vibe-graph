@@ -98,15 +98,18 @@ pub fn build_source_graph(project: &Project, config: &Config) -> Result<SourceCo
 
     // Step 1: Collect directories and add file nodes
     for repo in &project.repositories {
+        // Include the repo root itself as a directory node
+        all_dirs.insert(repo.local_path.clone());
+
         for source in &repo.sources {
             // Collect parent directories
             let mut current = source.path.parent();
             while let Some(dir_path) = current {
-                // Stop at repo root
+                all_dirs.insert(dir_path.to_path_buf());
+                // Stop at repo root (but include it above)
                 if dir_path == repo.local_path || dir_path.parent().is_none() {
                     break;
                 }
-                all_dirs.insert(dir_path.to_path_buf());
                 current = dir_path.parent();
             }
         }
