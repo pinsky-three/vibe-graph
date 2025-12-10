@@ -60,7 +60,10 @@ make build
 | `vg serve` | Interactive graph visualization at localhost:3000 |
 | `vg compose` | Generate markdown documentation |
 | `vg status` | Show workspace and cache status |
-| `vg remote clone <ORG>` | Clone all repos from a GitHub org |
+| `vg remote show` | Show configured remote (auto-detected for single repos) |
+| `vg remote add <org>` | Set GitHub org as remote for workspaces |
+| `vg remote list` | List repos from configured remote |
+| `vg remote clone` | Clone all repos from configured remote |
 
 Run `vg --help` for full command reference.
 

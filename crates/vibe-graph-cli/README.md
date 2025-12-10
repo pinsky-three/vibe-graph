@@ -43,8 +43,10 @@ vg compose -o docs.md
 | `vg compose --force` | Force rescan before composing |
 | `vg status` | Show workspace and `.self` status |
 | `vg clean` | Remove `.self/` folder |
-| `vg remote list <ORG>` | List GitHub org repositories |
-| `vg remote clone <ORG>` | Clone all repos from GitHub org |
+| `vg remote show` | Show configured remote |
+| `vg remote add <org>` | Set GitHub org as remote (workspaces) |
+| `vg remote list` | List repos from configured org |
+| `vg remote clone` | Clone all repos from configured org |
 | `vg config show` | Show configuration |
 
 ## Graph Visualization
@@ -94,12 +96,22 @@ $ vg sync
    Total files:  142
    Total size:   1.2 MB
 💾 Saved to .self/
+🔗 Remote: https://github.com/user/my-project.git
 
-$ vg graph
-📊 Building SourceCodeGraph...
-   Nodes: 156 (142 files, 14 directories)
-   Edges: 89 (14 hierarchy, 75 references)
-💾 Graph saved to .self/graph.json
+$ vg status
+📊 Vibe-Graph Status
+──────────────────────────────────────────────────
+
+📁 Workspace:  my-project
+📍 Path:       /home/user/my-project
+🔍 Type:       single repository
+
+💾 .self:      initialized
+   Last sync:  "5s ago"
+   Repos:      1
+   Files:      142
+   Size:       1.2 MB
+   Remote:     https://github.com/user/my-project.git
 
 $ vg serve
 🚀 Starting visualization server...
@@ -107,6 +119,23 @@ $ vg serve
    Graph: 156 nodes, 89 edges
 📡 Open http://localhost:3000
 ```
+
+## Remote Commands (GitHub Organizations)
+
+For workspaces (directories with multiple repos), you can configure a GitHub org:
+
+```bash
+# Set a GitHub org as the remote
+vg remote add pinsky-three
+
+# List repositories
+vg remote list
+
+# Clone all repositories from the org
+vg remote clone
+```
+
+For single repos, the git remote is auto-detected during `vg sync`.
 
 ## The `.self` Folder
 
