@@ -6,13 +6,13 @@ use eframe::{App, CreationContext};
 use egui::{CollapsingHeader, Context, ScrollArea};
 use egui_graphs::{
     FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, Graph,
-    GraphView, LayoutForceDirected,
+    GraphView, LayoutForceDirected, MetadataFrame,
 };
 use petgraph::stable_graph::StableDiGraph;
 
 use vibe_graph_core::SourceCodeGraph;
 
-use crate::settings::{SettingsInteraction, SettingsNavigation, SettingsStyle};
+use crate::settings::{LassoState, SettingsInteraction, SettingsNavigation, SettingsStyle};
 
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
@@ -34,6 +34,8 @@ pub struct VibeGraphApp {
     dark_mode: bool,
     /// Graph metadata for display
     graph_metadata: HashMap<String, String>,
+    /// Lasso selection state
+    lasso: LassoState,
 }
 
 impl VibeGraphApp {
@@ -107,6 +109,7 @@ impl VibeGraphApp {
             show_sidebar: true,
             dark_mode,
             graph_metadata: source_graph.metadata,
+            lasso: LassoState::default(),
         }
     }
 
@@ -370,6 +373,33 @@ impl VibeGraphApp {
 
     fn ui_interaction(&mut self, ui: &mut egui::Ui) {
         CollapsingHeader::new("Interaction").show(ui, |ui| {
+            // Lasso selection mode toggle
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(!self.lasso.active, "↔ pan")
+                    .on_hover_text("Normal mode: drag and pan")
+                    .clicked()
+                {
+                    self.lasso.active = false;
+                    self.lasso.clear();
+                }
+
+                if ui
+                    .selectable_label(self.lasso.active, "◯ lasso")
+                    .on_hover_text("Lasso select: draw to select nodes (press L)")
+                    .clicked()
+                {
+                    self.lasso.active = true;
+                    // Enable multi-selection when lasso is active
+                    self.settings_interaction.node_selection_enabled = true;
+                    self.settings_interaction.node_selection_multi_enabled = true;
+                    self.settings_interaction.edge_selection_enabled = true;
+                    self.settings_interaction.edge_selection_multi_enabled = true;
+                }
+            });
+
+            ui.separator();
+
             ui.horizontal(|ui| {
                 if ui
                     .checkbox(
@@ -508,10 +538,28 @@ impl VibeGraphApp {
 
 impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
-        // Handle Tab key for sidebar toggle
+        // Handle keyboard shortcuts
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Tab) {
                 self.show_sidebar = !self.show_sidebar;
+            }
+            // L key toggles lasso mode
+            if i.key_pressed(egui::Key::L) {
+                self.lasso.active = !self.lasso.active;
+                if !self.lasso.active {
+                    self.lasso.clear();
+                } else {
+                    // Enable selection when activating lasso
+                    self.settings_interaction.node_selection_enabled = true;
+                    self.settings_interaction.node_selection_multi_enabled = true;
+                    self.settings_interaction.edge_selection_enabled = true;
+                    self.settings_interaction.edge_selection_multi_enabled = true;
+                }
+            }
+            // Escape exits lasso mode
+            if i.key_pressed(egui::Key::Escape) && self.lasso.active {
+                self.lasso.active = false;
+                self.lasso.clear();
             }
         });
 
@@ -546,8 +594,20 @@ impl App for VibeGraphApp {
 
         // Central panel with graph
         egui::CentralPanel::default().show(ctx, |ui| {
+            // When lasso is active, disable graph dragging/panning to capture mouse
+            let effective_dragging = if self.lasso.active {
+                false
+            } else {
+                self.settings_interaction.dragging_enabled
+            };
+            let effective_zoom_pan = if self.lasso.active {
+                false
+            } else {
+                self.settings_navigation.zoom_and_pan_enabled
+            };
+
             let settings_interaction = egui_graphs::SettingsInteraction::new()
-                .with_dragging_enabled(self.settings_interaction.dragging_enabled)
+                .with_dragging_enabled(effective_dragging)
                 .with_hover_enabled(self.settings_interaction.hover_enabled)
                 .with_node_clicking_enabled(self.settings_interaction.node_clicking_enabled)
                 .with_node_selection_enabled(self.settings_interaction.node_selection_enabled)
@@ -562,22 +622,251 @@ impl App for VibeGraphApp {
 
             let settings_navigation = egui_graphs::SettingsNavigation::new()
                 .with_fit_to_screen_enabled(self.settings_navigation.fit_to_screen_enabled)
-                .with_zoom_and_pan_enabled(self.settings_navigation.zoom_and_pan_enabled)
+                .with_zoom_and_pan_enabled(effective_zoom_pan)
                 .with_zoom_speed(self.settings_navigation.zoom_speed)
                 .with_fit_to_screen_padding(self.settings_navigation.fit_to_screen_padding);
 
+            // Configure style with custom hooks for selected node/edge highlighting
+            let dark_mode = self.dark_mode;
             let settings_style = egui_graphs::SettingsStyle::new()
-                .with_labels_always(self.settings_style.labels_always);
+                .with_labels_always(self.settings_style.labels_always)
+                .with_node_stroke_hook(move |selected, dragged, _color, _stroke, _style| {
+                    if selected {
+                        // Bright cyan stroke for selected nodes
+                        let color = if dark_mode {
+                            egui::Color32::from_rgb(0, 255, 255)
+                        } else {
+                            egui::Color32::from_rgb(0, 150, 200)
+                        };
+                        egui::Stroke::new(3.0, color)
+                    } else if dragged {
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 0))
+                    } else {
+                        egui::Stroke::NONE
+                    }
+                })
+                .with_edge_stroke_hook(move |selected, _order, stroke, _style| {
+                    if selected {
+                        // Bright magenta for selected edges
+                        let color = if dark_mode {
+                            egui::Color32::from_rgb(255, 100, 255)
+                        } else {
+                            egui::Color32::from_rgb(200, 50, 200)
+                        };
+                        egui::Stroke::new(3.0, color)
+                    } else {
+                        stroke
+                    }
+                });
 
-            ui.add(
+            // Add graph view and get its response
+            let graph_response = ui.add(
                 &mut GraphView::<_, _, _, _, _, _, ForceState, ForceLayout>::new(&mut self.g)
                     .with_interactions(&settings_interaction)
                     .with_navigations(&settings_navigation)
                     .with_styles(&settings_style),
             );
 
+            // Handle lasso drawing when in lasso mode
+            if self.lasso.active {
+                let panel_rect = ui.max_rect();
+
+                // Change cursor to crosshair when in lasso mode
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+
+                // Handle mouse input for lasso
+                let pointer = ui.input(|i| i.pointer.clone());
+
+                if let Some(pos) = pointer.hover_pos() {
+                    if panel_rect.contains(pos) {
+                        // Start drawing on primary press
+                        if pointer.primary_pressed() {
+                            self.lasso.start(pos);
+                        }
+                        // Continue drawing while held
+                        else if pointer.primary_down() && self.lasso.drawing {
+                            self.lasso.add_point(pos);
+                        }
+                    }
+                }
+
+                // Finish drawing on release
+                if pointer.primary_released() && self.lasso.drawing {
+                    self.lasso.finish();
+
+                    // Select nodes inside the lasso
+                    self.select_nodes_in_lasso(ui, &graph_response.rect);
+                }
+
+                // Draw the lasso path
+                self.draw_lasso(ui);
+            }
+
+            // Show lasso mode indicator
+            self.draw_mode_indicator(ui);
+
             self.sidebar_toggle_button(ui);
         });
+    }
+}
+
+impl VibeGraphApp {
+    /// Draw the lasso selection path.
+    fn draw_lasso(&self, ui: &mut egui::Ui) {
+        if self.lasso.path.len() < 2 {
+            return;
+        }
+
+        let painter = ui.painter();
+        let stroke_color = if self.dark_mode {
+            egui::Color32::from_rgba_unmultiplied(100, 200, 255, 200)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(50, 100, 200, 200)
+        };
+        let fill_color = if self.dark_mode {
+            egui::Color32::from_rgba_unmultiplied(100, 200, 255, 30)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(50, 100, 200, 30)
+        };
+
+        // Draw filled polygon if we have enough points
+        if self.lasso.path.len() >= 3 {
+            painter.add(egui::Shape::convex_polygon(
+                self.lasso.path.clone(),
+                fill_color,
+                egui::Stroke::NONE,
+            ));
+        }
+
+        // Draw the path outline
+        painter.add(egui::Shape::line(
+            self.lasso.path.clone(),
+            egui::Stroke::new(2.0, stroke_color),
+        ));
+
+        // Draw closing line if drawing and have points
+        if self.lasso.drawing && self.lasso.path.len() >= 2 {
+            if let (Some(first), Some(last)) = (self.lasso.path.first(), self.lasso.path.last()) {
+                painter.line_segment(
+                    [*last, *first],
+                    egui::Stroke::new(1.0, stroke_color.linear_multiply(0.5)),
+                );
+            }
+        }
+    }
+
+    /// Draw mode indicator in the corner.
+    fn draw_mode_indicator(&self, ui: &mut egui::Ui) {
+        if !self.lasso.active {
+            return;
+        }
+
+        let rect = ui.max_rect();
+        let indicator_pos = egui::pos2(rect.left() + 10.0, rect.top() + 10.0);
+
+        egui::Area::new(egui::Id::new("lasso_mode_indicator"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(indicator_pos)
+            .movable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180))
+                    .corner_radius(4.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("◯ LASSO MODE")
+                                    .color(egui::Color32::from_rgb(100, 200, 255))
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new("  ESC to exit")
+                                    .color(egui::Color32::GRAY)
+                                    .small(),
+                            );
+                        });
+                    });
+            });
+    }
+
+    /// Select all nodes and edges whose positions fall inside the lasso polygon.
+    fn select_nodes_in_lasso(&mut self, ui: &mut egui::Ui, graph_rect: &egui::Rect) {
+        if self.lasso.path.len() < 3 {
+            return;
+        }
+
+        // Get the graph metadata which contains zoom/pan transform
+        // The metadata is stored with no custom ID (default)
+        let meta = MetadataFrame::new(None).load(ui);
+
+        // The graph's coordinate system:
+        // - Canvas/graph coords: where nodes are positioned (node.location())
+        // - Screen coords: where things appear on screen (after zoom/pan + widget offset)
+        //
+        // MetadataFrame transforms are relative to widget origin, so we need to account
+        // for the widget's position on screen (graph_rect.min)
+
+        // Convert lasso points from screen coordinates to canvas coordinates
+        let lasso_in_canvas: Vec<egui::Pos2> = self
+            .lasso
+            .path
+            .iter()
+            .map(|screen_pos| {
+                // Offset by widget position first, then apply inverse transform
+                let widget_relative = egui::pos2(
+                    screen_pos.x - graph_rect.min.x,
+                    screen_pos.y - graph_rect.min.y,
+                );
+                meta.screen_to_canvas_pos(widget_relative)
+            })
+            .collect();
+
+        // Create a temporary lasso with canvas coordinates for hit testing
+        let mut canvas_lasso = LassoState::default();
+        canvas_lasso.path = lasso_in_canvas;
+
+        // First, clear current selections
+        for idx in self.g.nodes_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
+            if let Some(node) = self.g.node_mut(idx) {
+                node.set_selected(false);
+            }
+        }
+        for idx in self.g.edges_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
+            if let Some(edge) = self.g.edge_mut(idx) {
+                edge.set_selected(false);
+            }
+        }
+
+        // Track selected node indices for edge selection
+        let mut selected_nodes = std::collections::HashSet::new();
+
+        // Check each node (node positions are in canvas coordinates)
+        for idx in self.g.nodes_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
+            if let Some(node) = self.g.node_mut(idx) {
+                let node_pos = node.location();
+
+                // Check if inside lasso (both in canvas coordinates now)
+                if canvas_lasso.contains_point(node_pos) {
+                    node.set_selected(true);
+                    selected_nodes.insert(idx);
+                }
+            }
+        }
+
+        // Select edges where at least one endpoint is selected
+        for idx in self.g.edges_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
+            if let Some((source, target)) = self.g.edge_endpoints(idx) {
+                if selected_nodes.contains(&source) || selected_nodes.contains(&target) {
+                    if let Some(edge) = self.g.edge_mut(idx) {
+                        edge.set_selected(true);
+                    }
+                }
+            }
+        }
+
+        // Clear the lasso path after selection
+        self.lasso.clear();
     }
 }
 

@@ -1,5 +1,75 @@
 //! Settings structures for the visualization UI.
 
+use egui::Pos2;
+
+/// Lasso selection state.
+#[derive(Debug, Clone, Default)]
+pub struct LassoState {
+    /// Whether lasso select mode is active
+    pub active: bool,
+    /// Whether currently drawing (mouse held down)
+    pub drawing: bool,
+    /// Points in the lasso path (screen coordinates)
+    pub path: Vec<Pos2>,
+}
+
+impl LassoState {
+    /// Start a new lasso draw at the given position.
+    pub fn start(&mut self, pos: Pos2) {
+        self.drawing = true;
+        self.path.clear();
+        self.path.push(pos);
+    }
+
+    /// Add a point to the lasso path.
+    pub fn add_point(&mut self, pos: Pos2) {
+        if self.drawing {
+            // Only add if moved enough (avoid too many points)
+            if let Some(last) = self.path.last() {
+                if last.distance(pos) > 2.0 {
+                    self.path.push(pos);
+                }
+            }
+        }
+    }
+
+    /// Finish the lasso draw.
+    pub fn finish(&mut self) {
+        self.drawing = false;
+    }
+
+    /// Clear the lasso path.
+    pub fn clear(&mut self) {
+        self.path.clear();
+        self.drawing = false;
+    }
+
+    /// Check if a point is inside the lasso polygon using ray casting.
+    pub fn contains_point(&self, point: Pos2) -> bool {
+        if self.path.len() < 3 {
+            return false;
+        }
+
+        let mut inside = false;
+        let n = self.path.len();
+
+        let mut j = n - 1;
+        for i in 0..n {
+            let pi = self.path[i];
+            let pj = self.path[j];
+
+            if ((pi.y > point.y) != (pj.y > point.y))
+                && (point.x < (pj.x - pi.x) * (point.y - pi.y) / (pj.y - pi.y) + pi.x)
+            {
+                inside = !inside;
+            }
+            j = i;
+        }
+
+        inside
+    }
+}
+
 /// Interaction-related toggles.
 #[derive(Debug, Clone)]
 pub struct SettingsInteraction {
