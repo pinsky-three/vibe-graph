@@ -126,8 +126,6 @@ impl VibeGraphApp {
 
     #[cfg(target_arch = "wasm32")]
     fn try_load_from_window() -> Option<SourceCodeGraph> {
-        use wasm_bindgen::JsCast;
-
         let window = web_sys::window()?;
         let data = js_sys::Reflect::get(&window, &"VIBE_GRAPH_DATA".into()).ok()?;
         let json_str = data.as_string()?;

@@ -1,0 +1,34 @@
+# Trunk configuration for WASM development
+# https://trunkrs.dev/configuration/
+
+[build]
+# Target directory for build output
+target = "target/trunk"
+# Build in release mode (set to false for faster dev builds)
+release = false
+
+[watch]
+# Watch these paths for changes
+watch = ["src", "index.html", "Trunk.toml"]
+# Ignore these patterns
+ignore = ["target", "*.wasm", "*.js"]
+
+[serve]
+# Local dev server address
+address = "127.0.0.1"
+# Port for dev server
+port = 8080
+# Auto-open browser on start
+open = true
+# Enable WebSocket for hot reload
+ws_protocol = "ws"
+
+[clean]
+# Directories to clean
+dist = "target/trunk"
+cargo = false
+
+[[hooks]]
+stage = "build"
+command = "sh"
+command_arguments = ["-c", "echo '🔨 Building vibe-graph-viz WASM...'"]
