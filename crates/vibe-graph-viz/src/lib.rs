@@ -3,9 +3,20 @@
 //! This crate provides an egui-based visualization that can run:
 //! - Natively (via eframe)
 //! - In the browser (via WASM)
+//!
+//! ## Module Structure
+//!
+//! - `app` - Main application state and update loop
+//! - `selection` - Lasso selection and neighborhood expansion
+//! - `settings` - UI settings structures
+//! - `ui` - Overlay rendering (lasso, indicators)
+//! - `sample` - Sample graph generation
 
 mod app;
+mod sample;
+mod selection;
 mod settings;
+mod ui;
 
 pub use app::VibeGraphApp;
 
