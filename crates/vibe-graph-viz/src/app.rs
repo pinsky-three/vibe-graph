@@ -36,6 +36,10 @@ pub struct VibeGraphApp {
     graph_metadata: HashMap<String, String>,
     /// Lasso selection state
     lasso: LassoState,
+    /// Base selection (nodes directly selected via lasso)
+    base_selection: Vec<petgraph::stable_graph::NodeIndex>,
+    /// Neighborhood depth: positive = ancestors, negative = descendants
+    neighborhood_depth: i32,
 }
 
 impl VibeGraphApp {
@@ -110,6 +114,8 @@ impl VibeGraphApp {
             dark_mode,
             graph_metadata: source_graph.metadata,
             lasso: LassoState::default(),
+            base_selection: Vec::new(),
+            neighborhood_depth: 0,
         }
     }
 
@@ -493,12 +499,93 @@ impl VibeGraphApp {
         CollapsingHeader::new("Selected")
             .default_open(true)
             .show(ui, |ui| {
-                ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                    for n in self.g.selected_nodes() {
-                        ui.label(format!("{:?}", n));
-                    }
-                    for e in self.g.selected_edges() {
-                        ui.label(format!("{:?}", e));
+                // Neighborhood depth slider
+                let has_selection = !self.base_selection.is_empty();
+
+                ui.add_enabled_ui(has_selection, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Neighborhood:");
+                        let old_depth = self.neighborhood_depth;
+                        let slider = egui::Slider::new(&mut self.neighborhood_depth, -5..=5)
+                            .step_by(1.0)
+                            .show_value(true);
+                        if ui.add(slider).changed() && old_depth != self.neighborhood_depth {
+                            self.apply_neighborhood_depth();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        // Quick buttons for common operations
+                        if ui
+                            .small_button("⬆ Parents")
+                            .on_hover_text("Go to parents (+1)")
+                            .clicked()
+                        {
+                            self.neighborhood_depth += 1;
+                            self.neighborhood_depth = self.neighborhood_depth.min(5);
+                            self.apply_neighborhood_depth();
+                        }
+                        if ui
+                            .small_button("⬇ Children")
+                            .on_hover_text("Go to children (-1)")
+                            .clicked()
+                        {
+                            self.neighborhood_depth -= 1;
+                            self.neighborhood_depth = self.neighborhood_depth.max(-5);
+                            self.apply_neighborhood_depth();
+                        }
+                        if ui
+                            .small_button("⟲ Reset")
+                            .on_hover_text("Reset to base selection")
+                            .clicked()
+                        {
+                            self.neighborhood_depth = 0;
+                            self.apply_neighborhood_depth();
+                        }
+                    });
+
+                    // Show depth explanation
+                    let depth_text = match self.neighborhood_depth.cmp(&0) {
+                        std::cmp::Ordering::Greater => {
+                            format!("+{} ancestors", self.neighborhood_depth)
+                        }
+                        std::cmp::Ordering::Less => {
+                            format!("{} descendants", self.neighborhood_depth.abs())
+                        }
+                        std::cmp::Ordering::Equal => "base selection".to_string(),
+                    };
+                    ui.label(
+                        egui::RichText::new(depth_text)
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
+                });
+
+                if !has_selection {
+                    ui.label(
+                        egui::RichText::new("Use lasso (L) to select nodes")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
+                }
+
+                ui.separator();
+
+                // Show selected items
+                let selected_count = self.g.selected_nodes().len();
+                let edge_count = self.g.selected_edges().len();
+                ui.label(format!("Nodes: {} | Edges: {}", selected_count, edge_count));
+
+                ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                    for &node_idx in self.g.selected_nodes() {
+                        if let Some(node) = self.g.node(node_idx) {
+                            let label = node.label();
+                            if !label.is_empty() {
+                                ui.label(format!("• {}", label));
+                            } else {
+                                ui.label(format!("• {:?}", node_idx));
+                            }
+                        }
                     }
                 });
             });
@@ -538,6 +625,8 @@ impl VibeGraphApp {
 
 impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
+        let mut needs_neighborhood_update = false;
+
         // Handle keyboard shortcuts
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Tab) {
@@ -561,7 +650,29 @@ impl App for VibeGraphApp {
                 self.lasso.active = false;
                 self.lasso.clear();
             }
+
+            // Arrow keys for neighborhood navigation (when there's a selection)
+            if !self.base_selection.is_empty() {
+                if i.key_pressed(egui::Key::ArrowUp) {
+                    self.neighborhood_depth = (self.neighborhood_depth + 1).min(5);
+                    needs_neighborhood_update = true;
+                }
+                if i.key_pressed(egui::Key::ArrowDown) {
+                    self.neighborhood_depth = (self.neighborhood_depth - 1).max(-5);
+                    needs_neighborhood_update = true;
+                }
+                // Reset with 0 key
+                if i.key_pressed(egui::Key::Num0) {
+                    self.neighborhood_depth = 0;
+                    needs_neighborhood_update = true;
+                }
+            }
         });
+
+        // Apply neighborhood update outside the input closure
+        if needs_neighborhood_update {
+            self.apply_neighborhood_depth();
+        }
 
         // Right sidebar with controls
         if self.show_sidebar {
@@ -666,6 +777,14 @@ impl App for VibeGraphApp {
                     .with_navigations(&settings_navigation)
                     .with_styles(&settings_style),
             );
+
+            // Sync base_selection when:
+            // - Not in lasso mode
+            // - Neighborhood depth is 0 (not exploring neighbors)
+            // This catches click-based selections without overriding neighborhood exploration
+            if !self.lasso.active && !self.lasso.drawing && self.neighborhood_depth == 0 {
+                self.sync_base_selection_from_graph();
+            }
 
             // Handle lasso drawing when in lasso mode
             if self.lasso.active {
@@ -826,47 +945,151 @@ impl VibeGraphApp {
         let mut canvas_lasso = LassoState::default();
         canvas_lasso.path = lasso_in_canvas;
 
-        // First, clear current selections
-        for idx in self.g.nodes_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
-            if let Some(node) = self.g.node_mut(idx) {
-                node.set_selected(false);
-            }
-        }
-        for idx in self.g.edges_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
-            if let Some(edge) = self.g.edge_mut(idx) {
-                edge.set_selected(false);
-            }
-        }
+        // Collect node indices first (to avoid borrow issues)
+        let node_indices: Vec<_> = self.g.nodes_iter().map(|(idx, _)| idx).collect();
+        let edge_indices: Vec<_> = self.g.edges_iter().map(|(idx, _)| idx).collect();
 
-        // Track selected node indices for edge selection
+        // Clear current selections and find nodes in lasso
         let mut selected_nodes = std::collections::HashSet::new();
 
-        // Check each node (node positions are in canvas coordinates)
-        for idx in self.g.nodes_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
-            if let Some(node) = self.g.node_mut(idx) {
+        for idx in &node_indices {
+            if let Some(node) = self.g.node_mut(*idx) {
                 let node_pos = node.location();
-
-                // Check if inside lasso (both in canvas coordinates now)
-                if canvas_lasso.contains_point(node_pos) {
-                    node.set_selected(true);
-                    selected_nodes.insert(idx);
+                let is_inside = canvas_lasso.contains_point(node_pos);
+                node.set_selected(is_inside);
+                if is_inside {
+                    selected_nodes.insert(*idx);
                 }
             }
         }
 
         // Select edges where at least one endpoint is selected
-        for idx in self.g.edges_iter().map(|(idx, _)| idx).collect::<Vec<_>>() {
-            if let Some((source, target)) = self.g.edge_endpoints(idx) {
-                if selected_nodes.contains(&source) || selected_nodes.contains(&target) {
-                    if let Some(edge) = self.g.edge_mut(idx) {
-                        edge.set_selected(true);
-                    }
+        for idx in &edge_indices {
+            if let Some((source, target)) = self.g.edge_endpoints(*idx) {
+                let should_select =
+                    selected_nodes.contains(&source) || selected_nodes.contains(&target);
+                if let Some(edge) = self.g.edge_mut(*idx) {
+                    edge.set_selected(should_select);
                 }
             }
         }
 
+        // Store the base selection and reset neighborhood depth
+        self.base_selection = selected_nodes.into_iter().collect();
+        self.neighborhood_depth = 0;
+
         // Clear the lasso path after selection
         self.lasso.clear();
+    }
+
+    /// Expand or contract selection based on neighborhood depth.
+    /// Positive depth = ancestors (parents), negative depth = descendants (children).
+    fn apply_neighborhood_depth(&mut self) {
+        if self.base_selection.is_empty() {
+            return;
+        }
+
+        // Build adjacency lists once for efficient traversal
+        let mut parents: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+        let mut children: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+
+        for (edge_idx, _) in self.g.edges_iter() {
+            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
+                // source -> target means: target's parent is source, source's child is target
+                parents.entry(target).or_default().push(source);
+                children.entry(source).or_default().push(target);
+            }
+        }
+
+        // Start with base selection
+        let mut current_selection: std::collections::HashSet<_> =
+            self.base_selection.iter().cloned().collect();
+
+        let depth_abs = self.neighborhood_depth.abs() as usize;
+        let go_to_parents = self.neighborhood_depth > 0;
+
+        // Expand by traversing the graph
+        let mut frontier: std::collections::HashSet<_> = current_selection.clone();
+
+        for _ in 0..depth_abs {
+            let mut next_frontier = std::collections::HashSet::new();
+
+            for &node_idx in &frontier {
+                let neighbors = if go_to_parents {
+                    parents.get(&node_idx)
+                } else {
+                    children.get(&node_idx)
+                };
+
+                if let Some(neighbors) = neighbors {
+                    for &neighbor in neighbors {
+                        if !current_selection.contains(&neighbor) {
+                            next_frontier.insert(neighbor);
+                            current_selection.insert(neighbor);
+                        }
+                    }
+                }
+            }
+
+            if next_frontier.is_empty() {
+                break; // No more nodes to expand
+            }
+            frontier = next_frontier;
+        }
+
+        // Collect indices to avoid borrow issues
+        let node_indices: Vec<_> = self.g.nodes_iter().map(|(idx, _)| idx).collect();
+        let edge_indices: Vec<_> = self.g.edges_iter().map(|(idx, _)| idx).collect();
+
+        // Apply selection to nodes
+        for idx in &node_indices {
+            if let Some(node) = self.g.node_mut(*idx) {
+                node.set_selected(current_selection.contains(idx));
+            }
+        }
+
+        // Select edges where at least one endpoint is in the selection
+        for idx in &edge_indices {
+            if let Some((source, target)) = self.g.edge_endpoints(*idx) {
+                let should_select =
+                    current_selection.contains(&source) || current_selection.contains(&target);
+                if let Some(edge) = self.g.edge_mut(*idx) {
+                    edge.set_selected(should_select);
+                }
+            }
+        }
+    }
+
+    /// Sync base_selection with current graph selection state.
+    /// Call this when selection might have changed externally (e.g., by clicking).
+    fn sync_base_selection_from_graph(&mut self) {
+        let current: Vec<_> = self
+            .g
+            .nodes_iter()
+            .filter_map(|(idx, _)| {
+                self.g
+                    .node(idx)
+                    .and_then(|n| if n.selected() { Some(idx) } else { None })
+            })
+            .collect();
+
+        // If current selection differs from what neighborhood expansion would produce,
+        // update base_selection to current and reset depth
+        if !current.is_empty() {
+            let base_set: std::collections::HashSet<_> =
+                self.base_selection.iter().cloned().collect();
+            let current_set: std::collections::HashSet<_> = current.iter().cloned().collect();
+
+            // Simple check: if sizes differ significantly or base is empty, sync
+            if self.base_selection.is_empty() || base_set != current_set {
+                self.base_selection = current;
+                self.neighborhood_depth = 0;
+            }
+        } else {
+            // No selection, clear base
+            self.base_selection.clear();
+            self.neighborhood_depth = 0;
+        }
     }
 }
 
