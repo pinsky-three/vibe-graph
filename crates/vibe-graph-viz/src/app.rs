@@ -396,17 +396,32 @@ impl VibeGraphApp {
     }
 
     fn ui_selected(&mut self, ui: &mut egui::Ui) {
+        use crate::selection::MAX_NEIGHBORHOOD_DEPTH;
+
         CollapsingHeader::new("Selected")
             .default_open(true)
             .show(ui, |ui| {
                 let has_selection = self.selection.has_selection();
 
+                // Selection options (always visible)
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(&mut self.selection.include_edges, "Include edges")
+                        .on_hover_text("Highlight edges connected to selected nodes")
+                        .changed()
+                    {
+                        apply_neighborhood_depth(&mut self.g, &self.selection);
+                    }
+                });
+
                 ui.add_enabled_ui(has_selection, |ui| {
+                    // Neighborhood depth slider
                     ui.horizontal(|ui| {
-                        ui.label("Neighborhood:");
+                        ui.label("Depth:");
                         let old_depth = self.selection.neighborhood_depth;
+                        let range = -MAX_NEIGHBORHOOD_DEPTH..=MAX_NEIGHBORHOOD_DEPTH;
                         let slider =
-                            egui::Slider::new(&mut self.selection.neighborhood_depth, -5..=5)
+                            egui::Slider::new(&mut self.selection.neighborhood_depth, range)
                                 .step_by(1.0)
                                 .show_value(true);
                         if ui.add(slider).changed()
@@ -416,6 +431,28 @@ impl VibeGraphApp {
                         }
                     });
 
+                    // Mode selector
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        let mode_label = self.selection.mode.label();
+                        if ui
+                            .button(mode_label)
+                            .on_hover_text(self.selection.mode.description())
+                            .clicked()
+                        {
+                            self.selection.mode = self.selection.mode.next();
+                            apply_neighborhood_depth(&mut self.g, &self.selection);
+                        }
+
+                        // Mode description
+                        ui.label(
+                            egui::RichText::new(format!("({})", self.selection.mode.description()))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    });
+
+                    // Quick navigation buttons
                     ui.horizontal(|ui| {
                         if ui
                             .small_button("⬆ Parents")
@@ -423,7 +460,7 @@ impl VibeGraphApp {
                             .clicked()
                         {
                             self.selection.neighborhood_depth =
-                                (self.selection.neighborhood_depth + 1).min(5);
+                                (self.selection.neighborhood_depth + 1).min(MAX_NEIGHBORHOOD_DEPTH);
                             apply_neighborhood_depth(&mut self.g, &self.selection);
                         }
                         if ui
@@ -431,13 +468,14 @@ impl VibeGraphApp {
                             .on_hover_text("Go to children (-1)")
                             .clicked()
                         {
-                            self.selection.neighborhood_depth =
-                                (self.selection.neighborhood_depth - 1).max(-5);
+                            self.selection.neighborhood_depth = (self.selection.neighborhood_depth
+                                - 1)
+                            .max(-MAX_NEIGHBORHOOD_DEPTH);
                             apply_neighborhood_depth(&mut self.g, &self.selection);
                         }
                         if ui
                             .small_button("⟲ Reset")
-                            .on_hover_text("Reset to base selection")
+                            .on_hover_text("Reset to base selection (depth 0)")
                             .clicked()
                         {
                             self.selection.neighborhood_depth = 0;
@@ -445,6 +483,7 @@ impl VibeGraphApp {
                         }
                     });
 
+                    // Depth indicator text
                     let depth_text = match self.selection.neighborhood_depth.cmp(&0) {
                         std::cmp::Ordering::Greater => {
                             format!("+{} ancestors", self.selection.neighborhood_depth)
@@ -524,14 +563,16 @@ impl App for VibeGraphApp {
 
             // Arrow keys for neighborhood navigation
             if self.selection.has_selection() {
+                use crate::selection::MAX_NEIGHBORHOOD_DEPTH;
+
                 if i.key_pressed(egui::Key::ArrowUp) {
                     self.selection.neighborhood_depth =
-                        (self.selection.neighborhood_depth + 1).min(5);
+                        (self.selection.neighborhood_depth + 1).min(MAX_NEIGHBORHOOD_DEPTH);
                     needs_neighborhood_update = true;
                 }
                 if i.key_pressed(egui::Key::ArrowDown) {
                     self.selection.neighborhood_depth =
-                        (self.selection.neighborhood_depth - 1).max(-5);
+                        (self.selection.neighborhood_depth - 1).max(-MAX_NEIGHBORHOOD_DEPTH);
                     needs_neighborhood_update = true;
                 }
                 if i.key_pressed(egui::Key::Num0) {

@@ -7,6 +7,50 @@ use egui_graphs::{Graph, MetadataFrame};
 use petgraph::stable_graph::NodeIndex;
 use std::collections::{HashMap, HashSet};
 
+/// Maximum neighborhood depth in either direction.
+pub const MAX_NEIGHBORHOOD_DEPTH: i32 = 20;
+
+/// How neighborhood expansion combines with base selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NeighborhoodMode {
+    /// Keep base selection + add expanded nodes (default behavior)
+    #[default]
+    Union,
+    /// Replace: only show the nodes at the current depth level (discard base)
+    Replace,
+    /// Accumulate: show all nodes from base up to current depth level
+    Accumulate,
+}
+
+impl NeighborhoodMode {
+    /// Get display name for UI.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Union => "Union",
+            Self::Replace => "Replace",
+            Self::Accumulate => "Accumulate",
+        }
+    }
+
+    /// Get description for tooltip.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Union => "Base selection + neighbors at depth N",
+            Self::Replace => "Only neighbors at exactly depth N (no base)",
+            Self::Accumulate => "All nodes from depth 0 to N",
+        }
+    }
+
+    /// Cycle to next mode.
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Union => Self::Replace,
+            Self::Replace => Self::Accumulate,
+            Self::Accumulate => Self::Union,
+        }
+    }
+}
+
 /// Lasso selection tool state.
 #[derive(Debug, Clone, Default)]
 pub struct LassoState {
@@ -29,7 +73,6 @@ impl LassoState {
     /// Add a point to the lasso path.
     pub fn add_point(&mut self, pos: Pos2) {
         if self.drawing {
-            // Only add if moved enough (avoid too many points)
             if let Some(last) = self.path.last() {
                 if last.distance(pos) > 2.0 {
                     self.path.push(pos);
@@ -76,12 +119,27 @@ impl LassoState {
 }
 
 /// Selection state for neighborhood expansion.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SelectionState {
     /// Base selection (nodes directly selected via lasso or click)
     pub base_selection: Vec<NodeIndex>,
     /// Neighborhood depth: positive = ancestors, negative = descendants
     pub neighborhood_depth: i32,
+    /// How to combine base selection with expanded nodes
+    pub mode: NeighborhoodMode,
+    /// Whether to include edges in selection highlighting
+    pub include_edges: bool,
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            base_selection: Vec::new(),
+            neighborhood_depth: 0,
+            mode: NeighborhoodMode::default(),
+            include_edges: true,
+        }
+    }
 }
 
 impl SelectionState {
@@ -125,7 +183,6 @@ pub fn select_nodes_in_lasso(
         })
         .collect();
 
-    // Create a temporary lasso with canvas coordinates for hit testing
     let canvas_lasso = LassoState {
         path: lasso_in_canvas,
         ..Default::default()
@@ -149,11 +206,11 @@ pub fn select_nodes_in_lasso(
         }
     }
 
-    // Select edges where at least one endpoint is selected
+    // Handle edge selection based on include_edges setting
     for idx in &edge_indices {
         if let Some((source, target)) = graph.edge_endpoints(*idx) {
-            let should_select =
-                selected_nodes.contains(&source) || selected_nodes.contains(&target);
+            let should_select = selection.include_edges
+                && (selected_nodes.contains(&source) || selected_nodes.contains(&target));
             if let Some(edge) = graph.edge_mut(*idx) {
                 edge.set_selected(should_select);
             }
@@ -165,8 +222,7 @@ pub fn select_nodes_in_lasso(
     selection.neighborhood_depth = 0;
 }
 
-/// Expand or contract selection based on neighborhood depth.
-/// Positive depth = ancestors (parents), negative depth = descendants (children).
+/// Expand or contract selection based on neighborhood depth and mode.
 pub fn apply_neighborhood_depth(graph: &mut Graph<(), ()>, selection: &SelectionState) {
     if selection.base_selection.is_empty() {
         return;
@@ -183,16 +239,61 @@ pub fn apply_neighborhood_depth(graph: &mut Graph<(), ()>, selection: &Selection
         }
     }
 
-    // Start with base selection
-    let mut current_selection: HashSet<_> = selection.base_selection.iter().cloned().collect();
-
+    let base_set: HashSet<_> = selection.base_selection.iter().cloned().collect();
     let depth_abs = selection.neighborhood_depth.unsigned_abs() as usize;
     let go_to_parents = selection.neighborhood_depth > 0;
 
-    // Expand by traversing the graph (BFS)
-    let mut frontier: HashSet<_> = current_selection.clone();
+    // Compute the final selection based on mode
+    let final_selection = match selection.mode {
+        NeighborhoodMode::Union => {
+            // Base + all nodes up to depth N
+            compute_union_selection(&base_set, depth_abs, go_to_parents, &parents, &children)
+        }
+        NeighborhoodMode::Replace => {
+            // Only nodes at exactly depth N (no base if depth > 0)
+            compute_replace_selection(&base_set, depth_abs, go_to_parents, &parents, &children)
+        }
+        NeighborhoodMode::Accumulate => {
+            // All nodes from depth 0 to N (same as Union but clearer intent)
+            compute_union_selection(&base_set, depth_abs, go_to_parents, &parents, &children)
+        }
+    };
 
-    for _ in 0..depth_abs {
+    // Collect indices to avoid borrow issues
+    let node_indices: Vec<_> = graph.nodes_iter().map(|(idx, _)| idx).collect();
+    let edge_indices: Vec<_> = graph.edges_iter().map(|(idx, _)| idx).collect();
+
+    // Apply selection to nodes
+    for idx in &node_indices {
+        if let Some(node) = graph.node_mut(*idx) {
+            node.set_selected(final_selection.contains(idx));
+        }
+    }
+
+    // Handle edge selection based on include_edges setting
+    for idx in &edge_indices {
+        if let Some((source, target)) = graph.edge_endpoints(*idx) {
+            let should_select = selection.include_edges
+                && (final_selection.contains(&source) || final_selection.contains(&target));
+            if let Some(edge) = graph.edge_mut(*idx) {
+                edge.set_selected(should_select);
+            }
+        }
+    }
+}
+
+/// Compute Union selection: base + all neighbors up to depth.
+fn compute_union_selection(
+    base: &HashSet<NodeIndex>,
+    depth: usize,
+    go_to_parents: bool,
+    parents: &HashMap<NodeIndex, Vec<NodeIndex>>,
+    children: &HashMap<NodeIndex, Vec<NodeIndex>>,
+) -> HashSet<NodeIndex> {
+    let mut result = base.clone();
+    let mut frontier = base.clone();
+
+    for _ in 0..depth {
         let mut next_frontier = HashSet::new();
 
         for &node_idx in &frontier {
@@ -204,45 +305,69 @@ pub fn apply_neighborhood_depth(graph: &mut Graph<(), ()>, selection: &Selection
 
             if let Some(neighbors) = neighbors {
                 for &neighbor in neighbors {
-                    if !current_selection.contains(&neighbor) {
+                    if !result.contains(&neighbor) {
                         next_frontier.insert(neighbor);
-                        current_selection.insert(neighbor);
+                        result.insert(neighbor);
                     }
                 }
             }
         }
 
         if next_frontier.is_empty() {
-            break; // No more nodes to expand
+            break;
         }
         frontier = next_frontier;
     }
 
-    // Collect indices to avoid borrow issues
-    let node_indices: Vec<_> = graph.nodes_iter().map(|(idx, _)| idx).collect();
-    let edge_indices: Vec<_> = graph.edges_iter().map(|(idx, _)| idx).collect();
+    result
+}
 
-    // Apply selection to nodes
-    for idx in &node_indices {
-        if let Some(node) = graph.node_mut(*idx) {
-            node.set_selected(current_selection.contains(idx));
-        }
+/// Compute Replace selection: only nodes at exactly depth N.
+fn compute_replace_selection(
+    base: &HashSet<NodeIndex>,
+    depth: usize,
+    go_to_parents: bool,
+    parents: &HashMap<NodeIndex, Vec<NodeIndex>>,
+    children: &HashMap<NodeIndex, Vec<NodeIndex>>,
+) -> HashSet<NodeIndex> {
+    if depth == 0 {
+        return base.clone();
     }
 
-    // Select edges where at least one endpoint is in the selection
-    for idx in &edge_indices {
-        if let Some((source, target)) = graph.edge_endpoints(*idx) {
-            let should_select =
-                current_selection.contains(&source) || current_selection.contains(&target);
-            if let Some(edge) = graph.edge_mut(*idx) {
-                edge.set_selected(should_select);
+    let mut visited = base.clone();
+    let mut frontier = base.clone();
+
+    for _ in 0..depth {
+        let mut next_frontier = HashSet::new();
+
+        for &node_idx in &frontier {
+            let neighbors = if go_to_parents {
+                parents.get(&node_idx)
+            } else {
+                children.get(&node_idx)
+            };
+
+            if let Some(neighbors) = neighbors {
+                for &neighbor in neighbors {
+                    if !visited.contains(&neighbor) {
+                        next_frontier.insert(neighbor);
+                        visited.insert(neighbor);
+                    }
+                }
             }
         }
+
+        if next_frontier.is_empty() {
+            break;
+        }
+        frontier = next_frontier;
     }
+
+    // Return only the final frontier (nodes at exactly depth N)
+    frontier
 }
 
 /// Sync selection state with current graph selection.
-/// Call this when selection might have changed externally (e.g., by clicking).
 pub fn sync_selection_from_graph(graph: &Graph<(), ()>, selection: &mut SelectionState) {
     let current: Vec<_> = graph
         .nodes_iter()
@@ -257,13 +382,11 @@ pub fn sync_selection_from_graph(graph: &Graph<(), ()>, selection: &mut Selectio
         let base_set: HashSet<_> = selection.base_selection.iter().cloned().collect();
         let current_set: HashSet<_> = current.iter().cloned().collect();
 
-        // If selection changed, update base
         if selection.base_selection.is_empty() || base_set != current_set {
             selection.base_selection = current;
             selection.neighborhood_depth = 0;
         }
     } else {
-        // No selection, clear base
         selection.clear();
     }
 }

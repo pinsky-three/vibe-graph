@@ -323,19 +323,19 @@ export function wasm_main() {
     wasm.wasm_main();
 }
 
-function wasm_bindgen__convert__closures_____invoke__h8c53c8e5468a87ba(arg0, arg1) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h8c53c8e5468a87ba(arg0, arg1);
-    if (ret[1]) {
-        throw takeFromExternrefTable0(ret[0]);
-    }
+function wasm_bindgen__convert__closures_____invoke__hb361877e54e4d65f(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__hb361877e54e4d65f(arg0, arg1, arg2);
 }
 
 function wasm_bindgen__convert__closures_____invoke__h3ff59a8275a8e732(arg0, arg1, arg2) {
     wasm.wasm_bindgen__convert__closures_____invoke__h3ff59a8275a8e732(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__hb361877e54e4d65f(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__hb361877e54e4d65f(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h8c53c8e5468a87ba(arg0, arg1) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h8c53c8e5468a87ba(arg0, arg1);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
 }
 
 const __wbindgen_enum_ResizeObserverBoxOptions = ["border-box", "content-box", "device-pixel-content-box"];
