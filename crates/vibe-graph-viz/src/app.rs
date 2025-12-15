@@ -1,24 +1,25 @@
 //! Main application state and rendering logic.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use eframe::{App, CreationContext};
 use egui::{CollapsingHeader, Context, ScrollArea};
 use egui_graphs::{
     FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, Graph,
-    GraphView, LayoutForceDirected,
+    GraphView, LayoutForceDirected, MetadataFrame,
 };
-use petgraph::stable_graph::StableDiGraph;
+use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
-use vibe_graph_core::SourceCodeGraph;
+use vibe_graph_core::{ChangeIndicatorState, GitChangeKind, GitChangeSnapshot, SourceCodeGraph};
 
-use crate::sample::{create_sample_graph, rand_simple};
+use crate::sample::{create_sample_git_changes, create_sample_graph, rand_simple};
 use crate::selection::{
     apply_neighborhood_depth, select_nodes_in_lasso, sync_selection_from_graph, LassoState,
     SelectionState,
 };
 use crate::settings::{SettingsInteraction, SettingsNavigation, SettingsStyle};
-use crate::ui::{draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
+use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
 
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
@@ -44,13 +45,28 @@ pub struct VibeGraphApp {
     lasso: LassoState,
     /// Selection expansion state
     selection: SelectionState,
+    /// Mapping from node index to file path (for git change lookup)
+    node_paths: HashMap<NodeIndex, PathBuf>,
+    /// Current git change snapshot
+    git_changes: GitChangeSnapshot,
+    /// Animation state for change indicators
+    change_anim: ChangeIndicatorState,
+    /// Set of node indices with changes (cached for fast lookup)
+    changed_nodes: HashMap<NodeIndex, GitChangeKind>,
 }
 
 impl VibeGraphApp {
     /// Create a new app with default sample data.
     pub fn new(cc: &CreationContext<'_>) -> Self {
-        let source_graph = Self::load_or_sample();
-        Self::from_source_graph(cc, source_graph)
+        let (source_graph, is_sample) = Self::load_or_sample();
+        let mut app = Self::from_source_graph(cc, source_graph);
+
+        // If using sample data, also inject sample git changes for demo
+        if is_sample {
+            app.update_git_changes(create_sample_git_changes());
+        }
+
+        app
     }
 
     /// Create app from a SourceCodeGraph.
@@ -61,14 +77,22 @@ impl VibeGraphApp {
         let mut empty_graph = StableDiGraph::<(), ()>::new();
         let mut petgraph_to_egui = HashMap::new();
         let mut labels = HashMap::new();
+        let mut node_paths = HashMap::new();
 
-        // Copy nodes
+        // Copy nodes and track paths
         for node_idx in petgraph.node_indices() {
             let new_idx = empty_graph.add_node(());
             petgraph_to_egui.insert(node_idx, new_idx);
 
             if let Some(node) = petgraph.node_weight(node_idx) {
                 labels.insert(new_idx, node.name.clone());
+
+                // Store the relative path for git change lookup
+                if let Some(rel_path) = node.metadata.get("relative_path") {
+                    node_paths.insert(new_idx, PathBuf::from(rel_path));
+                } else if let Some(path) = node.metadata.get("path") {
+                    node_paths.insert(new_idx, PathBuf::from(path));
+                }
             }
         }
 
@@ -116,18 +140,23 @@ impl VibeGraphApp {
             graph_metadata: source_graph.metadata,
             lasso: LassoState::default(),
             selection: SelectionState::default(),
+            node_paths,
+            git_changes: GitChangeSnapshot::default(),
+            change_anim: ChangeIndicatorState::default(),
+            changed_nodes: HashMap::new(),
         }
     }
 
     /// Load graph from embedded data or return sample.
-    fn load_or_sample() -> SourceCodeGraph {
+    /// Returns (graph, is_sample) tuple.
+    fn load_or_sample() -> (SourceCodeGraph, bool) {
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(data) = Self::try_load_from_window() {
-                return data;
+                return (data, false);
             }
         }
-        create_sample_graph()
+        (create_sample_graph(), true)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -136,6 +165,47 @@ impl VibeGraphApp {
         let data = js_sys::Reflect::get(&window, &"VIBE_GRAPH_DATA".into()).ok()?;
         let json_str = data.as_string()?;
         serde_json::from_str(&json_str).ok()
+    }
+
+    /// Update git changes from a new snapshot.
+    pub fn update_git_changes(&mut self, snapshot: GitChangeSnapshot) {
+        self.git_changes = snapshot;
+        self.refresh_changed_nodes();
+    }
+
+    /// Refresh the cached set of changed node indices.
+    fn refresh_changed_nodes(&mut self) {
+        self.changed_nodes.clear();
+
+        // Build a set of changed paths for fast lookup
+        let changed_paths: HashMap<&std::path::Path, GitChangeKind> = self
+            .git_changes
+            .changes
+            .iter()
+            .map(|c| (c.path.as_path(), c.kind))
+            .collect();
+
+        // Map node paths to change kinds
+        for (node_idx, node_path) in &self.node_paths {
+            // Try exact match first
+            if let Some(&kind) = changed_paths.get(node_path.as_path()) {
+                self.changed_nodes.insert(*node_idx, kind);
+                continue;
+            }
+
+            // Try suffix matching (for relative vs absolute paths)
+            for (changed_path, &kind) in &changed_paths {
+                if node_path.ends_with(changed_path) || changed_path.ends_with(node_path) {
+                    self.changed_nodes.insert(*node_idx, kind);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Check if a node has changes.
+    pub fn node_has_changes(&self, idx: NodeIndex) -> Option<GitChangeKind> {
+        self.changed_nodes.get(&idx).copied()
     }
 }
 
@@ -373,10 +443,95 @@ impl VibeGraphApp {
                 }
             });
 
+            ui.separator();
+            ui.label(egui::RichText::new("Labels").strong());
+
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.settings_style.labels_always, "labels_always");
+                ui.checkbox(&mut self.settings_style.labels_always, "Always show labels");
+                Self::info_icon(ui, "Show node names always vs on hover");
+            });
+
+            ui.separator();
+            ui.label(egui::RichText::new("Change Indicators").strong());
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.settings_style.change_indicators, "Show halos");
+                Self::info_icon(ui, "Animated circles around changed files");
+            });
+
+            ui.add_enabled_ui(self.settings_style.change_indicators, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.settings_style.change_indicator_speed,
+                            0.2..=3.0,
+                        )
+                        .text("Speed"),
+                    );
+                });
             });
         });
+    }
+
+    fn ui_git_changes(&self, ui: &mut egui::Ui) {
+        CollapsingHeader::new("Git Changes")
+            .default_open(true)
+            .show(ui, |ui| {
+                let total = self.git_changes.changes.len();
+                let modified = self.git_changes.count_by_kind(GitChangeKind::Modified);
+                let added = self.git_changes.count_by_kind(GitChangeKind::Added);
+                let deleted = self.git_changes.count_by_kind(GitChangeKind::Deleted);
+
+                if total == 0 {
+                    ui.label(
+                        egui::RichText::new("✓ No changes detected")
+                            .color(egui::Color32::from_rgb(100, 200, 100)),
+                    );
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Total: {}", total));
+                    });
+
+                    if modified > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("● {} Modified", modified))
+                                    .color(egui::Color32::from_rgb(255, 200, 50)),
+                            );
+                        });
+                    }
+                    if added > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("● {} Added", added))
+                                    .color(egui::Color32::from_rgb(100, 255, 100)),
+                            );
+                        });
+                    }
+                    if deleted > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("● {} Deleted", deleted))
+                                    .color(egui::Color32::from_rgb(255, 100, 100)),
+                            );
+                        });
+                    }
+
+                    ui.separator();
+
+                    // Show nodes with changes
+                    let nodes_with_changes = self.changed_nodes.len();
+                    ui.label(format!("Nodes affected: {}", nodes_with_changes));
+
+                    if let Some(age) = self.git_changes.age() {
+                        ui.label(
+                            egui::RichText::new(format!("Updated: {:.1}s ago", age.as_secs_f32()))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
+                }
+            });
     }
 
     fn ui_info(&self, ui: &mut egui::Ui) {
@@ -538,6 +693,17 @@ impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let mut needs_neighborhood_update = false;
 
+        // Advance change indicator animation
+        let dt = ctx.input(|i| i.stable_dt);
+        self.change_anim.speed = self.settings_style.change_indicator_speed;
+        self.change_anim.enabled = self.settings_style.change_indicators;
+        self.change_anim.tick(dt);
+
+        // Request continuous repaint for animations
+        if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
+            ctx.request_repaint();
+        }
+
         // Handle keyboard shortcuts
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Tab) {
@@ -598,6 +764,9 @@ impl App for VibeGraphApp {
                         self.ui_info(ui);
                         ui.separator();
 
+                        self.ui_git_changes(ui);
+                        ui.separator();
+
                         self.ui_navigation(ui);
                         ui.separator();
 
@@ -630,6 +799,7 @@ impl App for VibeGraphApp {
 
             // Configure style with custom hooks for selected node/edge highlighting
             let dark_mode = self.dark_mode;
+
             let settings_interaction = egui_graphs::SettingsInteraction::new()
                 .with_dragging_enabled(effective_dragging)
                 .with_hover_enabled(self.settings_interaction.hover_enabled)
@@ -650,6 +820,8 @@ impl App for VibeGraphApp {
                 .with_zoom_speed(self.settings_navigation.zoom_speed)
                 .with_fit_to_screen_padding(self.settings_navigation.fit_to_screen_padding);
 
+            // Note: Edge labels are disabled by not setting labels on edges (we use () for edge data)
+            // Node labels are controlled by with_labels_always
             let settings_style = egui_graphs::SettingsStyle::new()
                 .with_labels_always(self.settings_style.labels_always)
                 .with_node_stroke_hook(move |selected, dragged, _color, _stroke, _style| {
@@ -685,6 +857,38 @@ impl App for VibeGraphApp {
                     .with_navigations(&settings_navigation)
                     .with_styles(&settings_style),
             );
+
+            // Draw change indicators (halos) around changed nodes
+            if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
+                let painter = ui.painter();
+                let meta = MetadataFrame::new(None).load(ui);
+                let graph_rect = graph_response.rect;
+
+                for (node_idx, change_kind) in &self.changed_nodes {
+                    if let Some(node) = self.g.node(*node_idx) {
+                        // Convert node position from canvas to screen coordinates
+                        let canvas_pos = node.location();
+                        let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
+                        let screen_pos = egui::pos2(
+                            widget_relative.x + graph_rect.min.x,
+                            widget_relative.y + graph_rect.min.y,
+                        );
+
+                        // Only draw if visible in viewport
+                        if graph_rect.contains(screen_pos) {
+                            let base_radius = 8.0; // Default node radius
+                            draw_change_halo(
+                                painter,
+                                screen_pos,
+                                base_radius,
+                                *change_kind,
+                                &self.change_anim,
+                                self.dark_mode,
+                            );
+                        }
+                    }
+                }
+            }
 
             // Sync selection when not in lasso mode and depth is 0
             if !self.lasso.active && !self.lasso.drawing && self.selection.neighborhood_depth == 0 {

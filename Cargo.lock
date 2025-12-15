@@ -5045,7 +5045,9 @@ name = "vibe-graph-git"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "git2",
  "serde",
+ "tempfile",
  "vibe-graph-core",
 ]
 

@@ -31,7 +31,12 @@ impl Default for SettingsInteraction {
 /// Visual style toggles.
 #[derive(Debug, Clone)]
 pub struct SettingsStyle {
+    /// Always show node labels (vs hover-only).
     pub labels_always: bool,
+    /// Show change indicator halos around modified nodes.
+    pub change_indicators: bool,
+    /// Animation speed for change indicators (0.5 = slow, 2.0 = fast).
+    pub change_indicator_speed: f32,
     #[allow(dead_code)]
     pub edge_deemphasis: bool,
 }
@@ -40,6 +45,8 @@ impl Default for SettingsStyle {
     fn default() -> Self {
         Self {
             labels_always: true,
+            change_indicators: true,
+            change_indicator_speed: 1.0,
             edge_deemphasis: false,
         }
     }

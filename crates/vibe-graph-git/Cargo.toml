@@ -10,5 +10,9 @@ release = false
 
 [dependencies]
 anyhow = { workspace = true }
+git2 = { workspace = true }
 serde = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }
+
+[dev-dependencies]
+tempfile = "3.20"

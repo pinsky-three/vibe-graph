@@ -1,7 +1,18 @@
 //! Sample graph generation for demonstration purposes.
 
 use std::collections::HashMap;
-use vibe_graph_core::{EdgeId, GraphEdge, GraphNode, GraphNodeKind, NodeId, SourceCodeGraph};
+use std::path::PathBuf;
+use vibe_graph_core::{
+    EdgeId, GitChangeKind, GitChangeSnapshot, GitFileChange, GraphEdge, GraphNode, GraphNodeKind,
+    NodeId, SourceCodeGraph,
+};
+
+/// Helper to create node metadata with a relative path.
+fn node_meta(rel_path: &str) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("relative_path".to_string(), rel_path.to_string());
+    m
+}
 
 /// Create a sample graph for demonstration.
 pub fn create_sample_graph() -> SourceCodeGraph {
@@ -15,37 +26,37 @@ pub fn create_sample_graph() -> SourceCodeGraph {
                 id: NodeId(0),
                 name: "src".to_string(),
                 kind: GraphNodeKind::Directory,
-                metadata: HashMap::new(),
+                metadata: node_meta("src"),
             },
             GraphNode {
                 id: NodeId(1),
                 name: "main.rs".to_string(),
                 kind: GraphNodeKind::File,
-                metadata: HashMap::new(),
+                metadata: node_meta("src/main.rs"),
             },
             GraphNode {
                 id: NodeId(2),
                 name: "lib.rs".to_string(),
                 kind: GraphNodeKind::Module,
-                metadata: HashMap::new(),
+                metadata: node_meta("src/lib.rs"),
             },
             GraphNode {
                 id: NodeId(3),
                 name: "utils".to_string(),
                 kind: GraphNodeKind::Directory,
-                metadata: HashMap::new(),
+                metadata: node_meta("src/utils"),
             },
             GraphNode {
                 id: NodeId(4),
                 name: "helpers.rs".to_string(),
                 kind: GraphNodeKind::File,
-                metadata: HashMap::new(),
+                metadata: node_meta("src/utils/helpers.rs"),
             },
             GraphNode {
                 id: NodeId(5),
                 name: "config.rs".to_string(),
                 kind: GraphNodeKind::File,
-                metadata: HashMap::new(),
+                metadata: node_meta("src/utils/config.rs"),
             },
         ],
         edges: vec![
@@ -100,6 +111,32 @@ pub fn create_sample_graph() -> SourceCodeGraph {
             },
         ],
         metadata,
+    }
+}
+
+/// Create sample git changes for demonstration.
+///
+/// Shows different change types: Modified, Added, Deleted.
+pub fn create_sample_git_changes() -> GitChangeSnapshot {
+    GitChangeSnapshot {
+        changes: vec![
+            GitFileChange {
+                path: PathBuf::from("src/main.rs"),
+                kind: GitChangeKind::Modified,
+                staged: false,
+            },
+            GitFileChange {
+                path: PathBuf::from("src/utils/helpers.rs"),
+                kind: GitChangeKind::Modified,
+                staged: true,
+            },
+            GitFileChange {
+                path: PathBuf::from("src/utils/config.rs"),
+                kind: GitChangeKind::Added,
+                staged: false,
+            },
+        ],
+        captured_at: Some(std::time::Instant::now()),
     }
 }
 

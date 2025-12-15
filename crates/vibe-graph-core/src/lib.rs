@@ -5,7 +5,157 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
+
+// =============================================================================
+// Git Change Tracking Types
+// =============================================================================
+
+/// Type of change detected for a file in git.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GitChangeKind {
+    /// File was modified (content changed)
+    Modified,
+    /// File was newly added (untracked or staged new)
+    Added,
+    /// File was deleted
+    Deleted,
+    /// File was renamed (old path)
+    RenamedFrom,
+    /// File was renamed (new path)
+    RenamedTo,
+}
+
+impl GitChangeKind {
+    /// Get a display label for the change kind.
+    pub fn label(&self) -> &'static str {
+        match self {
+            GitChangeKind::Modified => "Modified",
+            GitChangeKind::Added => "Added",
+            GitChangeKind::Deleted => "Deleted",
+            GitChangeKind::RenamedFrom => "Renamed (from)",
+            GitChangeKind::RenamedTo => "Renamed (to)",
+        }
+    }
+
+    /// Get a short symbol for the change kind.
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            GitChangeKind::Modified => "M",
+            GitChangeKind::Added => "+",
+            GitChangeKind::Deleted => "-",
+            GitChangeKind::RenamedFrom => "R←",
+            GitChangeKind::RenamedTo => "R→",
+        }
+    }
+}
+
+/// Represents a single file change detected in git.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitFileChange {
+    /// Relative path of the changed file.
+    pub path: PathBuf,
+    /// Kind of change.
+    pub kind: GitChangeKind,
+    /// Whether this is a staged change (vs working directory).
+    pub staged: bool,
+}
+
+/// Snapshot of git changes for an entire repository.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitChangeSnapshot {
+    /// All detected changes.
+    pub changes: Vec<GitFileChange>,
+    /// Timestamp when this snapshot was taken.
+    #[serde(skip)]
+    pub captured_at: Option<Instant>,
+}
+
+impl GitChangeSnapshot {
+    /// Create a new empty snapshot.
+    pub fn new() -> Self {
+        Self {
+            changes: Vec::new(),
+            captured_at: Some(Instant::now()),
+        }
+    }
+
+    /// Check if a path has any changes.
+    pub fn has_changes(&self, path: &Path) -> bool {
+        self.changes.iter().any(|c| c.path == path)
+    }
+
+    /// Get the change kind for a path, if any.
+    pub fn get_change(&self, path: &Path) -> Option<&GitFileChange> {
+        self.changes.iter().find(|c| c.path == path)
+    }
+
+    /// Get all paths that have changes.
+    pub fn changed_paths(&self) -> impl Iterator<Item = &Path> {
+        self.changes.iter().map(|c| c.path.as_path())
+    }
+
+    /// Count changes by kind.
+    pub fn count_by_kind(&self, kind: GitChangeKind) -> usize {
+        self.changes.iter().filter(|c| c.kind == kind).count()
+    }
+
+    /// Check if snapshot is stale (older than given duration).
+    pub fn is_stale(&self, max_age: Duration) -> bool {
+        match self.captured_at {
+            Some(at) => at.elapsed() > max_age,
+            None => true,
+        }
+    }
+
+    /// Get age of this snapshot.
+    pub fn age(&self) -> Option<Duration> {
+        self.captured_at.map(|at| at.elapsed())
+    }
+}
+
+/// State for animating change indicators.
+#[derive(Debug, Clone)]
+pub struct ChangeIndicatorState {
+    /// Animation phase (0.0 to 1.0, loops).
+    pub phase: f32,
+    /// Animation speed multiplier.
+    pub speed: f32,
+    /// Whether animation is enabled.
+    pub enabled: bool,
+}
+
+impl Default for ChangeIndicatorState {
+    fn default() -> Self {
+        Self {
+            phase: 0.0,
+            speed: 1.0,
+            enabled: true,
+        }
+    }
+}
+
+impl ChangeIndicatorState {
+    /// Advance the animation by delta time.
+    pub fn tick(&mut self, dt: f32) {
+        if self.enabled {
+            self.phase = (self.phase + dt * self.speed) % 1.0;
+        }
+    }
+
+    /// Get the current pulse scale (1.0 to 1.3).
+    pub fn pulse_scale(&self) -> f32 {
+        // Smooth sine-based pulse
+        let t = self.phase * std::f32::consts::TAU;
+        1.0 + 0.15 * (t.sin() * 0.5 + 0.5)
+    }
+
+    /// Get the current alpha for outer ring (fades in/out).
+    pub fn ring_alpha(&self) -> f32 {
+        let t = self.phase * std::f32::consts::TAU;
+        0.3 + 0.4 * (t.sin() * 0.5 + 0.5)
+    }
+}
 
 /// Identifier for nodes within the `SourceCodeGraph`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
