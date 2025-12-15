@@ -24,6 +24,10 @@ petgraph = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# LLMCA integration (native only due to blocking HTTP)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vibe-graph-llmca = { path = "../vibe-graph-llmca" }
+
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

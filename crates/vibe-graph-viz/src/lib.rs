@@ -17,6 +17,7 @@ mod sample;
 mod selection;
 mod settings;
 mod ui;
+mod vibe_coding;
 
 pub use app::VibeGraphApp;
 

@@ -140,6 +140,71 @@ impl LlmcaSystem {
         Ok(())
     }
 
+    /// Run a single analysis pass for a subset of nodes.
+    ///
+    /// This allows on-demand LLM queries scoped to the current selection
+    /// without evolving the entire graph. Only the selected nodes are updated.
+    ///
+    /// # Arguments
+    /// * `selected` - Node IDs to analyze
+    /// * `vibes` - Active vibes that may influence the analysis
+    /// * `constitution` - Governing rules for the analysis
+    ///
+    /// # Returns
+    /// The updated cell states for the selected nodes.
+    pub fn analyze_selection(
+        &mut self,
+        selected: &[NodeId],
+        vibes: &[Vibe],
+        constitution: &Constitution,
+    ) -> Result<Vec<CellState>> {
+        debug!(
+            selected_count = selected.len(),
+            total_nodes = self.cells.len(),
+            "llmca_analyze_selection_start"
+        );
+        let started = Instant::now();
+
+        let mut updates: HashMap<NodeId, CellState> = HashMap::with_capacity(selected.len());
+
+        // Only process selected nodes
+        for node_id in selected {
+            if let Some(cell) = self.cells.get(node_id) {
+                let neighbors = self.neighbors_for(node_id);
+                let new_state = self
+                    .update_rule
+                    .update(cell, &neighbors, vibes, constitution);
+                updates.insert(*node_id, new_state);
+            }
+        }
+
+        // Apply updates only to selected cells
+        self.apply_updates(updates.clone());
+
+        let result: Vec<CellState> = updates.into_values().collect();
+
+        debug!(
+            duration_ms = started.elapsed().as_millis() as u64,
+            result_count = result.len(),
+            "llmca_analyze_selection_complete"
+        );
+
+        Ok(result)
+    }
+
+    /// Get the cell state for a specific node.
+    pub fn cell_state(&self, node_id: &NodeId) -> Option<&CellState> {
+        self.cells.get(node_id).map(|c| &c.state)
+    }
+
+    /// Get cell states for multiple nodes.
+    pub fn cell_states_for(&self, node_ids: &[NodeId]) -> Vec<CellState> {
+        node_ids
+            .iter()
+            .filter_map(|id| self.cells.get(id).map(|c| c.state.clone()))
+            .collect()
+    }
+
     /// Collect the latest state for each cell.
     pub fn cell_states(&self) -> Vec<CellState> {
         self.cells.values().map(|cell| cell.state.clone()).collect()
