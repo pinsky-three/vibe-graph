@@ -38,7 +38,7 @@ directories = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 vibe-graph-core = { version = "0.1.1", path = "../vibe-graph-core" }
-vibe-graph-api = { path = "../vibe-graph-api" }
-vibe-graph-git = { path = "../vibe-graph-git" }
+vibe-graph-api = { version = "0.1.0", path = "../vibe-graph-api" }
+vibe-graph-git = { version = "0.1.0", path = "../vibe-graph-git" }
 axum = { workspace = true }
 tower-http = { workspace = true }
