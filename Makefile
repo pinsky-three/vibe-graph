@@ -104,12 +104,39 @@ serve-prod: ## Serve production build
 # Release
 # =============================================================================
 
-release: ## Release version bump
+PUBLISH_CRATES ?= vibe-graph-core vibe-graph-git vibe-graph-api vibe-graph-cli
+
+bump-auto: ## Bump patch versions for crates changed since last tag
+	@set -eu; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "✋ Working tree is dirty. Commit or stash before bumping."; \
+		exit 1; \
+	fi; \
+	for crate in $(PUBLISH_CRATES); do \
+		dir="crates/$${crate}"; \
+		tag="$$(git tag --list "$${crate}-v*" --sort=-v:refname | awk 'NR==1 { print; exit }')"; \
+		if [ -z "$$tag" ]; then \
+			echo "🔁 $$crate: no prior tag found -> bump patch"; \
+			cargo release patch -p "$$crate" --no-publish --execute; \
+			continue; \
+		fi; \
+		changed="$$(git diff --name-only "$$tag"..HEAD -- "$$dir" | awk 'NR==1 { print; exit }')"; \
+		if [ -n "$$changed" ]; then \
+			echo "🔁 $$crate: changed since $$tag -> bump patch"; \
+			cargo release patch -p "$$crate" --no-publish --execute; \
+		else \
+			echo "⏭️  $$crate: no changes since $$tag -> skip"; \
+		fi; \
+	done
+
+release: ## Publish crates to crates.io (dependency order)
 	@echo "Publishing workspace crates (dependency order)..."
 	cargo publish -p vibe-graph-core
 	cargo publish -p vibe-graph-git
 	cargo publish -p vibe-graph-api
 	cargo publish -p vibe-graph-cli
+
+release-auto: bump-auto release ## Auto-bump (changed crates) then publish
 
 publish: ## Publish to crates.io
 	$(MAKE) release
