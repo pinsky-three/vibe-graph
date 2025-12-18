@@ -7,6 +7,8 @@
 
 Vibe-Graph maintains a living **SourceCodeGraph** that captures structure, relationships, and historical vibes (human + machine intents). It scans your codebase, detects cross-file references, and provides interactive visualization—all running locally.
 
+<img width="1512" height="982" alt="image" src="https://github.com/user-attachments/assets/ecc2bcd1-de28-4e66-b9cf-b3864ed8de46" />
+
 ## Quick Start
 
 ```bash
