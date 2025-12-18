@@ -29,11 +29,13 @@ use axum::{
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use vibe_graph_api::{create_api_router, create_api_state};
+use vibe_graph_api::{create_api_router, create_api_state_with_changes};
 use vibe_graph_core::SourceCodeGraph;
+use vibe_graph_git::get_git_changes;
 
 use crate::commands::graph;
 use crate::config::Config;
+use crate::project::Project;
 use crate::store::Store;
 
 // Embedded WASM assets (only included when feature is enabled)
@@ -46,6 +48,8 @@ static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_viz.js");
 struct StaticState {
     /// Graph JSON for legacy mode.
     graph_json: String,
+    /// Git change snapshot JSON for legacy mode.
+    git_changes_json: String,
     /// WASM bytes for embedded mode.
     wasm_bytes: Option<Vec<u8>>,
     /// JS glue bytes for embedded mode.
@@ -77,11 +81,20 @@ pub async fn execute(
         graph.edge_count()
     );
 
-    // Create API state
-    let api_state = create_api_state(graph.clone());
+    // Load git changes.
+    //
+    // Why: In multi-repo workspaces, `path` is not a git repo root. We prefer
+    // repo roots from `.self` (project metadata) to compute correct, absolute
+    // paths for matching node metadata.
+    let git_changes = load_git_changes(&store, &path);
+
+    // Create API state with git changes
+    let api_state = create_api_state_with_changes(graph.clone(), git_changes);
 
     // Serialize graph to JSON for legacy mode
     let graph_json = serde_json::to_string(&graph).context("Failed to serialize graph")?;
+    let git_changes_json = serde_json::to_string(&api_state.git_changes.read().await.clone())
+        .context("Failed to serialize git changes")?;
 
     // Detect frontend dist directory
     let frontend_dist = detect_frontend_dist(&path);
@@ -92,6 +105,7 @@ pub async fn execute(
 
     let static_state = Arc::new(StaticState {
         graph_json,
+        git_changes_json,
         wasm_bytes,
         js_bytes,
     });
@@ -226,7 +240,7 @@ fn load_wasm_assets(wasm_dir: Option<PathBuf>) -> (Option<Vec<u8>>, Option<Vec<u
 /// Handler for the index page (legacy mode).
 async fn index_handler(State(state): State<Arc<StaticState>>) -> Html<String> {
     let html = if state.wasm_bytes.is_some() {
-        generate_wasm_html(&state.graph_json)
+        generate_wasm_html(&state.graph_json, &state.git_changes_json)
     } else {
         generate_fallback_html(&state.graph_json)
     };
@@ -270,7 +284,7 @@ async fn js_handler(State(state): State<Arc<StaticState>>) -> Response {
 }
 
 /// Generate HTML page with WASM app (legacy mode).
-fn generate_wasm_html(graph_json: &str) -> String {
+fn generate_wasm_html(graph_json: &str, git_changes_json: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -309,6 +323,8 @@ fn generate_wasm_html(graph_json: &str) -> String {
     <script>
         // Embed graph data for WASM to pick up
         window.VIBE_GRAPH_DATA = `{graph_json}`;
+        // Embed git changes for WASM to pick up (used for change halos)
+        window.VIBE_GIT_CHANGES = `{git_changes_json}`;
     </script>
     <script type="module">
         import init from './vibe_graph_viz.js';
@@ -327,7 +343,8 @@ fn generate_wasm_html(graph_json: &str) -> String {
     </script>
 </body>
 </html>"#,
-        graph_json = graph_json.replace('`', "\\`").replace("${", "\\${")
+        graph_json = graph_json.replace('`', "\\`").replace("${", "\\${"),
+        git_changes_json = git_changes_json.replace('`', "\\`").replace("${", "\\${")
     )
 }
 
@@ -690,4 +707,71 @@ fn sample_graph() -> SourceCodeGraph {
         ],
         metadata,
     }
+}
+
+/// Load git changes for the current serve target.
+///
+/// Strategy:
+/// - If `.self` exists, load the `Project` and aggregate per-repo git status.
+///   Paths are rewritten to absolute paths (repo_root + repo_relative_path).
+/// - Otherwise, attempt a single-repo status check at `path`.
+fn load_git_changes(store: &Store, path: &Path) -> vibe_graph_core::GitChangeSnapshot {
+    // Use `.self` project metadata when available (multi-repo workspaces).
+    if store.exists() {
+        if let Ok(Some(project)) = store.load() {
+            return git_changes_from_project(&project);
+        }
+    }
+
+    // Fallback: single-repo status check at `path`.
+    match get_git_changes(path) {
+        Ok(changes) => {
+            println!("📝 Git changes: {} files modified", changes.changes.len());
+            absolutize_snapshot_paths(path, changes)
+        }
+        Err(e) => {
+            println!("⚠️  Could not load git changes: {}", e);
+            vibe_graph_core::GitChangeSnapshot::default()
+        }
+    }
+}
+
+fn git_changes_from_project(project: &Project) -> vibe_graph_core::GitChangeSnapshot {
+    use vibe_graph_core::{GitChangeSnapshot, GitFileChange};
+
+    let mut all_changes: Vec<GitFileChange> = Vec::new();
+
+    for repo in &project.repositories {
+        match get_git_changes(&repo.local_path) {
+            Ok(snapshot) => {
+                for mut change in snapshot.changes {
+                    change.path = repo.local_path.join(&change.path);
+                    all_changes.push(change);
+                }
+            }
+            Err(e) => {
+                println!(
+                    "⚠️  Could not load git changes for {}: {}",
+                    repo.local_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    println!("📝 Git changes: {} files modified", all_changes.len());
+    GitChangeSnapshot {
+        changes: all_changes,
+        captured_at: Some(std::time::Instant::now()),
+    }
+}
+
+fn absolutize_snapshot_paths(
+    repo_root: &Path,
+    mut snapshot: vibe_graph_core::GitChangeSnapshot,
+) -> vibe_graph_core::GitChangeSnapshot {
+    for change in &mut snapshot.changes {
+        change.path = repo_root.join(&change.path);
+    }
+    snapshot
 }

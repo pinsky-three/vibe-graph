@@ -87,11 +87,14 @@ impl VibeGraphApp {
             if let Some(node) = petgraph.node_weight(node_idx) {
                 labels.insert(new_idx, node.name.clone());
 
-                // Store the relative path for git change lookup
-                if let Some(rel_path) = node.metadata.get("relative_path") {
-                    node_paths.insert(new_idx, PathBuf::from(rel_path));
-                } else if let Some(path) = node.metadata.get("path") {
+                // Store path for git change lookup.
+                //
+                // Why: In multi-repo workspaces, repo-relative paths can collide across repos.
+                // Absolute paths disambiguate and match the server's git snapshot (absolute).
+                if let Some(path) = node.metadata.get("path") {
                     node_paths.insert(new_idx, PathBuf::from(path));
+                } else if let Some(rel_path) = node.metadata.get("relative_path") {
+                    node_paths.insert(new_idx, PathBuf::from(rel_path));
                 }
             }
         }

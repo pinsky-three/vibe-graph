@@ -8,7 +8,7 @@
  * 4. Connects WebSocket for real-time updates
  */
 
-import { fetchGraph } from "./api/client";
+import { fetchGitChanges, fetchGraph } from "./api/client";
 import type { WsServerMessage } from "./api/types";
 import { connectWebSocket } from "./api/websocket";
 
@@ -85,14 +85,19 @@ async function main(): Promise<void> {
       `[API] Loaded graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`
     );
 
-    // 2. Set on window for WASM to pick up
-    window.VIBE_GRAPH_DATA = JSON.stringify(graph);
+    // 2. Fetch git changes
+    const gitChanges = await fetchGitChanges();
+    console.log(`[API] Loaded git changes: ${gitChanges.changes.length} files`);
 
-    // 3. Signal that data is ready for WASM initialization
+    // 3. Set on window for WASM to pick up
+    window.VIBE_GRAPH_DATA = JSON.stringify(graph);
+    window.VIBE_GIT_CHANGES = JSON.stringify(gitChanges);
+
+    // 4. Signal that data is ready for WASM initialization
     updateLoadingText("Loading visualization...");
     window.dispatchEvent(new CustomEvent("vibe-graph-ready"));
 
-    // 4. Connect WebSocket for real-time updates
+    // 5. Connect WebSocket for real-time updates
     connectWebSocket(handleWsMessage, {
       onOpen: () => console.log("[Main] WebSocket connected"),
       onClose: () => console.log("[Main] WebSocket disconnected"),
