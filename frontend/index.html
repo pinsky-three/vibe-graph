@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibe Graph Visualization</title>
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <div class="loading" id="loading">
+      <div class="loading-spinner"></div>
+      <span>Loading Vibe Graph...</span>
+    </div>
+    <canvas id="vibe-graph-canvas"></canvas>
+
+    <!-- Main TypeScript entry point -->
+    <script type="module" src="/src/main.ts"></script>
+
+    <!-- WASM initialization (uses dynamic script loading to bypass Vite) -->
+    <script>
+      // Wait for main.ts to signal readiness
+      window.addEventListener("vibe-graph-ready", function () {
+        // Dynamically load WASM glue code (bypasses Vite's import analysis)
+        var script = document.createElement("script");
+        script.type = "module";
+        script.textContent = `
+          import init from "/wasm/vibe_graph_viz.js";
+          try {
+            await init("/wasm/vibe_graph_viz_bg.wasm");
+            document.getElementById("loading")?.classList.add("hidden");
+            console.log("[WASM] Visualization initialized");
+          } catch (e) {
+            console.error("[WASM] Failed to load:", e);
+            var loading = document.getElementById("loading");
+            if (loading) {
+              loading.classList.add("error");
+              loading.innerHTML = "<span>Error: " + e.message + "</span>";
+            }
+          }
+        `;
+        document.body.appendChild(script);
+      });
+    </script>
+  </body>
+</html>

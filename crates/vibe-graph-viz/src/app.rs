@@ -167,6 +167,33 @@ impl VibeGraphApp {
         serde_json::from_str(&json_str).ok()
     }
 
+    /// Try to load git changes from window.VIBE_GIT_CHANGES (set by TypeScript).
+    #[cfg(target_arch = "wasm32")]
+    fn try_load_git_changes_from_window(&mut self) {
+        use vibe_graph_core::GitChangeSnapshot;
+
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+
+        // Check if VIBE_GIT_CHANGES exists and has changed
+        let Ok(data) = js_sys::Reflect::get(&window, &"VIBE_GIT_CHANGES".into()) else {
+            return;
+        };
+
+        let Some(json_str) = data.as_string() else {
+            return;
+        };
+
+        // Parse and update if valid
+        if let Ok(snapshot) = serde_json::from_str::<GitChangeSnapshot>(&json_str) {
+            // Only update if changes are different (simple length check)
+            if snapshot.changes.len() != self.git_changes.changes.len() {
+                self.update_git_changes(snapshot);
+            }
+        }
+    }
+
     /// Update git changes from a new snapshot.
     pub fn update_git_changes(&mut self, snapshot: GitChangeSnapshot) {
         self.git_changes = snapshot;
@@ -692,6 +719,10 @@ impl VibeGraphApp {
 impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let mut needs_neighborhood_update = false;
+
+        // Check for git changes from TypeScript layer (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        self.try_load_git_changes_from_window();
 
         // Advance change indicator animation
         let dt = ctx.input(|i| i.stable_dt);

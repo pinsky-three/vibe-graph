@@ -1,20 +1,18 @@
 //! Serve command implementation.
 //!
-//! Serves a WASM-based egui visualization on localhost:3000.
-//! The graph data is embedded in the HTML page and loaded by the WASM module.
+//! Serves the Vibe Graph visualization with a REST + WebSocket API backend.
+//!
+//! ## Architecture
+//!
+//! - `/api/*` - REST and WebSocket endpoints (via vibe-graph-api)
+//! - `/` - Frontend assets (from frontend/dist or embedded fallback)
+//! - `/wasm/*` - WASM visualization assets
 //!
 //! ## Build variants
 //!
-//! - **Default**: D3.js fallback visualization (minimal deps, works offline)
-//! - **embedded-viz feature**: Full egui visualization embedded in binary (~3.5MB larger)
-//!
-//! ```bash
-//! # Minimal build (D3.js fallback)
-//! cargo build --release
-//!
-//! # Full build with embedded WASM visualization
-//! cargo build --release --features embedded-viz
-//! ```
+//! - **Default**: Serves frontend from `frontend/dist/` directory
+//! - **--legacy flag**: Falls back to embedded D3.js visualization
+//! - **embedded-viz feature**: Embeds WASM assets in binary
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -23,13 +21,15 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::{
     extract::State,
-    http::header,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
+use vibe_graph_api::{create_api_router, create_api_state};
 use vibe_graph_core::SourceCodeGraph;
 
 use crate::commands::graph;
@@ -42,10 +42,13 @@ static EMBEDDED_WASM: &[u8] = include_bytes!("../../assets/vibe_graph_viz_bg.was
 #[cfg(feature = "embedded-viz")]
 static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_viz.js");
 
-/// Application state shared across handlers.
-struct AppState {
+/// Application state for legacy static asset serving.
+struct StaticState {
+    /// Graph JSON for legacy mode.
     graph_json: String,
+    /// WASM bytes for embedded mode.
     wasm_bytes: Option<Vec<u8>>,
+    /// JS glue bytes for embedded mode.
     js_bytes: Option<Vec<u8>>,
 }
 
@@ -59,7 +62,7 @@ pub async fn execute(
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
-    // Load or build the graph (uses cached .self/graph.json if available)
+    // Load or build the graph
     let graph = if store.exists() {
         println!("📊 Loading graph...");
         graph::execute_or_load(config, &path)?
@@ -74,19 +77,20 @@ pub async fn execute(
         graph.edge_count()
     );
 
-    // Serialize graph to JSON
+    // Create API state
+    let api_state = create_api_state(graph.clone());
+
+    // Serialize graph to JSON for legacy mode
     let graph_json = serde_json::to_string(&graph).context("Failed to serialize graph")?;
 
-    // Load WASM artifacts with priority:
-    // 1. --wasm-dir flag (explicit override)
-    // 2. Embedded assets (if compiled with embedded-viz feature)
-    // 3. None (fallback to D3.js)
-    let (wasm_bytes, js_bytes) = load_wasm_assets(wasm_dir);
+    // Detect frontend dist directory
+    let frontend_dist = detect_frontend_dist(&path);
 
-    // Determine visualization mode before moving into state
+    // Load WASM artifacts for embedded/legacy mode
+    let (wasm_bytes, js_bytes) = load_wasm_assets(wasm_dir);
     let has_wasm = wasm_bytes.is_some();
 
-    let state = Arc::new(AppState {
+    let static_state = Arc::new(StaticState {
         graph_json,
         wasm_bytes,
         js_bytes,
@@ -98,13 +102,41 @@ pub async fn execute(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
-        .route("/", get(index_handler))
-        .route("/graph.json", get(graph_json_handler))
+    // Create API router (mounted at /api)
+    let api_router = create_api_router(api_state);
+
+    // Create WASM routes at /wasm/* (always available for Vite proxy)
+    let wasm_router = Router::new()
         .route("/vibe_graph_viz_bg.wasm", get(wasm_handler))
         .route("/vibe_graph_viz.js", get(js_handler))
-        .layer(cors)
-        .with_state(state);
+        .with_state(static_state.clone());
+
+    // Build main router based on whether frontend is available
+    let app = if let Some(dist_path) = &frontend_dist {
+        println!("📁 Serving frontend from: {}", dist_path.display());
+        Router::new()
+            .nest("/api", api_router)
+            .nest("/wasm", wasm_router)
+            .fallback_service(ServeDir::new(dist_path).append_index_html_on_directories(true))
+            .layer(cors)
+    } else {
+        // Fallback to legacy embedded mode
+        println!("💡 No frontend/dist found, using legacy embedded mode");
+
+        // Legacy routes with their own state (root-level WASM for backward compat)
+        let legacy_router = Router::new()
+            .route("/", get(index_handler))
+            .route("/graph.json", get(graph_json_handler))
+            .route("/vibe_graph_viz_bg.wasm", get(wasm_handler))
+            .route("/vibe_graph_viz.js", get(js_handler))
+            .with_state(static_state);
+
+        Router::new()
+            .nest("/api", api_router)
+            .nest("/wasm", wasm_router) // Also serve at /wasm/* for Vite dev proxy
+            .merge(legacy_router)
+            .layer(cors)
+    };
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
@@ -112,13 +144,19 @@ pub async fn execute(
     println!();
     println!("🚀 Vibe Graph Server");
     println!("   URL: http://localhost:{}", port);
+    println!("   API: http://localhost:{}/api/health", port);
 
-    let viz_mode = if has_wasm {
-        "egui (WASM)"
+    if frontend_dist.is_some() {
+        println!("   Mode: Frontend + API");
     } else {
-        "D3.js (fallback)"
-    };
-    println!("   Visualization: {}", viz_mode);
+        let viz_mode = if has_wasm {
+            "egui (WASM)"
+        } else {
+            "D3.js (fallback)"
+        };
+        println!("   Mode: Legacy ({})", viz_mode);
+    }
+
     println!();
     println!("   Press Ctrl+C to stop");
     println!();
@@ -127,6 +165,25 @@ pub async fn execute(
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Detect frontend dist directory.
+fn detect_frontend_dist(project_path: &Path) -> Option<PathBuf> {
+    // Try relative to project path
+    let candidates = [
+        project_path.join("frontend/dist"),
+        // Try relative to executable
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("frontend/dist")))
+            .unwrap_or_default(),
+        // Try current directory
+        PathBuf::from("frontend/dist"),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("index.html").exists())
 }
 
 /// Load WASM assets with priority:
@@ -155,36 +212,37 @@ fn load_wasm_assets(wasm_dir: Option<PathBuf>) -> (Option<Vec<u8>>, Option<Vec<u
         (Some(EMBEDDED_WASM.to_vec()), Some(EMBEDDED_JS.to_vec()))
     }
 
-    // Priority 3: No WASM available, will use D3.js fallback
+    // Priority 3: No WASM available
     #[cfg(not(feature = "embedded-viz"))]
     {
-        println!("💡 Using D3.js fallback (build with --features embedded-viz for egui)");
         (None, None)
     }
 }
 
-/// Handler for the index page.
-async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
+// =============================================================================
+// Legacy Mode Handlers (when frontend/dist is not available)
+// =============================================================================
+
+/// Handler for the index page (legacy mode).
+async fn index_handler(State(state): State<Arc<StaticState>>) -> Html<String> {
     let html = if state.wasm_bytes.is_some() {
-        // Full WASM app
         generate_wasm_html(&state.graph_json)
     } else {
-        // Fallback to JSON viewer
         generate_fallback_html(&state.graph_json)
     };
     Html(html)
 }
 
-/// Handler for graph.json endpoint.
-async fn graph_json_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+/// Handler for graph.json endpoint (legacy mode).
+async fn graph_json_handler(State(state): State<Arc<StaticState>>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
         state.graph_json.clone(),
     )
 }
 
-/// Handler for WASM binary.
-async fn wasm_handler(State(state): State<Arc<AppState>>) -> Response {
+/// Handler for WASM binary (legacy mode).
+async fn wasm_handler(State(state): State<Arc<StaticState>>) -> Response {
     match &state.wasm_bytes {
         Some(bytes) => (
             [(header::CONTENT_TYPE, "application/wasm")],
@@ -192,26 +250,26 @@ async fn wasm_handler(State(state): State<Arc<AppState>>) -> Response {
         )
             .into_response(),
         None => (
-            axum::http::StatusCode::NOT_FOUND,
+            StatusCode::NOT_FOUND,
             "WASM not available. Build with: cd crates/vibe-graph-viz && wasm-pack build --target web",
         )
             .into_response(),
     }
 }
 
-/// Handler for JS glue code.
-async fn js_handler(State(state): State<Arc<AppState>>) -> Response {
+/// Handler for JS glue code (legacy mode).
+async fn js_handler(State(state): State<Arc<StaticState>>) -> Response {
     match &state.js_bytes {
         Some(bytes) => (
             [(header::CONTENT_TYPE, "application/javascript")],
             bytes.clone(),
         )
             .into_response(),
-        None => (axum::http::StatusCode::NOT_FOUND, "JS glue not available").into_response(),
+        None => (StatusCode::NOT_FOUND, "JS glue not available").into_response(),
     }
 }
 
-/// Generate HTML page with WASM app.
+/// Generate HTML page with WASM app (legacy mode).
 fn generate_wasm_html(graph_json: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -273,9 +331,8 @@ fn generate_wasm_html(graph_json: &str) -> String {
     )
 }
 
-/// Generate fallback HTML with D3.js visualization (no WASM).
+/// Generate fallback HTML with D3.js visualization (legacy mode).
 fn generate_fallback_html(graph_json: &str) -> String {
-    // Use include_str or build the HTML without format! to avoid escaping issues
     let template = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -405,18 +462,10 @@ fn generate_fallback_html(graph_json: &str) -> String {
             </div>
 
             <div id="note">
-                <strong>💡 Tip:</strong> For the full interactive egui experience, either:
-                <br><br>
-                <strong>Option 1:</strong> Build CLI with embedded visualization:
+                <strong>💡 Tip:</strong> Build the frontend for the full experience:
                 <code style="display: block; margin-top: 8px; background: #1a1a2e; padding: 8px; border-radius: 4px;">
-                    cargo build --release --features embedded-viz
+                    cd frontend && pnpm build
                 </code>
-                <br>
-                <strong>Option 2:</strong> Build WASM separately:
-                <code style="display: block; margin-top: 8px; background: #1a1a2e; padding: 8px; border-radius: 4px;">
-                    cd crates/vibe-graph-viz && wasm-pack build --target web
-                </code>
-                Then: <code>vg serve --wasm-dir crates/vibe-graph-viz/pkg</code>
             </div>
         </div>
     </div>
