@@ -105,10 +105,14 @@ serve-prod: ## Serve production build
 # =============================================================================
 
 release: ## Release version bump
-	cargo release patch -p vibe-graph-cli --execute
+	@echo "Publishing workspace crates (dependency order)..."
+	cargo publish -p vibe-graph-core
+	cargo publish -p vibe-graph-git
+	cargo publish -p vibe-graph-api
+	cargo publish -p vibe-graph-cli
 
 publish: ## Publish to crates.io
-	cargo publish -p vibe-graph-cli
+	$(MAKE) release
 
 # =============================================================================
 # Cleanup
