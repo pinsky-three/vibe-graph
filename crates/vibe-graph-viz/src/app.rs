@@ -49,6 +49,12 @@ pub struct VibeGraphApp {
     node_paths: HashMap<NodeIndex, PathBuf>,
     /// Current git change snapshot
     git_changes: GitChangeSnapshot,
+    /// Last raw JSON seen for git changes.
+    ///
+    /// Why: `GitChangeSnapshot` doesn't include a stable version field. When polling
+    /// updates from JS, the number of changes can stay constant while contents change.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    last_git_changes_raw: Option<String>,
     /// Animation state for change indicators
     change_anim: ChangeIndicatorState,
     /// Set of node indices with changes (cached for fast lookup)
@@ -145,6 +151,7 @@ impl VibeGraphApp {
             selection: SelectionState::default(),
             node_paths,
             git_changes: GitChangeSnapshot::default(),
+            last_git_changes_raw: None,
             change_anim: ChangeIndicatorState::default(),
             changed_nodes: HashMap::new(),
         }
@@ -188,12 +195,18 @@ impl VibeGraphApp {
             return;
         };
 
+        if self
+            .last_git_changes_raw
+            .as_deref()
+            .is_some_and(|prev| prev == json_str)
+        {
+            return;
+        }
+
         // Parse and update if valid
         if let Ok(snapshot) = serde_json::from_str::<GitChangeSnapshot>(&json_str) {
-            // Only update if changes are different (simple length check)
-            if snapshot.changes.len() != self.git_changes.changes.len() {
-                self.update_git_changes(snapshot);
-            }
+            self.last_git_changes_raw = Some(json_str);
+            self.update_git_changes(snapshot);
         }
     }
 
