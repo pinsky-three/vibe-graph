@@ -207,6 +207,13 @@ impl VibeGraphApp {
         if let Ok(snapshot) = serde_json::from_str::<GitChangeSnapshot>(&json_str) {
             self.last_git_changes_raw = Some(json_str);
             self.update_git_changes(snapshot);
+            web_sys::console::log_1(
+                &format!(
+                    "[viz] git changes updated: {}",
+                    self.git_changes.changes.len()
+                )
+                .into(),
+            );
         }
     }
 
