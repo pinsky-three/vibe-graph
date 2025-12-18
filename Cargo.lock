@@ -5077,6 +5077,7 @@ dependencies = [
  "tracing-subscriber",
  "vibe-graph-api",
  "vibe-graph-core",
+ "vibe-graph-git",
  "walkdir",
 ]
 

@@ -9,6 +9,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::EnvFilter;
 
 mod commands;
 mod config;
@@ -259,8 +260,18 @@ async fn main() -> Result<()> {
         Level::WARN // Default to less noise
     };
 
+    // Prefer RUST_LOG if set; otherwise fall back to CLI verbosity.
+    //
+    // Examples:
+    // - RUST_LOG=info vg serve
+    // - RUST_LOG=tower_http=info,vibe_graph_api=info vg serve
+    let filter = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse::<EnvFilter>().ok())
+        .unwrap_or_else(|| EnvFilter::default().add_directive(level.into()));
+
     tracing_subscriber::fmt()
-        .with_max_level(level)
+        .with_env_filter(filter)
         .with_span_events(FmtSpan::CLOSE)
         .with_target(false)
         .init();

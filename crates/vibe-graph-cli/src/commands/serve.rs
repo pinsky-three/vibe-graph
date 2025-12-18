@@ -27,8 +27,11 @@ use axum::{
     Router,
 };
 use tokio::net::TcpListener;
+use tokio::time::{interval, Duration};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
+use tracing::{info, warn};
+use vibe_graph_api::WsServerMessage;
 use vibe_graph_api::{create_api_router, create_api_state_with_changes};
 use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_git::get_git_changes;
@@ -117,7 +120,12 @@ pub async fn execute(
         .allow_headers(Any);
 
     // Create API router (mounted at /api)
-    let api_router = create_api_router(api_state);
+    let api_router = create_api_router(api_state.clone());
+
+    // Background git poller: keeps /api/git/changes fresh and pushes WS updates.
+    //
+    // Why: `vg serve` should reflect live git status without a restart.
+    spawn_git_poller(api_state.clone(), path.clone());
 
     // Create WASM routes at /wasm/* (always available for Vite proxy)
     let wasm_router = Router::new()
@@ -198,6 +206,43 @@ fn detect_frontend_dist(project_path: &Path) -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|candidate| candidate.join("index.html").exists())
+}
+
+fn spawn_git_poller(api_state: Arc<vibe_graph_api::ApiState>, serve_path: PathBuf) {
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(1));
+        let mut last_json: Option<String> = None;
+
+        loop {
+            ticker.tick().await;
+
+            // Recompute changes (workspace-aware via `.self` when available).
+            let store = Store::new(&serve_path);
+            let snapshot = load_git_changes_silent(&store, &serve_path);
+            let json = match serde_json::to_string(&snapshot) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("git_poller: failed to serialize snapshot: {}", e);
+                    continue;
+                }
+            };
+
+            if last_json.as_deref() == Some(json.as_str()) {
+                continue;
+            }
+            last_json = Some(json);
+
+            {
+                let mut guard = api_state.git_changes.write().await;
+                *guard = snapshot.clone();
+            }
+
+            let _ = api_state.tx.send(WsServerMessage::GitChanges {
+                data: snapshot.clone(),
+            });
+            info!(changes = snapshot.changes.len(), "git_changes_updated");
+        }
+    });
 }
 
 /// Load WASM assets with priority:
@@ -333,6 +378,25 @@ fn generate_wasm_html(graph_json: &str, git_changes_json: &str) -> String {
             try {{
                 await init();
                 document.getElementById('loading').style.display = 'none';
+
+                // Keep git changes fresh by polling the API.
+                // Why: `vg serve` should work standalone without the Vite frontend.
+                async function refreshGitChanges() {{
+                    try {{
+                        const res = await fetch('/api/git/changes', {{ cache: 'no-store' }});
+                        if (!res.ok) return;
+                        const payload = await res.json();
+                        if (payload && payload.data) {{
+                            window.VIBE_GIT_CHANGES = JSON.stringify(payload.data);
+                            if (payload.data && Array.isArray(payload.data.changes)) {{
+                                console.debug('[vg serve] /api/git/changes', payload.data.changes.length);
+                            }}
+                        }}
+                    }} catch (_) {{}}
+                }}
+
+                refreshGitChanges();
+                setInterval(refreshGitChanges, 1000);
             }} catch (e) {{
                 document.getElementById('loading').textContent = 'Error: ' + e.message;
                 console.error(e);
@@ -736,6 +800,21 @@ fn load_git_changes(store: &Store, path: &Path) -> vibe_graph_core::GitChangeSna
     }
 }
 
+fn load_git_changes_silent(store: &Store, path: &Path) -> vibe_graph_core::GitChangeSnapshot {
+    // Use `.self` project metadata when available (multi-repo workspaces).
+    if store.exists() {
+        if let Ok(Some(project)) = store.load() {
+            return git_changes_from_project_silent(&project);
+        }
+    }
+
+    // Fallback: single-repo status check at `path`.
+    match get_git_changes(path) {
+        Ok(changes) => absolutize_snapshot_paths(path, changes),
+        Err(_) => vibe_graph_core::GitChangeSnapshot::default(),
+    }
+}
+
 fn git_changes_from_project(project: &Project) -> vibe_graph_core::GitChangeSnapshot {
     use vibe_graph_core::{GitChangeSnapshot, GitFileChange};
 
@@ -760,6 +839,26 @@ fn git_changes_from_project(project: &Project) -> vibe_graph_core::GitChangeSnap
     }
 
     println!("📝 Git changes: {} files modified", all_changes.len());
+    GitChangeSnapshot {
+        changes: all_changes,
+        captured_at: Some(std::time::Instant::now()),
+    }
+}
+
+fn git_changes_from_project_silent(project: &Project) -> vibe_graph_core::GitChangeSnapshot {
+    use vibe_graph_core::{GitChangeSnapshot, GitFileChange};
+
+    let mut all_changes: Vec<GitFileChange> = Vec::new();
+
+    for repo in &project.repositories {
+        if let Ok(snapshot) = get_git_changes(&repo.local_path) {
+            for mut change in snapshot.changes {
+                change.path = repo.local_path.join(&change.path);
+                all_changes.push(change);
+            }
+        }
+    }
+
     GitChangeSnapshot {
         changes: all_changes,
         captured_at: Some(std::time::Instant::now()),
