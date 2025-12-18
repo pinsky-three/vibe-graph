@@ -11,7 +11,7 @@ homepage = "https://github.com/pinsky-three/vibe-graph"
 release = false
 
 [dependencies]
-vibe-graph-core = { version = "0.1.1", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.1.2", path = "../vibe-graph-core" }
 axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true }
 serde = { workspace = true }

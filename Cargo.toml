@@ -42,4 +42,4 @@ egui = "0.33.3"
 egui_graphs = "0.29.0"
 axum = "0.8.7"
 tower = "0.5.2"
-tower-http = { version = "0.6.8", features = ["fs", "cors"] }
+tower-http = { version = "0.6.8", features = ["fs", "cors", "trace"] }
