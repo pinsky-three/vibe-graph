@@ -226,3 +226,171 @@ pub fn draw_sidebar_toggle(ui: &mut egui::Ui, show_sidebar: &mut bool) {
             }
         });
 }
+
+/// Item in the selection panel (for sorting and display).
+#[derive(Debug, Clone)]
+pub struct SelectionItem {
+    /// Display label (node name).
+    pub label: String,
+    /// Relative path (if available).
+    pub relative_path: Option<String>,
+    /// Node kind (File, Directory, Module, etc.).
+    pub kind: Option<String>,
+}
+
+impl SelectionItem {
+    /// Get the sortable key based on settings.
+    pub fn sort_key(&self, by_relative_path: bool) -> &str {
+        if by_relative_path {
+            self.relative_path.as_deref().unwrap_or(&self.label)
+        } else {
+            &self.label
+        }
+    }
+}
+
+/// Draw the floating selection panel showing selected files/directories.
+///
+/// Returns `true` if the panel was closed by the user.
+pub fn draw_selection_panel(
+    ctx: &egui::Context,
+    visible: &mut bool,
+    sort_by_relative_path: &mut bool,
+    items: &[SelectionItem],
+    dark_mode: bool,
+) -> bool {
+    if !*visible || items.is_empty() {
+        return false;
+    }
+
+    let mut closed = false;
+
+    // Sort items
+    let mut sorted_items: Vec<_> = items.iter().collect();
+    sorted_items.sort_by(|a, b| {
+        let key_a = a.sort_key(*sort_by_relative_path);
+        let key_b = b.sort_key(*sort_by_relative_path);
+        key_a.cmp(key_b)
+    });
+
+    egui::Window::new("📁 Selection")
+        .id(egui::Id::new("selection_floating_panel"))
+        .default_pos(egui::pos2(10.0, 60.0))
+        .default_width(320.0)
+        .default_height(250.0)
+        .resizable(true)
+        .collapsible(true)
+        .title_bar(true)
+        .show(ctx, |ui| {
+            // Header with count and close button
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} selected", items.len()))
+                        .strong()
+                        .color(if dark_mode {
+                            egui::Color32::from_rgb(100, 200, 255)
+                        } else {
+                            egui::Color32::from_rgb(50, 100, 200)
+                        }),
+                );
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("✕")
+                        .on_hover_text("Close panel (S)")
+                        .clicked()
+                    {
+                        *visible = false;
+                        closed = true;
+                    }
+                });
+            });
+
+            ui.separator();
+
+            // Sort options
+            ui.horizontal(|ui| {
+                ui.checkbox(sort_by_relative_path, "Sort by relative path")
+                    .on_hover_text("Order items by their relative file path for easier scanning");
+            });
+
+            ui.separator();
+
+            // Scrollable list
+            egui::ScrollArea::vertical()
+                .max_height(180.0)
+                .show(ui, |ui| {
+                    for item in &sorted_items {
+                        ui.horizontal(|ui| {
+                            // Kind indicator icon
+                            let icon = match item.kind.as_deref() {
+                                Some("Directory") => "📁",
+                                Some("File") => "📄",
+                                Some("Module") => "📦",
+                                Some("Service") => "⚙️",
+                                Some("Test") => "🧪",
+                                _ => "•",
+                            };
+                            ui.label(icon);
+
+                            // Main content: relative path or label
+                            let display_text = if *sort_by_relative_path {
+                                item.relative_path.as_deref().unwrap_or(&item.label)
+                            } else {
+                                &item.label
+                            };
+
+                            let text_color = if dark_mode {
+                                egui::Color32::LIGHT_GRAY
+                            } else {
+                                egui::Color32::DARK_GRAY
+                            };
+
+                            let response = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(display_text)
+                                        .color(text_color)
+                                        .family(egui::FontFamily::Monospace),
+                                )
+                                .truncate(),
+                            );
+
+                            // Tooltip with full info
+                            if let Some(ref rel_path) = item.relative_path {
+                                response.on_hover_ui(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&item.label)
+                                            .strong()
+                                            .color(egui::Color32::WHITE),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(rel_path)
+                                            .family(egui::FontFamily::Monospace)
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                    if let Some(ref kind) = item.kind {
+                                        ui.label(
+                                            egui::RichText::new(format!("Type: {}", kind))
+                                                .small()
+                                                .color(egui::Color32::DARK_GRAY),
+                                        );
+                                    }
+                                });
+                            }
+                        });
+                    }
+                });
+
+            // Footer with keyboard hint
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Press S to toggle • Drag to move")
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
+            });
+        });
+
+    closed
+}

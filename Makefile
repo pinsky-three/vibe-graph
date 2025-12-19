@@ -1,5 +1,7 @@
-.PHONY: dev dev-api dev-frontend build build-wasm build-frontend build-full \
-        release publish serve clean check test lint fmt help
+.PHONY: dev dev-api dev-frontend dev-all ui-dev \
+        build build-wasm build-frontend build-full \
+        bump-auto release release-auto publish \
+        serve clean check test lint fmt help
 
 # Default target
 .DEFAULT_GOAL := help
@@ -28,6 +30,9 @@ dev-all: ## Start both servers using tmux
 	tmux new-session -d -s vibe 'make dev-api' \; \
 		split-window -h 'make dev-frontend' \; \
 		attach
+
+ui-dev: ## Run native egui app (vibe-graph-viz example runner)
+	cargo run -p vibe-graph-viz --example native --features native
 
 # =============================================================================
 # Building

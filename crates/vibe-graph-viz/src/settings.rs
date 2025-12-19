@@ -52,6 +52,30 @@ impl Default for SettingsStyle {
     }
 }
 
+/// State for the floating selection panel.
+#[derive(Debug, Clone)]
+pub struct SelectionPanelState {
+    /// Whether the floating panel is visible.
+    #[allow(dead_code)]
+    pub visible: bool,
+    /// Sort by relative path instead of node name.
+    #[allow(dead_code)]
+    pub sort_by_relative_path: bool,
+    /// Panel position (if user dragged it).
+    #[allow(dead_code)]
+    pub position: Option<egui::Pos2>,
+}
+
+impl Default for SelectionPanelState {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            sort_by_relative_path: true,
+            position: None,
+        }
+    }
+}
+
 /// Navigation & viewport parameters.
 #[derive(Debug, Clone)]
 pub struct SettingsNavigation {

@@ -18,8 +18,12 @@ use crate::selection::{
     apply_neighborhood_depth, select_nodes_in_lasso, sync_selection_from_graph, LassoState,
     SelectionState,
 };
-use crate::settings::{SettingsInteraction, SettingsNavigation, SettingsStyle};
-use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
+use crate::settings::{
+    SelectionPanelState, SettingsInteraction, SettingsNavigation, SettingsStyle,
+};
+use crate::ui::{
+    draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle,
+};
 
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
@@ -45,8 +49,14 @@ pub struct VibeGraphApp {
     lasso: LassoState,
     /// Selection expansion state
     selection: SelectionState,
+    /// Floating selection panel state
+    #[allow(dead_code)]
+    selection_panel: SelectionPanelState,
     /// Mapping from node index to file path (for git change lookup)
     node_paths: HashMap<NodeIndex, PathBuf>,
+    /// Node kind metadata (File, Directory, Module, etc.)
+    #[allow(dead_code)]
+    node_kinds: HashMap<NodeIndex, String>,
     /// Current git change snapshot
     git_changes: GitChangeSnapshot,
     /// Last raw JSON seen for git changes.
@@ -84,6 +94,7 @@ impl VibeGraphApp {
         let mut petgraph_to_egui = HashMap::new();
         let mut labels = HashMap::new();
         let mut node_paths = HashMap::new();
+        let mut node_kinds = HashMap::new();
 
         // Copy nodes and track paths
         for node_idx in petgraph.node_indices() {
@@ -92,6 +103,9 @@ impl VibeGraphApp {
 
             if let Some(node) = petgraph.node_weight(node_idx) {
                 labels.insert(new_idx, node.name.clone());
+
+                // Store node kind for display in selection panel
+                node_kinds.insert(new_idx, format!("{:?}", node.kind));
 
                 // Store path for git change lookup.
                 //
@@ -149,7 +163,9 @@ impl VibeGraphApp {
             graph_metadata: source_graph.metadata,
             lasso: LassoState::default(),
             selection: SelectionState::default(),
+            selection_panel: SelectionPanelState::default(),
             node_paths,
+            node_kinds,
             git_changes: GitChangeSnapshot::default(),
             last_git_changes_raw: None,
             change_anim: ChangeIndicatorState::default(),
