@@ -21,9 +21,7 @@ use crate::selection::{
 use crate::settings::{
     SelectionPanelState, SettingsInteraction, SettingsNavigation, SettingsStyle,
 };
-use crate::ui::{
-    draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle,
-};
+use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
 
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;

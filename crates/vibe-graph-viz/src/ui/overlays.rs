@@ -229,7 +229,7 @@ pub fn draw_sidebar_toggle(ui: &mut egui::Ui, show_sidebar: &mut bool) {
 
 /// Item in the selection panel (for sorting and display).
 #[derive(Debug, Clone)]
-pub struct SelectionItem {
+pub struct _SelectionItem {
     /// Display label (node name).
     pub label: String,
     /// Relative path (if available).
@@ -238,9 +238,9 @@ pub struct SelectionItem {
     pub kind: Option<String>,
 }
 
-impl SelectionItem {
+impl _SelectionItem {
     /// Get the sortable key based on settings.
-    pub fn sort_key(&self, by_relative_path: bool) -> &str {
+    pub fn _sort_key(&self, by_relative_path: bool) -> &str {
         if by_relative_path {
             self.relative_path.as_deref().unwrap_or(&self.label)
         } else {
@@ -252,11 +252,11 @@ impl SelectionItem {
 /// Draw the floating selection panel showing selected files/directories.
 ///
 /// Returns `true` if the panel was closed by the user.
-pub fn draw_selection_panel(
+pub fn _draw_selection_panel(
     ctx: &egui::Context,
     visible: &mut bool,
     sort_by_relative_path: &mut bool,
-    items: &[SelectionItem],
+    items: &[_SelectionItem],
     dark_mode: bool,
 ) -> bool {
     if !*visible || items.is_empty() {
@@ -268,8 +268,8 @@ pub fn draw_selection_panel(
     // Sort items
     let mut sorted_items: Vec<_> = items.iter().collect();
     sorted_items.sort_by(|a, b| {
-        let key_a = a.sort_key(*sort_by_relative_path);
-        let key_b = b.sort_key(*sort_by_relative_path);
+        let key_a = a._sort_key(*sort_by_relative_path);
+        let key_b = b._sort_key(*sort_by_relative_path);
         key_a.cmp(key_b)
     });
 
