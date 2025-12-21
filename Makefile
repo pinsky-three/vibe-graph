@@ -41,11 +41,16 @@ ui-dev: ## Run native egui app (vibe-graph-viz example runner)
 check: ## Check all crates compile
 	cargo check --workspace
 
-build-wasm: ## Build WASM to frontend/public/wasm/
+build-wasm: ## Build WASM to frontend/public/wasm/ and update embedded assets
 	@command -v wasm-pack >/dev/null 2>&1 || { echo "Installing wasm-pack..."; cargo install wasm-pack; }
 	@echo "📦 Building WASM..."
 	cd crates/vibe-graph-viz && wasm-pack build --target web --release --out-dir ../../frontend/public/wasm
 	@echo "✅ WASM built to frontend/public/wasm/"
+	@echo "📦 Updating embedded assets..."
+	@mkdir -p crates/vibe-graph-cli/assets
+	@cp frontend/public/wasm/vibe_graph_viz_bg.wasm crates/vibe-graph-cli/assets/
+	@cp frontend/public/wasm/vibe_graph_viz.js crates/vibe-graph-cli/assets/
+	@echo "✅ Embedded assets updated"
 
 build-frontend: build-wasm ## Build frontend (TS + WASM)
 	@echo "📦 Building frontend..."
