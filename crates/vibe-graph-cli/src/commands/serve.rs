@@ -36,7 +36,7 @@ use vibe_graph_api::{create_api_router, create_api_state_with_changes};
 use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_git::get_git_changes;
 
-use crate::commands::graph;
+use crate::commands::{graph, sync};
 use crate::config::Config;
 use crate::project::Project;
 use crate::store::Store;
@@ -69,13 +69,30 @@ pub async fn execute(
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
+    // Auto-sync if .self doesn't exist (first-time setup)
+    if !store.exists() {
+        println!("🔄 First run detected, syncing workspace...");
+        println!();
+
+        let workspace = sync::detect_workspace(&path)?;
+        let project = sync::execute(config, &path, false)?;
+
+        // Detect git remote for single repos
+        let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
+            crate::commands::remote::detect_git_remote(&workspace.root)
+        } else {
+            None
+        };
+
+        store.save(&project, &workspace.kind, detected_remote)?;
+        println!("💾 Saved to {}", store.self_dir().display());
+        println!();
+    }
+
     // Load or build the graph
-    let graph = if store.exists() {
+    let graph = {
         println!("📊 Loading graph...");
         graph::execute_or_load(config, &path)?
-    } else {
-        println!("⚠️  No .self folder found, using sample graph");
-        sample_graph()
     };
 
     println!(
@@ -687,7 +704,8 @@ fn generate_fallback_html(graph_json: &str) -> String {
     template.replace("__GRAPH_JSON__", graph_json)
 }
 
-/// Create a sample graph for demonstration.
+/// Create a sample graph for demonstration (kept for testing/fallback).
+#[allow(dead_code)]
 fn sample_graph() -> SourceCodeGraph {
     use std::collections::HashMap;
     use vibe_graph_core::{EdgeId, GraphEdge, GraphNode, GraphNodeKind, NodeId};

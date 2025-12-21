@@ -48,18 +48,25 @@ struct Cli {
 /// Available CLI commands.
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Sync and analyze the current workspace (default command).
+    /// Sync and analyze a codebase (local or remote).
     ///
-    /// Auto-detects if the path is:
-    /// - A single git repository
-    /// - A directory with multiple git repos (workspace)
-    /// - A plain directory
+    /// Auto-detects the source type:
+    /// - **Local path**: scans a git repo, multi-repo workspace, or directory
+    /// - **GitHub org**: clones all repositories from an organization
+    /// - **GitHub repo**: clones a single repository
+    ///
+    /// Examples:
+    ///   vg sync                        # current directory
+    ///   vg sync ./my-project           # local path
+    ///   vg sync pinsky-three           # GitHub org
+    ///   vg sync pinsky-three/vibe-graph # single GitHub repo
     ///
     /// Results are persisted in a `.self` folder for fast subsequent operations.
     Sync {
-        /// Path to analyze (defaults to current directory).
+        /// Source to sync: local path, GitHub org, or owner/repo.
+        /// Defaults to current directory if not specified.
         #[arg(default_value = ".")]
-        path: PathBuf,
+        source: String,
 
         /// Output composed result to file.
         #[arg(short, long)]
@@ -76,6 +83,18 @@ enum Commands {
         /// Create a timestamped snapshot.
         #[arg(long)]
         snapshot: bool,
+
+        /// Repositories to ignore when syncing an org (can be repeated).
+        #[arg(short, long)]
+        ignore: Vec<String>,
+
+        /// Path to ignore file (one repo name per line).
+        #[arg(long)]
+        ignore_file: Option<PathBuf>,
+
+        /// Clone to global cache directory instead of current directory.
+        #[arg(long)]
+        cache: bool,
     },
 
     /// Load previously synced data from .self folder.
@@ -281,47 +300,82 @@ async fn main() -> Result<()> {
 
     // Default to sync if no command given
     let command = cli.command.unwrap_or(Commands::Sync {
-        path: PathBuf::from("."),
+        source: ".".to_string(),
         output: None,
         format: "md".to_string(),
         no_save: false,
         snapshot: false,
+        ignore: vec![],
+        ignore_file: None,
+        cache: false,
     });
 
     match command {
         Commands::Sync {
-            path,
+            source,
             output,
             format,
             no_save,
             snapshot,
+            ignore,
+            ignore_file,
+            cache,
         } => {
-            let workspace = sync::detect_workspace(&path)?;
-            let store = Store::new(&workspace.root);
+            // Detect the source type (local path vs GitHub org/repo)
+            let sync_source = sync::SyncSource::detect(&source);
 
-            let mut project = sync::execute(&config, &path, cli.verbose)?;
+            let mut project = if sync_source.is_remote() {
+                // Remote sync: clone from GitHub
+                println!("🔗 Source: {}", sync_source);
+                println!();
 
-            // Detect git remote for single repos
-            let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
-                remote::detect_git_remote(&workspace.root)
+                let ignore_list = build_ignore_list(ignore, ignore_file)?;
+                let result =
+                    sync::execute_remote(&config, &sync_source, &ignore_list, cli.verbose, cache)
+                        .await?;
+
+                // Print helpful next step
+                println!();
+                println!("💡 Next steps:");
+                println!("   cd {} && vg serve", result.cloned_path.display());
+
+                result.project
             } else {
-                None
+                // Local sync: scan filesystem
+                let path = match &sync_source {
+                    sync::SyncSource::Local { path } => path.clone(),
+                    _ => PathBuf::from("."),
+                };
+
+                let workspace = sync::detect_workspace(&path)?;
+                let store = Store::new(&workspace.root);
+
+                let project = sync::execute(&config, &path, cli.verbose)?;
+
+                // Detect git remote for single repos
+                let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
+                    remote::detect_git_remote(&workspace.root)
+                } else {
+                    None
+                };
+
+                // Save to .self unless --no-save
+                if !no_save {
+                    store.save(&project, &workspace.kind, detected_remote.clone())?;
+                    println!("💾 Saved to {}", store.self_dir().display());
+
+                    if let Some(ref remote_url) = detected_remote {
+                        println!("🔗 Remote: {}", remote_url);
+                    }
+
+                    if snapshot {
+                        let snapshot_path = store.snapshot(&project)?;
+                        println!("📸 Snapshot: {}", snapshot_path.display());
+                    }
+                }
+
+                project
             };
-
-            // Save to .self unless --no-save
-            if !no_save {
-                store.save(&project, &workspace.kind, detected_remote.clone())?;
-                println!("💾 Saved to {}", store.self_dir().display());
-
-                if let Some(ref remote_url) = detected_remote {
-                    println!("🔗 Remote: {}", remote_url);
-                }
-
-                if snapshot {
-                    let snapshot_path = store.snapshot(&project)?;
-                    println!("📸 Snapshot: {}", snapshot_path.display());
-                }
-            }
 
             // If output specified, compose the result
             if let Some(output_path) = output {
