@@ -197,15 +197,18 @@ impl VibeGraphApp {
         use vibe_graph_core::GitChangeSnapshot;
 
         let Some(window) = web_sys::window() else {
+            web_sys::console::warn_1(&"[viz] no window".into());
             return;
         };
 
         // Check if VIBE_GIT_CHANGES exists and has changed
         let Ok(data) = js_sys::Reflect::get(&window, &"VIBE_GIT_CHANGES".into()) else {
+            web_sys::console::warn_1(&"[viz] no VIBE_GIT_CHANGES".into());
             return;
         };
 
         let Some(json_str) = data.as_string() else {
+            web_sys::console::warn_1(&"[viz] VIBE_GIT_CHANGES not a string".into());
             return;
         };
 
@@ -214,6 +217,7 @@ impl VibeGraphApp {
             .as_deref()
             .is_some_and(|prev| prev == json_str)
         {
+            // Already processed this exact JSON, skip
             return;
         }
 
