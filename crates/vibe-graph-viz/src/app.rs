@@ -218,16 +218,23 @@ impl VibeGraphApp {
         }
 
         // Parse and update if valid
-        if let Ok(snapshot) = serde_json::from_str::<GitChangeSnapshot>(&json_str) {
-            self.last_git_changes_raw = Some(json_str);
-            self.update_git_changes(snapshot);
-            web_sys::console::log_1(
-                &format!(
-                    "[viz] git changes updated: {}",
-                    self.git_changes.changes.len()
-                )
-                .into(),
-            );
+        match serde_json::from_str::<GitChangeSnapshot>(&json_str) {
+            Ok(snapshot) => {
+                self.last_git_changes_raw = Some(json_str);
+                self.update_git_changes(snapshot);
+                web_sys::console::log_1(
+                    &format!(
+                        "[viz] git changes updated: {}",
+                        self.git_changes.changes.len()
+                    )
+                    .into(),
+                );
+            }
+            Err(e) => {
+                web_sys::console::error_1(
+                    &format!("[viz] failed to parse git changes: {}", e).into(),
+                );
+            }
         }
     }
 
@@ -595,6 +602,80 @@ impl VibeGraphApp {
                     // Show nodes with changes
                     let nodes_with_changes = self.changed_nodes.len();
                     ui.label(format!("Nodes affected: {}", nodes_with_changes));
+
+                    // Find orphan changes (files not in graph)
+                    let orphan_changes: Vec<_> = self
+                        .git_changes
+                        .changes
+                        .iter()
+                        .filter(|c| {
+                            !self.node_paths.values().any(|node_path| {
+                                node_path.ends_with(&c.path) || c.path.ends_with(node_path)
+                            })
+                        })
+                        .collect();
+
+                    if !orphan_changes.is_empty() {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "⚠ {} not in graph:",
+                                orphan_changes.len()
+                            ))
+                            .small()
+                            .color(egui::Color32::from_rgb(255, 180, 100)),
+                        );
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for change in orphan_changes.iter().take(10) {
+                                    let color = match change.kind {
+                                        GitChangeKind::Modified => {
+                                            egui::Color32::from_rgb(255, 200, 50)
+                                        }
+                                        GitChangeKind::Added => {
+                                            egui::Color32::from_rgb(100, 255, 100)
+                                        }
+                                        GitChangeKind::Deleted => {
+                                            egui::Color32::from_rgb(255, 100, 100)
+                                        }
+                                        GitChangeKind::Untracked => {
+                                            egui::Color32::from_rgb(150, 150, 150)
+                                        }
+                                        _ => egui::Color32::GRAY,
+                                    };
+                                    let filename = change
+                                        .path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("?");
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "  {} {}",
+                                            change.kind.symbol(),
+                                            filename
+                                        ))
+                                        .small()
+                                        .color(color),
+                                    );
+                                }
+                                if orphan_changes.len() > 10 {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "  ...and {} more",
+                                            orphan_changes.len() - 10
+                                        ))
+                                        .small()
+                                        .color(egui::Color32::GRAY),
+                                    );
+                                }
+                            });
+                        ui.label(
+                            egui::RichText::new("Run 'vg sync && vg graph' to include")
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
 
                     if let Some(age) = self.git_changes.age() {
                         ui.label(
