@@ -114,7 +114,7 @@ serve-prod: ## Serve production build
 # Release
 # =============================================================================
 
-PUBLISH_CRATES ?= vibe-graph-core vibe-graph-git vibe-graph-api vibe-graph-cli
+PUBLISH_CRATES ?= vibe-graph-core vibe-graph-cli
 
 bump-auto: ## Bump patch versions for crates changed since last tag
 	@set -eu; \
