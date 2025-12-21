@@ -42,7 +42,8 @@ export type GitChangeKind =
   | "Added"
   | "Deleted"
   | "RenamedFrom"
-  | "RenamedTo";
+  | "RenamedTo"
+  | "Untracked";
 
 export interface GitFileChange {
   path: string;

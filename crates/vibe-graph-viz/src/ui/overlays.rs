@@ -82,6 +82,13 @@ pub fn change_kind_color(kind: GitChangeKind, dark_mode: bool) -> egui::Color32 
                 egui::Color32::from_rgb(150, 100, 200)
             }
         }
+        GitChangeKind::Untracked => {
+            if dark_mode {
+                egui::Color32::from_rgb(150, 150, 150) // Gray for untracked
+            } else {
+                egui::Color32::from_rgb(120, 120, 120)
+            }
+        }
     }
 }
 

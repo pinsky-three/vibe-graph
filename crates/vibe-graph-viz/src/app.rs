@@ -545,6 +545,7 @@ impl VibeGraphApp {
                 let modified = self.git_changes.count_by_kind(GitChangeKind::Modified);
                 let added = self.git_changes.count_by_kind(GitChangeKind::Added);
                 let deleted = self.git_changes.count_by_kind(GitChangeKind::Deleted);
+                let untracked = self.git_changes.count_by_kind(GitChangeKind::Untracked);
 
                 if total == 0 {
                     ui.label(
@@ -577,6 +578,14 @@ impl VibeGraphApp {
                             ui.label(
                                 egui::RichText::new(format!("● {} Deleted", deleted))
                                     .color(egui::Color32::from_rgb(255, 100, 100)),
+                            );
+                        });
+                    }
+                    if untracked > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("● {} Untracked", untracked))
+                                    .color(egui::Color32::from_rgb(150, 150, 150)),
                             );
                         });
                     }

@@ -116,7 +116,7 @@ pub fn create_sample_graph() -> SourceCodeGraph {
 
 /// Create sample git changes for demonstration.
 ///
-/// Shows different change types: Modified, Added, Deleted.
+/// Shows different change types: Modified, Added, Deleted, Untracked.
 pub fn create_sample_git_changes() -> GitChangeSnapshot {
     GitChangeSnapshot {
         changes: vec![
@@ -133,6 +133,11 @@ pub fn create_sample_git_changes() -> GitChangeSnapshot {
             GitFileChange {
                 path: PathBuf::from("src/utils/config.rs"),
                 kind: GitChangeKind::Added,
+                staged: true,
+            },
+            GitFileChange {
+                path: PathBuf::from("src/utils/new_feature.rs"),
+                kind: GitChangeKind::Untracked,
                 staged: false,
             },
         ],

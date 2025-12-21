@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub enum GitChangeKind {
     /// File was modified (content changed)
     Modified,
-    /// File was newly added (untracked or staged new)
+    /// File was newly added (staged new file)
     Added,
     /// File was deleted
     Deleted,
@@ -24,6 +24,8 @@ pub enum GitChangeKind {
     RenamedFrom,
     /// File was renamed (new path)
     RenamedTo,
+    /// File is untracked (new file not yet staged)
+    Untracked,
 }
 
 impl GitChangeKind {
@@ -35,6 +37,7 @@ impl GitChangeKind {
             GitChangeKind::Deleted => "Deleted",
             GitChangeKind::RenamedFrom => "Renamed (from)",
             GitChangeKind::RenamedTo => "Renamed (to)",
+            GitChangeKind::Untracked => "Untracked",
         }
     }
 
@@ -46,6 +49,7 @@ impl GitChangeKind {
             GitChangeKind::Deleted => "-",
             GitChangeKind::RenamedFrom => "R←",
             GitChangeKind::RenamedTo => "R→",
+            GitChangeKind::Untracked => "?",
         }
     }
 }

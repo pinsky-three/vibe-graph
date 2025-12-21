@@ -199,7 +199,7 @@ impl GitWatcher {
             if status.contains(Status::WT_NEW) {
                 changes.push(GitFileChange {
                     path: path.clone(),
-                    kind: GitChangeKind::Added,
+                    kind: GitChangeKind::Untracked,
                     staged: false,
                 });
             } else if status.contains(Status::WT_MODIFIED) {
@@ -266,7 +266,7 @@ mod tests {
         let snapshot = watcher.force_poll()?;
 
         assert_eq!(snapshot.changes.len(), 1);
-        assert_eq!(snapshot.changes[0].kind, GitChangeKind::Added);
+        assert_eq!(snapshot.changes[0].kind, GitChangeKind::Untracked);
         assert!(!snapshot.changes[0].staged);
         Ok(())
     }
