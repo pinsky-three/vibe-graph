@@ -297,6 +297,12 @@ function getArrayI8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getInt8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
+/**
+ * Start the visualization app in WASM context.
+ */
+export function wasm_main() {
+    wasm.wasm_main();
+}
 
 function takeFromExternrefTable0(idx) {
     const value = wasm.__wbindgen_externrefs.get(idx);
@@ -316,22 +322,15 @@ export function load_graph_json(json) {
     }
 }
 
-/**
- * Start the visualization app in WASM context.
- */
-export function wasm_main() {
-    wasm.wasm_main();
-}
-
-function wasm_bindgen__convert__closures_____invoke__h540e1b079158c7c3(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h540e1b079158c7c3(arg0, arg1, arg2);
-}
-
 function wasm_bindgen__convert__closures_____invoke__h9caac9d2d7e58200(arg0, arg1) {
     const ret = wasm.wasm_bindgen__convert__closures_____invoke__h9caac9d2d7e58200(arg0, arg1);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
+}
+
+function wasm_bindgen__convert__closures_____invoke__h540e1b079158c7c3(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h540e1b079158c7c3(arg0, arg1, arg2);
 }
 
 function wasm_bindgen__convert__closures_____invoke__h3ff59a8275a8e732(arg0, arg1, arg2) {
