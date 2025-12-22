@@ -60,49 +60,69 @@ make build
 | Command | Description |
 |---------|-------------|
 | `vg sync` | Analyze workspace, save to `.self/` |
+| `vg sync <org>` | Clone and analyze entire GitHub org |
+| `vg sync <owner/repo>` | Clone and analyze single GitHub repo |
 | `vg graph` | Build SourceCodeGraph with reference detection |
-| `vg serve` | Interactive graph visualization at localhost:3000 |
+| `vg serve` | Interactive visualization at localhost:3000 |
 | `vg compose` | Generate markdown documentation |
 | `vg status` | Show workspace and cache status |
+| `vg clean` | Remove `.self/` folder |
 | `vg remote show` | Show configured remote (auto-detected for single repos) |
 | `vg remote add <org>` | Set GitHub org as remote for workspaces |
 | `vg remote list` | List repos from configured remote |
 | `vg remote clone` | Clone all repos from configured remote |
+| `vg config show` | Display current configuration |
+
+**Sync Options:**
+- `--cache` — Clone to global cache instead of current directory
+- `--ignore <repo>` — Skip specific repos when syncing an org
+- `--snapshot` — Create timestamped snapshot
 
 Run `vg --help` for full command reference.
 
 ## Graph Visualization
 
-The `serve` command provides an interactive force-directed graph:
+The `serve` command provides an interactive force-directed graph with REST + WebSocket API:
 
 ```bash
 vg sync && vg serve
 ```
 
+**Features:**
+- 🎨 **egui WASM visualization** — Interactive graph explorer with pan/zoom
+- 📡 **Live git status** — Change indicators on modified files (auto-refresh via WebSocket)
+- 🔌 **REST API** — Programmatic access to graph data
+
+### API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/health` | Health check |
+| `GET /api/graph` | Full graph (nodes + edges + metadata) |
+| `GET /api/graph/nodes` | All nodes |
+| `GET /api/graph/edges` | All edges |
+| `GET /api/git/changes` | Current git change snapshot |
+| `WS /api/ws` | WebSocket for live updates |
+
 ### Build Variants
 
-| Build | Command | Binary Size | Visualization |
-|-------|---------|-------------|---------------|
-| Minimal | `make build` | ~8 MB | D3.js (CDN) |
-| Full | `make build-full` | ~11 MB | egui WASM (offline) |
-
-The full build embeds ~3 MB of WASM for complete offline operation.
+| Build | Command | Visualization |
+|-------|---------|---------------|
+| Minimal | `make build` | D3.js fallback |
+| Full | `make build-full` | egui WASM (offline-capable) |
 
 ## Architecture
 
 ```
 vibe-graph/
-├── vibe-graph-core        # Domain model: graphs, nodes, edges, references
-├── vibe-graph-cli         # CLI entry point (vg command)
-├── vibe-graph-viz         # egui/WASM visualization frontend
-├── vibe-graph-ssot        # Structural scanner for SourceCodeGraphs
-├── vibe-graph-semantic    # Semantic/narrative mapping layer
-├── vibe-graph-llmca       # LLM cellular automaton fabric
-├── vibe-graph-constitution# Governance and planning constraints
-├── vibe-graph-sync        # Local-first event log
-├── vibe-graph-materializer# Code change materializer
-├── vibe-graph-git         # Git snapshot fossilization
-└── vibe-graph-engine      # Orchestration layer
+├── crates/
+│   ├── vibe-graph-core        # Domain model: graphs, nodes, edges, references
+│   ├── vibe-graph-cli         # CLI entry point (vg command)
+│   ├── vibe-graph-api         # REST + WebSocket API (Axum-based)
+│   ├── vibe-graph-viz         # egui/WASM visualization
+│   ├── vibe-graph-git         # Git status and fossilization
+│   └── ...                    # Additional crates (ssot, semantic, llmca, etc.)
+└── frontend/                  # TypeScript/Vite host for WASM visualization
 ```
 
 ## The `.self` Folder
@@ -124,22 +144,45 @@ Add `.self/` to your `.gitignore`.
 | Environment Variable | Description |
 |---------------------|-------------|
 | `GITHUB_TOKEN` | GitHub PAT for org commands |
+| `GITHUB_USERNAME` | GitHub username (for authenticated clones) |
 | `VG_MAX_CONTENT_SIZE_KB` | Max file size to include content (default: 50) |
+| `RUST_LOG` | Log level (e.g., `info`, `tower_http=info`) |
+
+Configuration is stored in `~/.config/vibe-graph/config.toml`. Use `vg config show` to view.
 
 ## Development
 
 ```bash
-# Check all crates
-make check
+# First-time setup
+make setup
 
-# Build minimal CLI
-make build
+# Development (two terminals)
+make dev-api       # Terminal 1: API server on :3000
+make dev-frontend  # Terminal 2: Vite dev server on :5173
 
-# Build with embedded WASM visualization
-make build-full
+# Or with tmux
+make dev-all
 
-# Run dev server with D3.js fallback
-make serve
+# Run native egui app (for local debugging)
+make ui-dev
+```
+
+### Build Commands
+
+```bash
+make check        # Check all crates compile
+make build        # Build minimal CLI (D3.js fallback)
+make build-wasm   # Build WASM to frontend/public/wasm/
+make build-full   # Full production build (frontend + CLI)
+```
+
+### Quality
+
+```bash
+make test         # Run all tests
+make lint         # Clippy
+make fmt          # Format code
+make ci           # Full CI checks (fmt + lint + test + typecheck)
 ```
 
 ## Status
