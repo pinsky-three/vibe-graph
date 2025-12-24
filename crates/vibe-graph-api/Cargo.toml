@@ -8,7 +8,7 @@ repository = "https://github.com/pinsky-three/vibe-graph"
 homepage = "https://github.com/pinsky-three/vibe-graph"
 
 [dependencies]
-vibe-graph-core = { version = "0.2.0", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.0", path = "../vibe-graph-ops" }
 axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true }
