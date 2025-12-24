@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use eframe::{App, CreationContext};
 use egui::{CollapsingHeader, Context, ScrollArea};
 use egui_graphs::{
-    FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, Graph,
-    GraphView, LayoutForceDirected, MetadataFrame,
+    CenterGravityParams, Extra, FruchtermanReingoldState, FruchtermanReingoldWithCenterGravity,
+    FruchtermanReingoldWithCenterGravityState, Graph, GraphView, LayoutForceDirected,
+    MetadataFrame,
 };
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
@@ -71,6 +72,8 @@ pub struct VibeGraphApp {
     original_node_labels: HashMap<NodeIndex, String>,
     /// Original edge labels (for restoring when toggling visibility)
     original_edge_labels: HashMap<petgraph::stable_graph::EdgeIndex, String>,
+    /// Whether layout has been initialized with custom defaults
+    layout_initialized: bool,
 }
 
 impl VibeGraphApp {
@@ -191,6 +194,7 @@ impl VibeGraphApp {
             changed_nodes: HashMap::new(),
             original_node_labels,
             original_edge_labels,
+            layout_initialized: false,
         }
     }
 
@@ -411,6 +415,44 @@ impl VibeGraphApp {
                 }
             }
         }
+    }
+
+    /// Initialize layout with custom default parameters.
+    /// These values produce a nicely spread, stable graph layout.
+    fn initialize_layout_defaults(&self, ctx: &Context) {
+        use egui_graphs::CenterGravity;
+
+        // Create custom layout state with optimized defaults
+        let custom_state = FruchtermanReingoldWithCenterGravityState {
+            base: FruchtermanReingoldState {
+                is_running: true,
+                dt: 0.021, // Slower, more stable simulation
+                epsilon: 1e-3,
+                damping: 0.30, // Standard damping
+                max_step: 10.0,
+                k_scale: 0.55,   // Larger ideal edge length
+                c_attract: 1.57, // Stronger attraction between connected nodes
+                c_repulse: 0.20, // Weaker repulsion for tighter clusters
+                last_avg_displacement: None,
+                step_count: 0,
+            },
+            extras: (
+                Extra::<CenterGravity, true> {
+                    enabled: true,
+                    params: CenterGravityParams { c: 0.60 }, // Stronger center pull
+                },
+                (),
+            ),
+        };
+
+        // Apply the custom state
+        egui::Area::new(egui::Id::new("layout_init_dummy")).show(ctx, |ui| {
+            egui_graphs::set_layout_state::<FruchtermanReingoldWithCenterGravityState>(
+                ui,
+                custom_state,
+                None,
+            );
+        });
     }
 }
 
@@ -1028,6 +1070,12 @@ impl App for VibeGraphApp {
         // Request continuous repaint for animations
         if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
             ctx.request_repaint();
+        }
+
+        // Initialize layout with custom defaults on first frame
+        if !self.layout_initialized {
+            self.initialize_layout_defaults(ctx);
+            self.layout_initialized = true;
         }
 
         // Handle keyboard shortcuts
