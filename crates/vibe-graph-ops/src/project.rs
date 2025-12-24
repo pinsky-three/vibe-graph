@@ -22,8 +22,10 @@ pub struct Project {
 }
 
 /// Where the project originates from.
+///
+/// Note: Uses default externally tagged serde format for backward compatibility
+/// with existing `.self/project.json` files (e.g., `{"LocalPaths": {...}}`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProjectSource {
     /// A GitHub organization.
     GitHubOrg { organization: String },

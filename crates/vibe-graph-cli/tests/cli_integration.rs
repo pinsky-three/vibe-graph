@@ -631,3 +631,144 @@ fn test_quiet_mode() {
         ".self should be created even in quiet mode"
     );
 }
+
+// =============================================================================
+// Multi-Repo Workspace Tests
+// =============================================================================
+
+#[test]
+fn test_multi_repo_project_json_format() {
+    let temp = TempDir::new().unwrap();
+    let test_dir = temp.path();
+
+    create_multi_repo_workspace(test_dir);
+    run_vg_in_dir(test_dir, &["sync", "."]);
+
+    // Read and parse project.json
+    let project_json = fs::read_to_string(test_dir.join(".self/project.json")).unwrap();
+    let project: serde_json::Value = serde_json::from_str(&project_json).unwrap();
+
+    // Verify source uses externally tagged format for backward compatibility
+    let source = &project["source"];
+    // Should be {"LocalPaths": {...}} not {"type": "local_paths", ...}
+    assert!(
+        source.get("LocalPaths").is_some() || source.get("LocalPath").is_some(),
+        "Source should use externally tagged format for backward compatibility: {:?}",
+        source
+    );
+
+    // Verify repositories have local_path
+    let repos = project["repositories"].as_array().unwrap();
+    for repo in repos {
+        assert!(
+            repo.get("local_path").is_some(),
+            "Each repo should have local_path"
+        );
+    }
+}
+
+#[test]
+fn test_multi_repo_load_after_sync() {
+    let temp = TempDir::new().unwrap();
+    let test_dir = temp.path();
+
+    create_multi_repo_workspace(test_dir);
+
+    // Sync
+    run_vg_in_dir(test_dir, &["sync", "."]);
+
+    // Load should succeed and show both repos
+    let output = run_vg_in_dir(test_dir, &["load", "."]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "vg load should succeed after sync");
+    assert!(stdout.contains("📂 Loaded:"), "Should show loaded message");
+    assert!(
+        stdout.contains("Repos: 2") || stdout.contains("2,"),
+        "Should show 2 repos: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_multi_repo_status_shows_repos() {
+    let temp = TempDir::new().unwrap();
+    let test_dir = temp.path();
+
+    create_multi_repo_workspace(test_dir);
+
+    // Sync
+    run_vg_in_dir(test_dir, &["sync", "."]);
+
+    // Status should show repos list
+    let output = run_vg_in_dir(test_dir, &["status", "."]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "vg status should succeed");
+    assert!(
+        stdout.contains("📦 Repositories:") || stdout.contains("Repos:"),
+        "Should show repositories section"
+    );
+}
+
+#[test]
+fn test_backward_compatible_project_json_load() {
+    // Test that we can load a project.json with the old format
+    let temp = TempDir::new().unwrap();
+    let test_dir = temp.path();
+
+    // Create .self directory manually with old format
+    fs::create_dir_all(test_dir.join(".self")).unwrap();
+
+    // Create a project.json in the OLD format (externally tagged)
+    let old_format_project = serde_json::json!({
+        "name": "test-workspace",
+        "source": {
+            "LocalPaths": {
+                "paths": ["/tmp/repo1", "/tmp/repo2"]
+            }
+        },
+        "repositories": [
+            {
+                "name": "repo1",
+                "url": "/tmp/repo1",
+                "local_path": "/tmp/repo1",
+                "sources": []
+            }
+        ]
+    });
+    fs::write(
+        test_dir.join(".self/project.json"),
+        serde_json::to_string_pretty(&old_format_project).unwrap(),
+    )
+    .unwrap();
+
+    // Create minimal manifest (version is u32, not string)
+    let manifest = serde_json::json!({
+        "version": 1,
+        "name": "test-workspace",
+        "root": test_dir.to_str().unwrap(),
+        "kind": "MultiRepo",
+        "last_sync": {
+            "secs_since_epoch": 1704067200,
+            "nanos_since_epoch": 0
+        },
+        "repo_count": 1,
+        "source_count": 0,
+        "total_size": 0,
+        "remote": null
+    });
+    fs::write(
+        test_dir.join(".self/manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    // Load should succeed with the old format
+    let output = run_vg_in_dir(test_dir, &["load", "."]);
+
+    assert!(
+        output.status.success(),
+        "vg load should succeed with old project.json format"
+    );
+}

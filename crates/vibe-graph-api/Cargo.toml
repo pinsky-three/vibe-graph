@@ -19,3 +19,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+hyper = { version = "1", features = ["full"] }
+http-body-util = "0.1"
