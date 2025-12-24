@@ -57,7 +57,7 @@ build-frontend: build-wasm ## Build frontend (TS + WASM)
 	cd frontend && pnpm install && pnpm build
 	@echo "✅ Frontend built to frontend/dist/"
 
-build-cli-embedded: ## Build CLI with embedded WASM
+build-cli-embedded: ## Build CLI with embedded WASM (legacy egui viz)
 	@echo "📦 Building WASM for embedding..."
 	@command -v wasm-pack >/dev/null 2>&1 || { echo "Installing wasm-pack..."; cargo install wasm-pack; }
 	cd crates/vibe-graph-viz && wasm-pack build --target web --release
@@ -68,11 +68,22 @@ build-cli-embedded: ## Build CLI with embedded WASM
 	cargo build --release -p vibe-graph-cli --features embedded-viz
 	@echo "✅ Built: target/release/vg ($$(ls -lh target/release/vg | awk '{print $$5}'))"
 
+build-standalone: build-frontend ## Build fully self-contained CLI with embedded frontend
+	@echo "📦 Building self-contained CLI..."
+	cargo build --release -p vibe-graph-cli --features "embedded-viz,embedded-frontend"
+	@echo "✅ Built standalone binary: target/release/vg"
+	@ls -lh target/release/vg | awk '{print "   Size:", $$5}'
+	@echo ""
+	@echo "This binary includes everything - works anywhere!"
+	@echo "   - TypeScript frontend (embedded)"
+	@echo "   - WASM visualization (embedded)"
+	@echo "   - All assets baked in"
+
 build: ## Build minimal CLI (D3.js fallback)
 	cargo build --release -p vibe-graph-cli
 	@echo "✅ Built: target/release/vg ($$(ls -lh target/release/vg | awk '{print $$5}'))"
 
-build-full: build-frontend build ## Full production build
+build-full: build-frontend build ## Full production build (frontend on disk)
 	@echo ""
 	@echo "✅ Production build complete!"
 	@echo "   Frontend: frontend/dist/"

@@ -152,6 +152,11 @@ enum Commands {
     ///
     /// Opens a localhost server with a web-based visualization.
     /// Supports WASM-based egui app if built, or falls back to D3.js.
+    ///
+    /// Examples:
+    ///   vg serve                         # current directory
+    ///   vg serve ./my-project            # specific project
+    ///   vg serve --frontend-dir ./vibe-graph/frontend/dist  # explicit frontend
     Serve {
         /// Path to workspace (defaults to current directory).
         #[arg(default_value = ".")]
@@ -164,6 +169,10 @@ enum Commands {
         /// Path to WASM build artifacts (from wasm-pack).
         #[arg(long)]
         wasm_dir: Option<PathBuf>,
+
+        /// Path to frontend dist directory (auto-detected if not specified).
+        #[arg(long)]
+        frontend_dir: Option<PathBuf>,
     },
 
     /// Clean the .self folder.
@@ -492,9 +501,10 @@ async fn main() -> Result<()> {
             path,
             port,
             wasm_dir,
+            frontend_dir,
         } => {
             // Serve still uses the internal implementation for now
-            commands::serve::execute(&cli_config, &path, port, wasm_dir).await?;
+            commands::serve::execute(&cli_config, &path, port, wasm_dir, frontend_dir).await?;
         }
 
         Commands::Clean { path } => {

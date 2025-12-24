@@ -37,6 +37,7 @@ use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
 
+use crate::commands::embedded_frontend::{has_embedded_frontend, serve_embedded};
 use crate::config::Config;
 
 // Embedded WASM assets (only included when feature is enabled)
@@ -63,6 +64,7 @@ pub async fn execute(
     path: &Path,
     port: u16,
     wasm_dir: Option<PathBuf>,
+    frontend_dir: Option<PathBuf>,
 ) -> Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
@@ -117,8 +119,10 @@ pub async fn execute(
     let git_changes_json = serde_json::to_string(&api_state.git_changes.read().await.clone())
         .context("Failed to serialize git changes")?;
 
-    // Detect frontend dist directory
-    let frontend_dist = detect_frontend_dist(&path);
+    // Detect frontend dist directory (use explicit path if provided)
+    let frontend_dist = frontend_dir
+        .filter(|p| p.join("index.html").exists())
+        .or_else(|| detect_frontend_dist(&path));
 
     // Load WASM artifacts for embedded/legacy mode
     let (wasm_bytes, js_bytes) = load_wasm_assets(wasm_dir);
@@ -151,17 +155,30 @@ pub async fn execute(
         .route("/vibe_graph_viz.js", get(js_handler))
         .with_state(static_state.clone());
 
-    // Build main router based on whether frontend is available
-    let app = if let Some(dist_path) = &frontend_dist {
-        println!("📁 Serving frontend from: {}", dist_path.display());
-        Router::new()
+    // Build main router based on frontend availability:
+    // 1. Filesystem frontend (development/explicit path)
+    // 2. Embedded frontend (release binary)
+    // 3. Legacy egui/D3 visualization
+    let (app, frontend_mode) = if let Some(dist_path) = &frontend_dist {
+        // Priority 1: Filesystem frontend
+        let router = Router::new()
             .nest("/api", api_router)
             .nest("/wasm", wasm_router)
             .fallback_service(ServeDir::new(dist_path).append_index_html_on_directories(true))
-            .layer(cors)
+            .layer(cors);
+        (router, format!("Frontend ({})", dist_path.display()))
+    } else if has_embedded_frontend() {
+        // Priority 2: Embedded frontend (compiled into binary)
+        println!("📦 Using embedded frontend assets");
+        let router = Router::new()
+            .nest("/api", api_router)
+            .nest("/wasm", wasm_router)
+            .fallback(serve_embedded)
+            .layer(cors);
+        (router, "Frontend (embedded)".to_string())
     } else {
-        // Fallback to legacy embedded mode
-        println!("💡 No frontend/dist found, using legacy embedded mode");
+        // Priority 3: Legacy embedded mode
+        println!("💡 No frontend available, using legacy embedded mode");
 
         // Legacy routes with their own state (root-level WASM for backward compat)
         let legacy_router = Router::new()
@@ -171,11 +188,13 @@ pub async fn execute(
             .route("/vibe_graph_viz.js", get(js_handler))
             .with_state(static_state);
 
-        Router::new()
+        let viz_mode = if has_wasm { "egui" } else { "D3.js" };
+        let router = Router::new()
             .nest("/api", api_router)
-            .nest("/wasm", wasm_router) // Also serve at /wasm/* for Vite dev proxy
+            .nest("/wasm", wasm_router)
             .merge(legacy_router)
-            .layer(cors)
+            .layer(cors);
+        (router, format!("Legacy ({})", viz_mode))
     };
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -185,17 +204,7 @@ pub async fn execute(
     println!("🚀 Vibe Graph Server");
     println!("   URL: http://localhost:{}", port);
     println!("   API: http://localhost:{}/api/health", port);
-
-    if frontend_dist.is_some() {
-        println!("   Mode: Frontend + API");
-    } else {
-        let viz_mode = if has_wasm {
-            "egui (WASM)"
-        } else {
-            "D3.js (fallback)"
-        };
-        println!("   Mode: Legacy ({})", viz_mode);
-    }
+    println!("   Mode: {}", frontend_mode);
 
     println!();
     println!("   Press Ctrl+C to stop");
@@ -209,17 +218,37 @@ pub async fn execute(
 
 /// Detect frontend dist directory.
 fn detect_frontend_dist(project_path: &Path) -> Option<PathBuf> {
-    // Try relative to project path
-    let candidates = [
+    // Build candidates in order of priority
+    let mut candidates = vec![
+        // 1. Relative to project path
         project_path.join("frontend/dist"),
-        // Try relative to executable
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join("frontend/dist")))
-            .unwrap_or_default(),
-        // Try current directory
+        // 2. Current directory
         PathBuf::from("frontend/dist"),
     ];
+
+    // 3. Try relative to executable (useful for installed binaries)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("frontend/dist"));
+            // Also check one level up (target/debug -> project root)
+            if let Some(parent) = exe_dir.parent() {
+                candidates.push(parent.join("frontend/dist"));
+                // Two levels up (target/debug -> target -> project root)
+                if let Some(grandparent) = parent.parent() {
+                    candidates.push(grandparent.join("frontend/dist"));
+                }
+            }
+        }
+    }
+
+    // 4. Check if project_path is inside a vibe-graph checkout
+    // (handles multi-repo workspaces where vibe-graph is a subfolder)
+    for ancestor in project_path.ancestors().skip(1) {
+        let vibe_graph_frontend = ancestor.join("vibe-graph/frontend/dist");
+        if vibe_graph_frontend.join("index.html").exists() {
+            return Some(vibe_graph_frontend);
+        }
+    }
 
     candidates
         .into_iter()

@@ -16,10 +16,13 @@ name = "vg"
 path = "src/main.rs"
 
 [features]
-default = ["embedded-viz"]
+default = ["embedded-viz", "embedded-frontend"]
 # Embed WASM visualization assets directly in the binary (~3.5MB increase)
 # Build with: cargo build --release --features embedded-viz
 embedded-viz = []
+# Embed TypeScript frontend assets in the binary (~500KB increase)
+# Build with: cargo build --release --features embedded-frontend
+embedded-frontend = ["rust-embed"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -43,6 +46,8 @@ vibe-graph-api = { version = "0.1.0", path = "../vibe-graph-api" }
 vibe-graph-git = { version = "0.1.0", path = "../vibe-graph-git" }
 axum = { workspace = true }
 tower-http = { workspace = true }
+rust-embed = { version = "8", optional = true }
+mime_guess = "2"
 
 [dev-dependencies]
 tempfile = "3"
