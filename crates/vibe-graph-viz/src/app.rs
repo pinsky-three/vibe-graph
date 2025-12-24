@@ -69,9 +69,6 @@ pub struct VibeGraphApp {
     changed_nodes: HashMap<NodeIndex, GitChangeKind>,
     /// Original node labels (for restoring when toggling visibility)
     original_node_labels: HashMap<NodeIndex, String>,
-    /// Original edge labels (for restoring when toggling visibility)
-    #[allow(dead_code)]
-    original_edge_labels: HashMap<petgraph::stable_graph::EdgeIndex, String>,
 }
 
 impl VibeGraphApp {
@@ -179,7 +176,6 @@ impl VibeGraphApp {
             change_anim: ChangeIndicatorState::default(),
             changed_nodes: HashMap::new(),
             original_node_labels,
-            original_edge_labels: HashMap::new(),
         }
     }
 
@@ -380,36 +376,6 @@ impl VibeGraphApp {
                 }
             }
         }
-    }
-
-    /// Apply edge label visibility setting.
-    fn apply_edge_label_visibility(&mut self) {
-        // Note: Edge labels are not currently used in this visualization
-        // (edges use () type with no label), but this is here for future use.
-        let _show = self.settings_style.show_edge_labels;
-        // Edge labels would be toggled here if implemented
-    }
-
-    /// Apply font scale based on label size settings.
-    /// This modifies the global egui text scale.
-    fn apply_label_font_scale(&self, ctx: &Context) {
-        // Use the average of node and edge label sizes for global scale
-        // (egui doesn't support per-element font sizes easily)
-        let scale = if self.settings_style.show_node_labels && self.settings_style.show_edge_labels
-        {
-            (self.settings_style.node_label_size + self.settings_style.edge_label_size) / 2.0
-        } else if self.settings_style.show_node_labels {
-            self.settings_style.node_label_size
-        } else if self.settings_style.show_edge_labels {
-            self.settings_style.edge_label_size
-        } else {
-            1.0
-        };
-
-        // Apply scale via pixels_per_point (affects all text)
-        // Base is typically 1.0, we scale from there
-        let base_ppp = 1.0;
-        ctx.set_pixels_per_point(base_ppp * scale);
     }
 }
 
@@ -649,11 +615,14 @@ impl VibeGraphApp {
             });
 
             ui.separator();
-            ui.label(egui::RichText::new("Node Labels").strong());
+            ui.label(egui::RichText::new("Labels").strong());
 
             ui.horizontal(|ui| {
                 if ui
-                    .checkbox(&mut self.settings_style.show_node_labels, "Show labels")
+                    .checkbox(
+                        &mut self.settings_style.show_node_labels,
+                        "Show node labels",
+                    )
                     .changed()
                 {
                     self.apply_label_visibility();
@@ -665,47 +634,6 @@ impl VibeGraphApp {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
                     Self::info_icon(ui, "Show labels always vs on hover only");
-                });
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut self.settings_style.node_label_size, 0.3..=3.0)
-                                .text("Size")
-                                .step_by(0.1),
-                        )
-                        .changed()
-                    {
-                        self.apply_label_font_scale(ui.ctx());
-                    }
-                });
-            });
-
-            ui.separator();
-            ui.label(egui::RichText::new("Edge Labels").strong());
-
-            ui.horizontal(|ui| {
-                if ui
-                    .checkbox(&mut self.settings_style.show_edge_labels, "Show labels")
-                    .changed()
-                {
-                    self.apply_edge_label_visibility();
-                }
-                Self::info_icon(ui, "Toggle edge label visibility");
-            });
-
-            ui.add_enabled_ui(self.settings_style.show_edge_labels, |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut self.settings_style.edge_label_size, 0.3..=3.0)
-                                .text("Size")
-                                .step_by(0.1),
-                        )
-                        .changed()
-                    {
-                        self.apply_label_font_scale(ui.ctx());
-                    }
                 });
             });
 
