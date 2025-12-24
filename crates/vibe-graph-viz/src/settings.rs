@@ -33,6 +33,14 @@ impl Default for SettingsInteraction {
 pub struct SettingsStyle {
     /// Always show node labels (vs hover-only).
     pub labels_always: bool,
+    /// Show node labels (master toggle).
+    pub show_node_labels: bool,
+    /// Show edge labels (master toggle).
+    pub show_edge_labels: bool,
+    /// Node label font size multiplier (0.5 = half, 2.0 = double).
+    pub node_label_size: f32,
+    /// Edge label font size multiplier (0.5 = half, 2.0 = double).
+    pub edge_label_size: f32,
     /// Show change indicator halos around modified nodes.
     pub change_indicators: bool,
     /// Animation speed for change indicators (0.5 = slow, 2.0 = fast).
@@ -45,6 +53,10 @@ impl Default for SettingsStyle {
     fn default() -> Self {
         Self {
             labels_always: true,
+            show_node_labels: true,
+            show_edge_labels: false, // Off by default - edges typically don't have meaningful labels
+            node_label_size: 1.0,
+            edge_label_size: 1.0,
             change_indicators: true,
             change_indicator_speed: 1.0,
             edge_deemphasis: false,
