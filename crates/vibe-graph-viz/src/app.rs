@@ -69,6 +69,8 @@ pub struct VibeGraphApp {
     changed_nodes: HashMap<NodeIndex, GitChangeKind>,
     /// Original node labels (for restoring when toggling visibility)
     original_node_labels: HashMap<NodeIndex, String>,
+    /// Original edge labels (for restoring when toggling visibility)
+    original_edge_labels: HashMap<petgraph::stable_graph::EdgeIndex, String>,
 }
 
 impl VibeGraphApp {
@@ -156,6 +158,18 @@ impl VibeGraphApp {
             }
         }
 
+        // Store original edge labels and clear them (edge labels are off by default)
+        let mut original_edge_labels = HashMap::new();
+        let edge_indices: Vec<_> = egui_graph.edges_iter().map(|(idx, _)| idx).collect();
+        for edge_idx in edge_indices {
+            if let Some(edge) = egui_graph.edge_mut(edge_idx) {
+                let label = edge.label().to_string();
+                original_edge_labels.insert(edge_idx, label);
+                // Clear edge labels by default (show_edge_labels defaults to false)
+                edge.set_label(String::new());
+            }
+        }
+
         let dark_mode = cc.egui_ctx.style().visuals.dark_mode;
 
         Self {
@@ -176,6 +190,7 @@ impl VibeGraphApp {
             change_anim: ChangeIndicatorState::default(),
             changed_nodes: HashMap::new(),
             original_node_labels,
+            original_edge_labels,
         }
     }
 
@@ -373,6 +388,26 @@ impl VibeGraphApp {
                 } else {
                     // Clear label
                     node.set_label(String::new());
+                }
+            }
+        }
+    }
+
+    /// Apply edge label visibility setting.
+    fn apply_edge_label_visibility(&mut self) {
+        let show = self.settings_style.show_edge_labels;
+        // Collect indices first to avoid borrow issues
+        let indices: Vec<_> = self.g.edges_iter().map(|(idx, _)| idx).collect();
+        for edge_idx in indices {
+            if let Some(edge) = self.g.edge_mut(edge_idx) {
+                if show {
+                    // Restore original label
+                    if let Some(original) = self.original_edge_labels.get(&edge_idx) {
+                        edge.set_label(original.clone());
+                    }
+                } else {
+                    // Clear label
+                    edge.set_label(String::new());
                 }
             }
         }
@@ -630,12 +665,28 @@ impl VibeGraphApp {
                 Self::info_icon(ui, "Toggle node name visibility");
             });
 
-            ui.add_enabled_ui(self.settings_style.show_node_labels, |ui| {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
-                    Self::info_icon(ui, "Show labels always vs on hover only");
-                });
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(
+                        &mut self.settings_style.show_edge_labels,
+                        "Show edge labels",
+                    )
+                    .changed()
+                {
+                    self.apply_edge_label_visibility();
+                }
+                Self::info_icon(ui, "Toggle edge ID labels (edge 0, edge 1, etc.)");
             });
+
+            ui.add_enabled_ui(
+                self.settings_style.show_node_labels || self.settings_style.show_edge_labels,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
+                        Self::info_icon(ui, "Show labels always vs on hover only");
+                    });
+                },
+            );
 
             ui.separator();
             ui.label(egui::RichText::new("Change Indicators").strong());
