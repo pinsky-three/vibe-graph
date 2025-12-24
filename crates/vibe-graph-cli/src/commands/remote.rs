@@ -11,11 +11,10 @@ use anyhow::{Context, Result};
 use git2::{Cred, RemoteCallbacks, Repository as GitRepo};
 use octocrab::Octocrab;
 use tracing::info;
+use vibe_graph_ops::{Project, ProjectSource, Repository, Source, Store};
 use walkdir::WalkDir;
 
 use crate::config::Config;
-use crate::project::{Project, ProjectSource, Repository, Source};
-use crate::store::Store;
 
 /// Remote information for a workspace.
 #[derive(Debug, Clone)]
@@ -90,6 +89,7 @@ fn extract_org_from_url(url: &str) -> Option<String> {
 }
 
 /// Detect git remote origin for a repository path.
+#[allow(dead_code)]
 pub fn detect_git_remote(repo_path: &Path) -> Option<String> {
     let git_repo = GitRepo::open(repo_path).ok()?;
     let remote = git_repo.find_remote("origin").ok()?;

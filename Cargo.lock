@@ -5080,6 +5080,7 @@ dependencies = [
  "vibe-graph-api",
  "vibe-graph-core",
  "vibe-graph-git",
+ "vibe-graph-ops",
  "walkdir",
 ]
 

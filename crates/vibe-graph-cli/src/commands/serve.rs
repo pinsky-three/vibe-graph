@@ -35,11 +35,9 @@ use vibe_graph_api::WsServerMessage;
 use vibe_graph_api::{create_api_router, create_api_state_with_changes};
 use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_git::get_git_changes;
+use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
 
-use crate::commands::{graph, sync};
 use crate::config::Config;
-use crate::project::Project;
-use crate::store::Store;
 
 // Embedded WASM assets (only included when feature is enabled)
 #[cfg(feature = "embedded-viz")]
@@ -69,22 +67,23 @@ pub async fn execute(
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
+    // Create ops context
+    let ops_config = OpsConfig {
+        max_content_size_kb: config.max_content_size_kb,
+        github_username: config.github_username.clone(),
+        github_token: config.github_token.clone(),
+        cache_dir: config.cache_dir.clone(),
+    };
+    let ctx = OpsContext::new(ops_config);
+
     // Auto-sync if .self doesn't exist (first-time setup)
     if !store.exists() {
         println!("🔄 First run detected, syncing workspace...");
         println!();
 
-        let workspace = sync::detect_workspace(&path)?;
-        let project = sync::execute(config, &path, false)?;
+        let request = SyncRequest::local(&path);
+        let _response = ctx.sync(request).await?;
 
-        // Detect git remote for single repos
-        let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
-            crate::commands::remote::detect_git_remote(&workspace.root)
-        } else {
-            None
-        };
-
-        store.save(&project, &workspace.kind, detected_remote)?;
         println!("💾 Saved to {}", store.self_dir().display());
         println!();
     }
@@ -92,7 +91,9 @@ pub async fn execute(
     // Load or build the graph
     let graph = {
         println!("📊 Loading graph...");
-        graph::execute_or_load(config, &path)?
+        let request = GraphRequest::new(&path);
+        let response = ctx.graph(request).await?;
+        response.graph
     };
 
     println!(

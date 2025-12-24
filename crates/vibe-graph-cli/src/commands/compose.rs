@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use askama::Template;
 use tracing::info;
+use vibe_graph_ops::Project;
 
 use crate::config::Config;
-use crate::project::Project;
 
 /// Output format for composition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

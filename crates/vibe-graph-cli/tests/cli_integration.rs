@@ -208,10 +208,7 @@ fn test_sync_with_snapshot() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success(), "vg sync --snapshot should succeed");
-    assert!(
-        stdout.contains("📸 Snapshot:"),
-        "Should create snapshot"
-    );
+    assert!(stdout.contains("📸 Snapshot:"), "Should create snapshot");
 
     // Verify snapshot directory exists
     let snapshots_dir = test_dir.join(".self/snapshots");
@@ -252,10 +249,7 @@ fn test_status_on_synced_workspace() {
         stdout.contains("📁 Workspace:"),
         "Should show workspace name"
     );
-    assert!(
-        stdout.contains("💾 .self:"),
-        "Should show .self status"
-    );
+    assert!(stdout.contains("💾 .self:"), "Should show .self status");
     assert!(
         stdout.contains("initialized"),
         "Should show initialized status"
@@ -350,7 +344,10 @@ fn test_graph_output_path() {
         &["graph", "--output", output_path.to_str().unwrap(), "."],
     );
 
-    assert!(output.status.success(), "vg graph with output should succeed");
+    assert!(
+        output.status.success(),
+        "vg graph with output should succeed"
+    );
     assert!(output_path.exists(), "Custom output file should be created");
 
     // Verify it's valid JSON
@@ -406,7 +403,10 @@ fn test_clean_removes_self_folder() {
 
     // First sync
     run_vg_in_dir(test_dir, &["sync", "."]);
-    assert!(test_dir.join(".self").exists(), ".self should exist after sync");
+    assert!(
+        test_dir.join(".self").exists(),
+        ".self should exist after sync"
+    );
 
     // Then clean
     let output = run_vg_in_dir(test_dir, &["clean", "."]);
@@ -417,10 +417,7 @@ fn test_clean_removes_self_folder() {
         !test_dir.join(".self").exists(),
         ".self should be removed after clean"
     );
-    assert!(
-        stdout.contains("🧹 Cleaned"),
-        "Should show cleaned message"
-    );
+    assert!(stdout.contains("🧹 Cleaned"), "Should show cleaned message");
 }
 
 #[test]
@@ -493,7 +490,10 @@ fn test_project_json_structure() {
 
     // Verify structure
     assert!(project.get("name").is_some(), "Project should have name");
-    assert!(project.get("source").is_some(), "Project should have source");
+    assert!(
+        project.get("source").is_some(),
+        "Project should have source"
+    );
     assert!(
         project.get("repositories").is_some(),
         "Project should have repositories"
@@ -520,7 +520,10 @@ fn test_manifest_json_structure() {
     let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
 
     // Verify structure
-    assert!(manifest.get("version").is_some(), "Manifest should have version");
+    assert!(
+        manifest.get("version").is_some(),
+        "Manifest should have version"
+    );
     assert!(manifest.get("name").is_some(), "Manifest should have name");
     assert!(manifest.get("root").is_some(), "Manifest should have root");
     assert!(manifest.get("kind").is_some(), "Manifest should have kind");
@@ -554,7 +557,10 @@ fn test_graph_json_structure() {
     // Verify structure
     assert!(graph.get("nodes").is_some(), "Graph should have nodes");
     assert!(graph.get("edges").is_some(), "Graph should have edges");
-    assert!(graph.get("metadata").is_some(), "Graph should have metadata");
+    assert!(
+        graph.get("metadata").is_some(),
+        "Graph should have metadata"
+    );
 
     let nodes = graph["nodes"].as_array().unwrap();
     assert!(!nodes.is_empty(), "Should have at least one node");
@@ -620,6 +626,8 @@ fn test_quiet_mode() {
 
     assert!(output.status.success(), "vg -q sync should succeed");
     // Quiet mode should still create .self
-    assert!(test_dir.join(".self").exists(), ".self should be created even in quiet mode");
+    assert!(
+        test_dir.join(".self").exists(),
+        ".self should be created even in quiet mode"
+    );
 }
-

@@ -13,12 +13,15 @@ use tracing_subscriber::EnvFilter;
 
 mod commands;
 mod config;
-mod project;
-mod store;
 
-use commands::{compose::OutputFormat, config as config_cmd, graph, remote, serve, sync};
+// Import ops types
+use vibe_graph_ops::{
+    CleanRequest, Config as OpsConfig, GraphRequest, LoadRequest, OpsContext, Store, SyncRequest,
+    SyncSource, WorkspaceInfo, WorkspaceKind,
+};
+
+use commands::compose::OutputFormat;
 use config::Config;
-use store::Store;
 
 /// Vibe-Graph CLI - Analyze and compose documentation from code.
 ///
@@ -280,10 +283,6 @@ async fn main() -> Result<()> {
     };
 
     // Prefer RUST_LOG if set; otherwise fall back to CLI verbosity.
-    //
-    // Examples:
-    // - RUST_LOG=info vg serve
-    // - RUST_LOG=tower_http=info,vibe_graph_api=info vg serve
     let filter = std::env::var("RUST_LOG")
         .ok()
         .and_then(|s| s.parse::<EnvFilter>().ok())
@@ -295,8 +294,17 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    // Load configuration
-    let config = Config::load()?;
+    // Load CLI configuration (for legacy commands)
+    let cli_config = Config::load()?;
+
+    // Create ops context from CLI config
+    let ops_config = OpsConfig {
+        max_content_size_kb: cli_config.max_content_size_kb,
+        github_username: cli_config.github_username.clone(),
+        github_token: cli_config.github_token.clone(),
+        cache_dir: cli_config.cache_dir.clone(),
+    };
+    let ctx = OpsContext::new(ops_config);
 
     // Default to sync if no command given
     let command = cli.command.unwrap_or(Commands::Sync {
@@ -321,66 +329,78 @@ async fn main() -> Result<()> {
             ignore_file,
             cache,
         } => {
-            // Detect the source type (local path vs GitHub org/repo)
-            let sync_source = sync::SyncSource::detect(&source);
+            let sync_source = SyncSource::detect(&source);
 
-            let mut project = if sync_source.is_remote() {
-                // Remote sync: clone from GitHub
+            // Build ignore list
+            let ignore_list = build_ignore_list(ignore, ignore_file)?;
+
+            // Create sync request
+            let request = SyncRequest {
+                source: sync_source.clone(),
+                ignore: ignore_list,
+                no_save,
+                snapshot,
+                use_cache: cache,
+                force: false,
+            };
+
+            // Check if remote
+            if sync_source.is_remote() {
                 println!("🔗 Source: {}", sync_source);
                 println!();
+            }
 
-                let ignore_list = build_ignore_list(ignore, ignore_file)?;
-                let result =
-                    sync::execute_remote(&config, &sync_source, &ignore_list, cli.verbose, cache)
-                        .await?;
-
-                // Print helpful next step
+            // For local syncs, print workspace info first
+            if let SyncSource::Local { ref path } = sync_source {
+                let workspace = WorkspaceInfo::detect(path)?;
+                println!("📁 Workspace: {}", workspace.name);
+                println!("📍 Path: {}", workspace.root.display());
+                println!("🔍 Detected: {}", workspace.kind);
                 println!();
-                println!("💡 Next steps:");
-                println!("   cd {} && vg serve", result.cloned_path.display());
+            }
 
-                result.project
-            } else {
-                // Local sync: scan filesystem
-                let path = match &sync_source {
-                    sync::SyncSource::Local { path } => path.clone(),
-                    _ => PathBuf::from("."),
-                };
+            // Execute sync via ops
+            let response = ctx.sync(request).await?;
 
-                let workspace = sync::detect_workspace(&path)?;
-                let store = Store::new(&workspace.root);
+            // Print summary
+            println!("✅ Sync complete");
+            println!("   Repositories: {}", response.project.repositories.len());
+            println!("   Total files:  {}", response.project.total_sources());
+            println!("   Total size:   {}", response.project.human_total_size());
 
-                let project = sync::execute(&config, &path, cli.verbose)?;
+            if cli.verbose {
+                println!();
+                for repo in &response.project.repositories {
+                    println!("   📦 {} ({} files)", repo.name, repo.sources.len());
+                }
+            }
 
-                // Detect git remote for single repos
-                let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
-                    remote::detect_git_remote(&workspace.root)
-                } else {
-                    None
-                };
+            // Show save message (if not --no-save)
+            if !no_save {
+                let store = Store::new(&response.workspace.root);
+                println!("💾 Saved to {}", store.self_dir().display());
 
-                // Save to .self unless --no-save
-                if !no_save {
-                    store.save(&project, &workspace.kind, detected_remote.clone())?;
-                    println!("💾 Saved to {}", store.self_dir().display());
-
-                    if let Some(ref remote_url) = detected_remote {
-                        println!("🔗 Remote: {}", remote_url);
-                    }
-
-                    if snapshot {
-                        let snapshot_path = store.snapshot(&project)?;
-                        println!("📸 Snapshot: {}", snapshot_path.display());
-                    }
+                if let Some(ref remote) = response.remote {
+                    println!("🔗 Remote: {}", remote);
                 }
 
-                project
-            };
+                if let Some(ref snapshot_path) = response.snapshot_created {
+                    println!("📸 Snapshot: {}", snapshot_path.display());
+                }
+            }
+
+            // Remote sync: show next steps
+            if sync_source.is_remote() {
+                println!();
+                println!("💡 Next steps:");
+                println!("   cd {} && vg serve", response.path.display());
+            }
 
             // If output specified, compose the result
             if let Some(output_path) = output {
                 let format: OutputFormat = format.parse()?;
-                commands::compose::execute(&config, &mut project, Some(output_path), format)?;
+                let mut project = response.project;
+                commands::compose::execute(&cli_config, &mut project, Some(output_path), format)?;
             }
         }
 
@@ -389,32 +409,26 @@ async fn main() -> Result<()> {
             output,
             format,
         } => {
-            let path = path.canonicalize().unwrap_or(path);
-            let store = Store::new(&path);
+            let request = LoadRequest::new(&path);
 
-            if !store.exists() {
-                anyhow::bail!(
+            let response = ctx.load(request).await.map_err(|_| {
+                anyhow::anyhow!(
                     "No .self folder found at {}. Run `vg sync` first.",
                     path.display()
-                );
-            }
+                )
+            })?;
 
-            let mut project = store
-                .load()?
-                .ok_or_else(|| anyhow::anyhow!("No project data found in .self"))?;
-
-            if let Some(manifest) = store.load_manifest()? {
-                println!("📂 Loaded: {}", manifest.name);
-                println!("   Last sync: {:?}", manifest.last_sync);
-                println!(
-                    "   Repos: {}, Files: {}",
-                    manifest.repo_count, manifest.source_count
-                );
-            }
+            println!("📂 Loaded: {}", response.manifest.name);
+            println!("   Last sync: {:?}", response.manifest.last_sync);
+            println!(
+                "   Repos: {}, Files: {}",
+                response.manifest.repo_count, response.manifest.source_count
+            );
 
             if let Some(output_path) = output {
                 let format: OutputFormat = format.parse()?;
-                commands::compose::execute(&config, &mut project, Some(output_path), format)?;
+                let mut project = response.project;
+                commands::compose::execute(&cli_config, &mut project, Some(output_path), format)?;
             }
         }
 
@@ -433,28 +447,45 @@ async fn main() -> Result<()> {
                     println!("📂 Using cached data from .self");
                     loaded
                 } else {
-                    sync::execute(&config, &path, cli.verbose)?
+                    // Need to sync
+                    let request = SyncRequest::local(&path);
+                    let response = ctx.sync(request).await?;
+                    response.project
                 }
             } else {
-                let workspace = sync::detect_workspace(&path)?;
-                let project = sync::execute(&config, &path, cli.verbose)?;
-                // Detect remote for single repos
-                let detected_remote = if workspace.kind == sync::WorkspaceKind::SingleRepo {
-                    remote::detect_git_remote(&workspace.root)
-                } else {
-                    None
-                };
-                store.save(&project, &workspace.kind, detected_remote)?;
-                project
+                let request = SyncRequest::local(&path);
+                let response = ctx.sync(request).await?;
+                response.project
             };
 
             let format: OutputFormat = format.parse()?;
             let output = output.or_else(|| Some(PathBuf::from(format!("{}.md", project.name))));
-            commands::compose::execute(&config, &mut project, output, format)?;
+            commands::compose::execute(&cli_config, &mut project, output, format)?;
         }
 
         Commands::Graph { path, output } => {
-            graph::execute(&config, &path, output)?;
+            let mut request = GraphRequest::new(&path);
+            if let Some(output_path) = output.clone() {
+                request = request.with_output(output_path);
+            }
+
+            println!("📊 Building SourceCodeGraph for: {}", path.display());
+
+            let response = ctx.graph(request).await.map_err(|_| {
+                anyhow::anyhow!(
+                    "No .self folder found at {}. Run `vg sync` first.",
+                    path.display()
+                )
+            })?;
+
+            println!("✅ Graph built:");
+            println!("   Nodes: {}", response.graph.node_count());
+            println!("   Edges: {}", response.graph.edge_count());
+            println!("💾 Saved to: {}", response.saved_path.display());
+
+            if let Some(output_path) = response.output_path {
+                println!("💾 Also saved to: {}", output_path.display());
+            }
         }
 
         Commands::Serve {
@@ -462,15 +493,15 @@ async fn main() -> Result<()> {
             port,
             wasm_dir,
         } => {
-            serve::execute(&config, &path, port, wasm_dir).await?;
+            // Serve still uses the internal implementation for now
+            commands::serve::execute(&cli_config, &path, port, wasm_dir).await?;
         }
 
         Commands::Clean { path } => {
-            let path = path.canonicalize().unwrap_or(path);
-            let store = Store::new(&path);
+            let request = CleanRequest::new(&path);
+            let response = ctx.clean(request).await?;
 
-            if store.exists() {
-                store.clean()?;
+            if response.cleaned {
                 println!("🧹 Cleaned .self folder");
             } else {
                 println!("No .self folder found");
@@ -478,26 +509,26 @@ async fn main() -> Result<()> {
         }
 
         Commands::Remote(remote_cmd) => {
-            // Most remote commands need the store
+            // Remote commands still use the internal implementation
             let path = PathBuf::from(".");
-            let workspace = sync::detect_workspace(&path)?;
+            let workspace = WorkspaceInfo::detect(&path)?;
             let store = Store::new(&workspace.root);
 
             match remote_cmd {
                 RemoteCommands::Show => {
-                    remote::show(&store)?;
+                    commands::remote::show(&store)?;
                 }
 
                 RemoteCommands::Add { remote: remote_url } => {
-                    remote::add(&store, &remote_url)?;
+                    commands::remote::add(&store, &remote_url)?;
                 }
 
                 RemoteCommands::Remove => {
-                    remote::remove(&store)?;
+                    commands::remote::remove(&store)?;
                 }
 
                 RemoteCommands::List => {
-                    remote::list(&config, &store).await?;
+                    commands::remote::list(&cli_config, &store).await?;
                 }
 
                 RemoteCommands::Clone {
@@ -505,7 +536,8 @@ async fn main() -> Result<()> {
                     ignore_file,
                 } => {
                     let ignore_list = build_ignore_list(ignore, ignore_file)?;
-                    let _project = remote::clone(&config, &store, &ignore_list).await?;
+                    let _project =
+                        commands::remote::clone(&cli_config, &store, &ignore_list).await?;
                 }
 
                 RemoteCommands::Compose {
@@ -515,27 +547,28 @@ async fn main() -> Result<()> {
                     ignore_file,
                 } => {
                     let ignore_list = build_ignore_list(ignore, ignore_file)?;
-                    let mut project = remote::clone(&config, &store, &ignore_list).await?;
+                    let mut project =
+                        commands::remote::clone(&cli_config, &store, &ignore_list).await?;
                     let format: OutputFormat = format.parse()?;
-                    commands::compose::execute(&config, &mut project, output, format)?;
+                    commands::compose::execute(&cli_config, &mut project, output, format)?;
                 }
             }
         }
 
         Commands::Config(config_cmd_inner) => {
-            let mut config = config;
+            let mut cli_config = cli_config;
             match config_cmd_inner {
                 ConfigCommands::Show => {
-                    config_cmd::show(&config)?;
+                    commands::config::show(&cli_config)?;
                 }
                 ConfigCommands::Set { key, value } => {
-                    config_cmd::set(&mut config, &key, &value)?;
+                    commands::config::set(&mut cli_config, &key, &value)?;
                 }
                 ConfigCommands::Get { key } => {
-                    config_cmd::get(&config, &key)?;
+                    commands::config::get(&cli_config, &key)?;
                 }
                 ConfigCommands::Reset => {
-                    config_cmd::reset()?;
+                    commands::config::reset()?;
                 }
                 ConfigCommands::Path => {
                     if let Some(path) = Config::config_file_path() {
@@ -548,7 +581,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Status { path } => {
-            let workspace = sync::detect_workspace(&path)?;
+            let workspace = WorkspaceInfo::detect(&path)?;
             let store = Store::new(&workspace.root);
 
             println!("📊 Vibe-Graph Status");
@@ -595,7 +628,8 @@ async fn main() -> Result<()> {
                 println!("💾 .self:      not initialized (run `vg sync`)");
             }
 
-            if !workspace.repo_paths.is_empty() && workspace.kind != sync::WorkspaceKind::SingleRepo
+            if !workspace.repo_paths.is_empty()
+                && !matches!(workspace.kind, WorkspaceKind::SingleRepo)
             {
                 println!();
                 println!("📦 Repositories:");
@@ -615,7 +649,7 @@ async fn main() -> Result<()> {
                     .map(|p| p.display().to_string())
                     .unwrap_or_default()
             );
-            println!("📂 Cache:      {}", config.cache_dir.display());
+            println!("📂 Cache:      {}", cli_config.cache_dir.display());
         }
     }
 
