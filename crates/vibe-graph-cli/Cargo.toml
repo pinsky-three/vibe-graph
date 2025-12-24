@@ -16,12 +16,14 @@ name = "vg"
 path = "src/main.rs"
 
 [features]
-default = ["embedded-viz", "embedded-frontend"]
+default = ["embedded-viz"]
 # Embed WASM visualization assets directly in the binary (~3.5MB increase)
 # Build with: cargo build --release --features embedded-viz
 embedded-viz = []
 # Embed TypeScript frontend assets in the binary (~500KB increase)
-# Build with: cargo build --release --features embedded-frontend
+# NOTE: This feature requires building from source (frontend/dist/ must exist)
+# It cannot be enabled via crates.io install.
+# Build with: make build-release (or: pnpm --prefix frontend build && cargo build --release --features embedded-frontend)
 embedded-frontend = ["rust-embed"]
 
 [dependencies]

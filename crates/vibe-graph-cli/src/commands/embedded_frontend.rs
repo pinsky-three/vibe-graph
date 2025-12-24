@@ -5,13 +5,16 @@
 
 use axum::{
     body::Body,
-    http::{header, Request, Response, StatusCode},
+    http::{Request, Response, StatusCode},
     response::IntoResponse,
 };
-use std::borrow::Cow;
 
 #[cfg(feature = "embedded-frontend")]
+use axum::http::header;
+#[cfg(feature = "embedded-frontend")]
 use rust_embed::RustEmbed;
+#[cfg(feature = "embedded-frontend")]
+use std::borrow::Cow;
 
 /// Embedded frontend assets from `frontend/dist/`.
 ///
@@ -87,6 +90,7 @@ pub async fn serve_embedded(_req: Request<Body>) -> impl IntoResponse {
 }
 
 /// Determine cache control header based on file type.
+#[cfg(feature = "embedded-frontend")]
 fn cache_control_for(path: &str) -> &'static str {
     if path.starts_with("assets/") {
         // Hashed assets can be cached forever

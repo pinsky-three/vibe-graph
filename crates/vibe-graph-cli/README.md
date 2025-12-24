@@ -61,18 +61,22 @@ vg sync && vg serve
 
 | Build | Command | Size | Features |
 |-------|---------|------|----------|
-| **Minimal** | `cargo build --release` | ~8 MB | D3.js via CDN |
-| **Full** | `cargo build --release --features embedded-viz` | ~11 MB | egui WASM (offline) |
+| **crates.io** | `cargo install vibe-graph-cli` | ~8 MB | D3.js via CDN |
+| **Full (source)** | `make build-standalone` | ~12 MB | WASM viz + embedded frontend |
 
-The minimal build requires internet for D3.js. The full build embeds ~3 MB of WASM for complete offline operation.
+The crates.io build requires internet for D3.js. Building from source embeds all assets for offline operation.
 
 ```bash
-# Build full version with embedded visualization
-cd ../.. && make build-full
+# Install from crates.io (requires internet for D3.js)
+cargo install vibe-graph-cli
 
-# Or manually (after building WASM assets)
-cargo build --release -p vibe-graph-cli --features embedded-viz
+# Build full version from source (offline-capable)
+git clone https://github.com/pinsky-three/vibe-graph
+cd vibe-graph
+make build-standalone
 ```
+
+> **Note:** The `embedded-frontend` feature requires building from source because it embeds `frontend/dist/` which isn't available via crates.io.
 
 ## Workspace Detection
 
