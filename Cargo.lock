@@ -5053,6 +5053,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "vibe-graph-core",
+ "vibe-graph-ops",
 ]
 
 [[package]]
@@ -5141,6 +5142,27 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "vibe-graph-core",
+]
+
+[[package]]
+name = "vibe-graph-ops"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "file-format",
+ "git2",
+ "humansize",
+ "octocrab",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "vibe-graph-core",
+ "vibe-graph-git",
+ "walkdir",
 ]
 
 [[package]]

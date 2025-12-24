@@ -9,6 +9,7 @@ members = [
   "crates/vibe-graph-materializer",
   "crates/vibe-graph-git",
   "crates/vibe-graph-engine",
+  "crates/vibe-graph-ops",
   "crates/vibe-graph-cli",
   "crates/vibe-graph-ui",
   "crates/vibe-graph-viz",
