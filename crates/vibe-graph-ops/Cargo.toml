@@ -1,9 +1,13 @@
 [package]
 name = "vibe-graph-ops"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 description = "Operations layer for Vibe-Graph - provides typed APIs for sync, scan, graph building"
 license = "MIT"
+repository = "https://github.com/pinsky-three/vibe-graph"
+homepage = "https://github.com/pinsky-three/vibe-graph"
+keywords = ["codebase", "analysis", "sync", "graph"]
+categories = ["development-tools"]
 
 [dependencies]
 # Workspace dependencies
@@ -21,8 +25,8 @@ humansize.workspace = true
 directories.workspace = true
 
 # Local crates
-vibe-graph-core = { path = "../vibe-graph-core" }
-vibe-graph-git = { path = "../vibe-graph-git" }
+vibe-graph-core = { version = "0.2.0", path = "../vibe-graph-core" }
+vibe-graph-git = { version = "0.2.0", path = "../vibe-graph-git" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

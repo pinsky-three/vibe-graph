@@ -4,6 +4,7 @@ use crate::selection::LassoState;
 use vibe_graph_core::{ChangeIndicatorState, GitChangeKind};
 
 /// Draw the lasso selection path on the canvas.
+/// OLED-optimized: electric cyan lasso that glows on black background.
 pub fn draw_lasso(ui: &mut egui::Ui, lasso: &LassoState, dark_mode: bool) {
     if lasso.path.len() < 2 {
         return;
@@ -11,12 +12,14 @@ pub fn draw_lasso(ui: &mut egui::Ui, lasso: &LassoState, dark_mode: bool) {
 
     let painter = ui.painter();
     let stroke_color = if dark_mode {
-        egui::Color32::from_rgba_unmultiplied(100, 200, 255, 200)
+        // Electric cyan for OLED - high visibility
+        egui::Color32::from_rgba_unmultiplied(0, 212, 255, 220)
     } else {
         egui::Color32::from_rgba_unmultiplied(50, 100, 200, 200)
     };
     let fill_color = if dark_mode {
-        egui::Color32::from_rgba_unmultiplied(100, 200, 255, 30)
+        // Subtle cyan fill
+        egui::Color32::from_rgba_unmultiplied(0, 212, 255, 25)
     } else {
         egui::Color32::from_rgba_unmultiplied(50, 100, 200, 30)
     };
@@ -52,39 +55,45 @@ pub fn draw_lasso(ui: &mut egui::Ui, lasso: &LassoState, dark_mode: bool) {
 // =============================================================================
 
 /// Get the color for a change kind.
+/// OLED-optimized: highly saturated colors that pop on true black backgrounds.
 pub fn change_kind_color(kind: GitChangeKind, dark_mode: bool) -> egui::Color32 {
     match kind {
         GitChangeKind::Modified => {
             if dark_mode {
-                egui::Color32::from_rgb(255, 200, 50) // Yellow/orange
+                // Vibrant amber/gold - maximum visibility
+                egui::Color32::from_rgb(255, 170, 0)
             } else {
-                egui::Color32::from_rgb(200, 150, 0)
+                egui::Color32::from_rgb(200, 130, 0)
             }
         }
         GitChangeKind::Added => {
             if dark_mode {
-                egui::Color32::from_rgb(100, 255, 100) // Green
+                // Electric green - neon on black
+                egui::Color32::from_rgb(0, 255, 136)
             } else {
                 egui::Color32::from_rgb(50, 180, 50)
             }
         }
         GitChangeKind::Deleted => {
             if dark_mode {
-                egui::Color32::from_rgb(255, 100, 100) // Red
+                // Hot coral/red - vibrant on black
+                egui::Color32::from_rgb(255, 68, 102)
             } else {
                 egui::Color32::from_rgb(200, 50, 50)
             }
         }
         GitChangeKind::RenamedFrom | GitChangeKind::RenamedTo => {
             if dark_mode {
-                egui::Color32::from_rgb(200, 150, 255) // Purple
+                // Neon purple/magenta
+                egui::Color32::from_rgb(176, 38, 255)
             } else {
                 egui::Color32::from_rgb(150, 100, 200)
             }
         }
         GitChangeKind::Untracked => {
             if dark_mode {
-                egui::Color32::from_rgb(150, 150, 150) // Gray for untracked
+                // Subtle cyan-gray for untracked
+                egui::Color32::from_rgb(120, 140, 160)
             } else {
                 egui::Color32::from_rgb(120, 120, 120)
             }
@@ -168,6 +177,7 @@ pub fn draw_change_badge(
 }
 
 /// Draw the lasso mode indicator in the top-left corner.
+/// OLED-optimized: vibrant cyan indicator badge.
 pub fn draw_mode_indicator(ui: &mut egui::Ui, lasso_active: bool) {
     if !lasso_active {
         return;
@@ -182,19 +192,23 @@ pub fn draw_mode_indicator(ui: &mut egui::Ui, lasso_active: bool) {
         .movable(false)
         .show(ui.ctx(), |ui| {
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180))
-                .corner_radius(4.0)
-                .inner_margin(8.0)
+                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_unmultiplied(0, 212, 255, 100),
+                ))
+                .corner_radius(6.0)
+                .inner_margin(10.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("◯ LASSO MODE")
-                                .color(egui::Color32::from_rgb(100, 200, 255))
+                                .color(egui::Color32::from_rgb(0, 212, 255))
                                 .strong(),
                         );
                         ui.label(
                             egui::RichText::new("  ESC to exit")
-                                .color(egui::Color32::GRAY)
+                                .color(egui::Color32::from_rgb(100, 100, 120))
                                 .small(),
                         );
                     });

@@ -85,6 +85,9 @@ impl VibeGraphApp {
 
     /// Create app from a SourceCodeGraph.
     pub fn from_source_graph(cc: &CreationContext<'_>, source_graph: SourceCodeGraph) -> Self {
+        // Apply OLED-optimized dark theme
+        Self::apply_oled_dark_theme(&cc.egui_ctx);
+
         let (petgraph, _id_to_idx) = source_graph.to_petgraph();
 
         // Convert to egui_graphs format (empty node/edge data for now)
@@ -169,6 +172,73 @@ impl VibeGraphApp {
             change_anim: ChangeIndicatorState::default(),
             changed_nodes: HashMap::new(),
         }
+    }
+
+    /// Apply OLED-optimized dark theme with true black background and vibrant colors.
+    fn apply_oled_dark_theme(ctx: &Context) {
+        let mut visuals = egui::Visuals::dark();
+
+        // True black background for OLED
+        visuals.panel_fill = egui::Color32::BLACK;
+        visuals.window_fill = egui::Color32::from_rgb(8, 8, 8);
+        visuals.extreme_bg_color = egui::Color32::BLACK;
+        visuals.faint_bg_color = egui::Color32::from_rgb(12, 12, 16);
+
+        // Vibrant accent colors
+        visuals.selection.bg_fill = egui::Color32::from_rgba_unmultiplied(0, 212, 255, 60);
+        visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 212, 255));
+
+        // Hyperlink color - electric cyan
+        visuals.hyperlink_color = egui::Color32::from_rgb(0, 212, 255);
+
+        // Widget styling for OLED
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(16, 16, 20);
+        visuals.widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(144, 144, 168));
+        visuals.widgets.noninteractive.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(26, 26, 36));
+
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(20, 20, 28);
+        visuals.widgets.inactive.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 180, 200));
+        visuals.widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 36, 48));
+
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(32, 32, 44);
+        visuals.widgets.hovered.fg_stroke =
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 45, 85));
+        visuals.widgets.hovered.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 45, 85));
+
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(40, 40, 56);
+        visuals.widgets.active.fg_stroke =
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(0, 212, 255));
+        visuals.widgets.active.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 212, 255));
+
+        visuals.widgets.open.bg_fill = egui::Color32::from_rgb(24, 24, 32);
+        visuals.widgets.open.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 220));
+
+        // Window shadows for depth on black (u8 values, [i8; 2] for offset)
+        visuals.popup_shadow = egui::epaint::Shadow {
+            offset: [4, 4],
+            blur: 12,
+            spread: 0,
+            color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180),
+        };
+
+        visuals.window_shadow = egui::epaint::Shadow {
+            offset: [6, 6],
+            blur: 16,
+            spread: 0,
+            color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200),
+        };
+
+        // Subtle window stroke
+        visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(26, 26, 40));
+
+        ctx.set_visuals(visuals);
     }
 
     /// Load graph from embedded data or return sample.
@@ -511,7 +581,7 @@ impl VibeGraphApp {
                 let mut dark = ui.ctx().style().visuals.dark_mode;
                 if ui.checkbox(&mut dark, "dark mode").changed() {
                     if dark {
-                        ui.ctx().set_visuals(egui::Visuals::dark());
+                        Self::apply_oled_dark_theme(ui.ctx());
                     } else {
                         ui.ctx().set_visuals(egui::Visuals::light());
                     }
@@ -562,18 +632,19 @@ impl VibeGraphApp {
                 if total == 0 {
                     ui.label(
                         egui::RichText::new("✓ No changes detected")
-                            .color(egui::Color32::from_rgb(100, 200, 100)),
+                            .color(egui::Color32::from_rgb(0, 255, 136)), // Electric green
                     );
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(format!("Total: {}", total));
                     });
 
+                    // OLED-optimized vibrant status colors
                     if modified > 0 {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Modified", modified))
-                                    .color(egui::Color32::from_rgb(255, 200, 50)),
+                                    .color(egui::Color32::from_rgb(255, 170, 0)), // Vibrant amber
                             );
                         });
                     }
@@ -581,7 +652,7 @@ impl VibeGraphApp {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Added", added))
-                                    .color(egui::Color32::from_rgb(100, 255, 100)),
+                                    .color(egui::Color32::from_rgb(0, 255, 136)), // Electric green
                             );
                         });
                     }
@@ -589,7 +660,7 @@ impl VibeGraphApp {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Deleted", deleted))
-                                    .color(egui::Color32::from_rgb(255, 100, 100)),
+                                    .color(egui::Color32::from_rgb(255, 68, 102)), // Hot coral
                             );
                         });
                     }
@@ -597,7 +668,7 @@ impl VibeGraphApp {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Untracked", untracked))
-                                    .color(egui::Color32::from_rgb(150, 150, 150)),
+                                    .color(egui::Color32::from_rgb(120, 140, 160)), // Subtle cyan-gray
                             );
                         });
                     }
@@ -628,26 +699,27 @@ impl VibeGraphApp {
                                 orphan_changes.len()
                             ))
                             .small()
-                            .color(egui::Color32::from_rgb(255, 180, 100)),
+                            .color(egui::Color32::from_rgb(255, 170, 0)), // Vibrant amber warning
                         );
                         egui::ScrollArea::vertical()
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 for change in orphan_changes.iter().take(10) {
+                                    // OLED-optimized vibrant colors
                                     let color = match change.kind {
                                         GitChangeKind::Modified => {
-                                            egui::Color32::from_rgb(255, 200, 50)
+                                            egui::Color32::from_rgb(255, 170, 0)
                                         }
                                         GitChangeKind::Added => {
-                                            egui::Color32::from_rgb(100, 255, 100)
+                                            egui::Color32::from_rgb(0, 255, 136)
                                         }
                                         GitChangeKind::Deleted => {
-                                            egui::Color32::from_rgb(255, 100, 100)
+                                            egui::Color32::from_rgb(255, 68, 102)
                                         }
                                         GitChangeKind::Untracked => {
-                                            egui::Color32::from_rgb(150, 150, 150)
+                                            egui::Color32::from_rgb(120, 140, 160)
                                         }
-                                        _ => egui::Color32::GRAY,
+                                        _ => egui::Color32::from_rgb(100, 100, 120),
                                     };
                                     let filename = change
                                         .path
@@ -985,28 +1057,32 @@ impl App for VibeGraphApp {
 
             // Note: Edge labels are disabled by not setting labels on edges (we use () for edge data)
             // Node labels are controlled by with_labels_always
+            // Vibrant OLED-optimized selection colors
             let settings_style = egui_graphs::SettingsStyle::new()
                 .with_labels_always(self.settings_style.labels_always)
                 .with_node_stroke_hook(move |selected, dragged, _color, _stroke, _style| {
                     if selected {
+                        // Electric cyan for selected nodes - pops on black
                         let color = if dark_mode {
-                            egui::Color32::from_rgb(0, 255, 255)
+                            egui::Color32::from_rgb(0, 212, 255)
                         } else {
                             egui::Color32::from_rgb(0, 150, 200)
                         };
                         egui::Stroke::new(3.0, color)
                     } else if dragged {
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 0))
+                        // Vibrant gold/amber for dragged
+                        egui::Stroke::new(2.5, egui::Color32::from_rgb(255, 204, 0))
                     } else {
                         egui::Stroke::NONE
                     }
                 })
                 .with_edge_stroke_hook(move |selected, _order, stroke, _style| {
                     if selected {
+                        // Hot magenta for selected edges
                         let color = if dark_mode {
-                            egui::Color32::from_rgb(255, 100, 255)
+                            egui::Color32::from_rgb(255, 45, 85)
                         } else {
-                            egui::Color32::from_rgb(200, 50, 200)
+                            egui::Color32::from_rgb(200, 50, 100)
                         };
                         egui::Stroke::new(3.0, color)
                     } else {

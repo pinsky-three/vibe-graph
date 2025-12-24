@@ -152,10 +152,17 @@ bump-auto: ## Bump patch versions for crates changed since last tag
 
 release: ## Publish crates to crates.io (dependency order)
 	@echo "Publishing workspace crates (dependency order)..."
+	@echo "1/5: vibe-graph-core"
 	cargo publish -p vibe-graph-core
+	@echo "2/5: vibe-graph-git"
 	cargo publish -p vibe-graph-git
+	@echo "3/5: vibe-graph-ops"
+	cargo publish -p vibe-graph-ops
+	@echo "4/5: vibe-graph-api"
 	cargo publish -p vibe-graph-api
+	@echo "5/5: vibe-graph-cli"
 	cargo publish -p vibe-graph-cli
+	@echo "✅ All crates published!"
 
 release-auto: bump-auto release ## Auto-bump (changed crates) then publish
 

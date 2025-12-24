@@ -8,19 +8,34 @@
 }
 
 :root {
-  --bg-primary: #0d0d14;
-  --bg-secondary: #14141f;
-  --bg-tertiary: #1a1a2e;
-  --text-primary: #e8e8f0;
-  --text-secondary: #8888a0;
-  --text-muted: #555566;
-  --accent-primary: #e94560;
-  --accent-secondary: #0f3460;
-  --accent-glow: rgba(233, 69, 96, 0.3);
-  --border-color: #2a2a3e;
-  --success: #4ade80;
-  --error: #f87171;
-  --warning: #fbbf24;
+  /* OLED-optimized: true black backgrounds for deep contrast */
+  --bg-primary: #000000;
+  --bg-secondary: #080808;
+  --bg-tertiary: #101014;
+  --bg-elevated: #161620;
+  
+  /* High-contrast text on black */
+  --text-primary: #f0f0f8;
+  --text-secondary: #9090a8;
+  --text-muted: #505068;
+  
+  /* Vibrant accent palette - neon/cyberpunk inspired */
+  --accent-primary: #ff2d55;      /* Hot pink/magenta */
+  --accent-secondary: #00d4ff;    /* Electric cyan */
+  --accent-tertiary: #b026ff;     /* Neon purple */
+  --accent-gold: #ffcc00;         /* Vibrant gold */
+  --accent-glow: rgba(255, 45, 85, 0.4);
+  --accent-glow-cyan: rgba(0, 212, 255, 0.3);
+  
+  /* Borders - subtle on true black */
+  --border-color: #1a1a24;
+  --border-glow: #2a2a40;
+  
+  /* Status colors - more saturated for OLED pop */
+  --success: #00ff88;
+  --error: #ff4466;
+  --warning: #ffaa00;
+  
   --topbar-height: 52px;
 }
 
@@ -70,8 +85,9 @@ body {
   justify-content: space-between;
   height: var(--topbar-height);
   padding: 0 16px;
-  background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+  background: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
+  box-shadow: 0 1px 0 0 rgba(255, 45, 85, 0.08);
   gap: 16px;
 }
 
@@ -96,15 +112,22 @@ body {
 
 .brand-icon {
   font-size: 20px;
-  color: var(--accent-primary);
-  text-shadow: 0 0 10px var(--accent-glow);
+  color: var(--accent-secondary);
+  text-shadow: 0 0 12px var(--accent-glow-cyan), 0 0 24px rgba(0, 212, 255, 0.2);
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 .brand-name {
-  background: linear-gradient(135deg, var(--accent-primary), #ff6b8a);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-tertiary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  text-shadow: 0 0 30px var(--accent-glow);
 }
 
 /* Center section - Path input and actions */
@@ -143,8 +166,9 @@ body {
 
 .topbar-path input:focus {
   outline: none;
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px var(--accent-glow);
+  border-color: var(--accent-secondary);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 2px var(--accent-glow-cyan), 0 0 16px rgba(0, 212, 255, 0.15);
 }
 
 .topbar-actions {
@@ -169,17 +193,19 @@ body {
 }
 
 .topbar-btn:hover:not(:disabled) {
-  background: var(--accent-secondary);
+  background: var(--bg-elevated);
   border-color: var(--accent-primary);
+  box-shadow: 0 0 12px var(--accent-glow), inset 0 0 8px rgba(255, 45, 85, 0.1);
   transform: translateY(-1px);
 }
 
 .topbar-btn:active:not(:disabled) {
   transform: translateY(0);
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .topbar-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -245,15 +271,17 @@ body {
 }
 
 .topbar-message.success {
-  background: rgba(74, 222, 128, 0.15);
+  background: rgba(0, 255, 136, 0.12);
   color: var(--success);
-  border: 1px solid rgba(74, 222, 128, 0.3);
+  border: 1px solid rgba(0, 255, 136, 0.3);
+  text-shadow: 0 0 8px rgba(0, 255, 136, 0.3);
 }
 
 .topbar-message.error {
-  background: rgba(248, 113, 113, 0.15);
+  background: rgba(255, 68, 102, 0.12);
   color: var(--error);
-  border: 1px solid rgba(248, 113, 113, 0.3);
+  border: 1px solid rgba(255, 68, 102, 0.3);
+  text-shadow: 0 0 8px rgba(255, 68, 102, 0.3);
 }
 
 /* =============================================================================
@@ -282,10 +310,11 @@ body {
 .loading-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #333;
-  border-top-color: #e94560;
+  border: 3px solid var(--bg-tertiary);
+  border-top-color: var(--accent-secondary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
+  box-shadow: 0 0 16px var(--accent-glow-cyan);
 }
 
 @keyframes spin {
@@ -296,7 +325,8 @@ body {
 
 /* Error state */
 .loading.error {
-  color: #e94560;
+  color: var(--error);
+  text-shadow: 0 0 12px rgba(255, 68, 102, 0.4);
 }
 
 .loading.error .loading-spinner {
