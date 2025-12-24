@@ -7,21 +7,258 @@
   box-sizing: border-box;
 }
 
+:root {
+  --bg-primary: #0d0d14;
+  --bg-secondary: #14141f;
+  --bg-tertiary: #1a1a2e;
+  --text-primary: #e8e8f0;
+  --text-secondary: #8888a0;
+  --text-muted: #555566;
+  --accent-primary: #e94560;
+  --accent-secondary: #0f3460;
+  --accent-glow: rgba(233, 69, 96, 0.3);
+  --border-color: #2a2a3e;
+  --success: #4ade80;
+  --error: #f87171;
+  --warning: #fbbf24;
+  --topbar-height: 52px;
+}
+
 html,
 body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #1a1a2e;
-  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg-primary);
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+  color: var(--text-primary);
 }
 
-/* Canvas takes full viewport */
+/* App layout */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Top bar container */
+#topbar-container {
+  flex-shrink: 0;
+}
+
+/* Canvas container */
+#canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Canvas takes remaining space */
 #vibe-graph-canvas {
   width: 100%;
   height: 100%;
   display: block;
 }
+
+/* =============================================================================
+   Top Bar Styles
+   ============================================================================= */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-height);
+  padding: 0 16px;
+  background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+  border-bottom: 1px solid var(--border-color);
+  gap: 16px;
+}
+
+.topbar.loading {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Left section - Brand */
+.topbar-left {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.brand-icon {
+  font-size: 20px;
+  color: var(--accent-primary);
+  text-shadow: 0 0 10px var(--accent-glow);
+}
+
+.brand-name {
+  background: linear-gradient(135deg, var(--accent-primary), #ff6b8a);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Center section - Path input and actions */
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  justify-content: center;
+}
+
+.topbar-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-path label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.topbar-path input {
+  width: 200px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.topbar-path input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.topbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.topbar-btn:hover:not(:disabled) {
+  background: var(--accent-secondary);
+  border-color: var(--accent-primary);
+  transform: translateY(-1px);
+}
+
+.topbar-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.topbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.topbar-btn .btn-icon {
+  font-size: 14px;
+}
+
+.topbar-btn .btn-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* Right section - Status and messages */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 300px;
+  justify-content: flex-end;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-item strong {
+  color: var(--text-primary);
+}
+
+.status-divider {
+  color: var(--border-color);
+}
+
+.status-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.topbar-message {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  max-width: 300px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.3s ease;
+}
+
+.topbar-message:empty {
+  display: none;
+}
+
+.topbar-message.success {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.topbar-message.error {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+/* =============================================================================
+   Loading Indicator (centered overlay)
+   ============================================================================= */
 
 /* Loading indicator */
 .loading {

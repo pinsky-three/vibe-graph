@@ -2,15 +2,17 @@
  * Vibe Graph Frontend - Entry Point
  *
  * This is a minimal TypeScript layer that:
- * 1. Fetches graph data from the REST API
- * 2. Sets it on window.VIBE_GRAPH_DATA for WASM to consume
- * 3. Initializes the WASM visualization
- * 4. Connects WebSocket for real-time updates
+ * 1. Renders the top bar with operations controls
+ * 2. Fetches graph data from the REST API
+ * 3. Sets it on window.VIBE_GRAPH_DATA for WASM to consume
+ * 4. Initializes the WASM visualization
+ * 5. Connects WebSocket for real-time updates
  */
 
 import { fetchGitChanges, fetchGraph } from "./api/client";
 import type { WsServerMessage } from "./api/types";
 import { connectWebSocket } from "./api/websocket";
+import { render as renderTopBar } from "./components/TopBar";
 
 // Get loading element
 function getLoadingElement(): HTMLElement | null {
@@ -60,7 +62,8 @@ function handleWsMessage(message: WsServerMessage): void {
       console.log(
         `[WS] Graph updated: ${message.node_count} nodes, ${message.edge_count} edges`
       );
-      // Could trigger a graph refresh here
+      // Dispatch event for refresh
+      window.dispatchEvent(new CustomEvent("vibe-graph-updated"));
       break;
 
     case "error":
@@ -78,6 +81,10 @@ function handleWsMessage(message: WsServerMessage): void {
  */
 async function main(): Promise<void> {
   try {
+    // 0. Render TopBar UI
+    renderTopBar("topbar-container");
+    console.log("[Main] TopBar rendered");
+
     // 1. Fetch graph data from API
     updateLoadingText("Fetching graph data...");
     const graph = await fetchGraph();

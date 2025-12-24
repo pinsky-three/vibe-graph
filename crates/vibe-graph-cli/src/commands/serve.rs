@@ -32,7 +32,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 use vibe_graph_api::WsServerMessage;
-use vibe_graph_api::{create_api_router, create_api_state_with_changes};
+use vibe_graph_api::{create_api_state_with_changes, create_full_api_router};
 use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
@@ -137,8 +137,8 @@ pub async fn execute(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Create API router (mounted at /api)
-    let api_router = create_api_router(api_state.clone());
+    // Create full API router (mounted at /api) - includes ops routes
+    let api_router = create_full_api_router(api_state.clone(), ctx);
 
     // Background git poller: keeps /api/git/changes fresh and pushes WS updates.
     //
