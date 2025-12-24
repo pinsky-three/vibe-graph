@@ -298,6 +298,7 @@ impl VibeGraphApp {
         CollapsingHeader::new("Navigation")
             .default_open(true)
             .show(ui, |ui| {
+                // Mutually exclusive: fit_to_screen vs zoom_and_pan
                 ui.horizontal(|ui| {
                     if ui
                         .checkbox(
@@ -305,9 +306,9 @@ impl VibeGraphApp {
                             "fit_to_screen",
                         )
                         .clicked()
+                        && self.settings_navigation.fit_to_screen_enabled
                     {
-                        self.settings_navigation.zoom_and_pan_enabled =
-                            !self.settings_navigation.zoom_and_pan_enabled;
+                        self.settings_navigation.zoom_and_pan_enabled = false;
                     }
                     Self::info_icon(ui, "Auto-fit graph to viewport");
                 });
@@ -331,9 +332,9 @@ impl VibeGraphApp {
                             "zoom_and_pan",
                         )
                         .clicked()
+                        && self.settings_navigation.zoom_and_pan_enabled
                     {
-                        self.settings_navigation.fit_to_screen_enabled =
-                            !self.settings_navigation.fit_to_screen_enabled;
+                        self.settings_navigation.fit_to_screen_enabled = false;
                     }
                     Self::info_icon(ui, "Manual zoom and pan");
                 });

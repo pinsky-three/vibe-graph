@@ -88,8 +88,9 @@ pub struct SettingsNavigation {
 impl Default for SettingsNavigation {
     fn default() -> Self {
         Self {
+            // Mutually exclusive: only one should be true
             fit_to_screen_enabled: true,
-            zoom_and_pan_enabled: true,
+            zoom_and_pan_enabled: false,
             zoom_speed: 0.02,
             fit_to_screen_padding: 0.01,
         }
