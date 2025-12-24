@@ -322,19 +322,19 @@ export function load_graph_json(json) {
     }
 }
 
-function wasm_bindgen__convert__closures_____invoke__h9caac9d2d7e58200(arg0, arg1) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h9caac9d2d7e58200(arg0, arg1);
-    if (ret[1]) {
-        throw takeFromExternrefTable0(ret[0]);
-    }
-}
-
 function wasm_bindgen__convert__closures_____invoke__h540e1b079158c7c3(arg0, arg1, arg2) {
     wasm.wasm_bindgen__convert__closures_____invoke__h540e1b079158c7c3(arg0, arg1, arg2);
 }
 
 function wasm_bindgen__convert__closures_____invoke__h3ff59a8275a8e732(arg0, arg1, arg2) {
     wasm.wasm_bindgen__convert__closures_____invoke__h3ff59a8275a8e732(arg0, arg1, arg2);
+}
+
+function wasm_bindgen__convert__closures_____invoke__h9caac9d2d7e58200(arg0, arg1) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h9caac9d2d7e58200(arg0, arg1);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
 }
 
 const __wbindgen_enum_ResizeObserverBoxOptions = ["border-box", "content-box", "device-pixel-content-box"];
