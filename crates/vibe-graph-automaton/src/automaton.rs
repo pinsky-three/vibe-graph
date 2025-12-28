@@ -16,7 +16,7 @@ use crate::state::StateData;
 use crate::temporal::{SourceCodeTemporalGraph, TemporalGraph, TemporalNode};
 
 /// Configuration for the automaton.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AutomatonConfig {
     /// Maximum ticks before forcing stop.
     pub max_ticks: usize,
@@ -68,7 +68,7 @@ impl AutomatonConfig {
 }
 
 /// Result of a single tick.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TickResult {
     /// Tick number (0-indexed).
     pub tick: u64,
@@ -281,6 +281,11 @@ impl GraphAutomaton {
     /// Get tick history.
     pub fn tick_history(&self) -> &[TickResult] {
         &self.tick_history
+    }
+
+    /// Get the automaton configuration.
+    pub fn config(&self) -> &AutomatonConfig {
+        &self.config
     }
 
     /// Execute a single tick.

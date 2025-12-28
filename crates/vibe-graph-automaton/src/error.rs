@@ -41,5 +41,9 @@ pub enum AutomatonError {
     /// Graph construction error.
     #[error("graph construction error: {message}")]
     GraphConstruction { message: String },
+
+    /// I/O error (file operations).
+    #[error("i/o error: {0}")]
+    Io(#[from] std::io::Error),
 }
 

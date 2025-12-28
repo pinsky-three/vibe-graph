@@ -179,7 +179,7 @@ pub trait TemporalGraph {
 }
 
 /// Implementation of `TemporalGraph` backed by `SourceCodeGraph`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceCodeTemporalGraph {
     /// The underlying structural graph.
     pub source_graph: SourceCodeGraph,

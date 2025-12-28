@@ -35,6 +35,7 @@
 
 mod automaton;
 mod error;
+pub mod persistence;
 mod rule;
 mod source_code;
 mod state;
@@ -55,6 +56,12 @@ pub use rule::{
 };
 pub use state::{EvolutionaryState, StateData, Transition, TransitionBuilder};
 pub use temporal::{Neighborhood as TemporalNeighborhood, TemporalGraph, TemporalNode};
+
+// Persistence
+pub use persistence::{
+    AutomatonMetadata, AutomatonStore, PersistedState, PersistedTickHistory, SnapshotInfo,
+    StoreStats, SELF_DIR,
+};
 
 // Source code specific extensions
 pub use source_code::{
