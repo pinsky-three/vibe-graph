@@ -18,7 +18,13 @@ mod selection;
 mod settings;
 mod ui;
 
+#[cfg(feature = "automaton")]
+pub mod automaton_app;
+
 pub use app::VibeGraphApp;
+
+#[cfg(feature = "automaton")]
+pub use automaton_app::AutomatonVizApp;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

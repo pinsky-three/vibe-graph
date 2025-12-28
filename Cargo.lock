@@ -5522,6 +5522,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing-subscriber",
+ "vibe-graph-automaton",
  "vibe-graph-core",
  "wasm-bindgen",
  "wasm-bindgen-futures",
