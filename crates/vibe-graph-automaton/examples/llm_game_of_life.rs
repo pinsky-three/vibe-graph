@@ -412,11 +412,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Save snapshot every 5 generations
-        if gen > 0 && gen % 5 == 0 {
-            automaton.snapshot(&store, Some(format!("gen_{}", gen)))?;
-            println!("  📸 Snapshot saved");
-        }
+        // Save snapshot every generation (LLM calls are expensive!)
+        automaton.snapshot(&store, Some(format!("gen_{}", gen)))?;
+        println!("  📸 Snapshot saved");
 
         // Stop if stable
         if tick_result.transitions == 0 && tick_result.errors == 0 {
