@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/vibe-graph-core",
+  "crates/vibe-graph-automaton",
   "crates/vibe-graph-ssot",
   "crates/vibe-graph-semantic",
   "crates/vibe-graph-llmca",

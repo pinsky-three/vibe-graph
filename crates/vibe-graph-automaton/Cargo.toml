@@ -1,0 +1,32 @@
+[package]
+name = "vibe-graph-automaton"
+version = "0.1.0"
+edition.workspace = true
+description = "Foundational graph automaton with temporal state evolution and rule-driven transitions"
+license = "MIT"
+repository = "https://github.com/pinsky-three/vibe-graph"
+keywords = ["automaton", "graph", "cellular-automata", "state-machine", "temporal"]
+categories = ["data-structures", "simulation"]
+
+[features]
+default = []
+llm = ["rig-core", "tokio", "async-trait", "toml", "futures", "rand"]
+
+[dependencies]
+vibe-graph-core = { path = "../vibe-graph-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# LLM runner dependencies (optional)
+rig-core = { version = "0.11", optional = true }
+tokio = { workspace = true, optional = true }
+async-trait = { version = "0.1", optional = true }
+toml = { version = "0.8", optional = true }
+futures = { version = "0.3", optional = true }
+rand = { version = "0.9", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
