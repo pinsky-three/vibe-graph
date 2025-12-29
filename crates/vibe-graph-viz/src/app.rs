@@ -24,6 +24,9 @@ use crate::settings::{
 };
 use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
 
+#[cfg(feature = "automaton")]
+use crate::automaton_mode::AutomatonMode;
+
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
 type ForceState = FruchtermanReingoldWithCenterGravityState;
@@ -74,6 +77,11 @@ pub struct VibeGraphApp {
     original_edge_labels: HashMap<petgraph::stable_graph::EdgeIndex, String>,
     /// Whether layout has been initialized with custom defaults
     layout_initialized: bool,
+    /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
+    node_id_to_egui: HashMap<u64, NodeIndex>,
+    /// Automaton mode state (temporal evolution visualization)
+    #[cfg(feature = "automaton")]
+    automaton_mode: AutomatonMode,
 }
 
 impl VibeGraphApp {
@@ -95,7 +103,7 @@ impl VibeGraphApp {
         // Apply OLED-optimized dark theme
         Self::apply_oled_dark_theme(&cc.egui_ctx);
 
-        let (petgraph, _id_to_idx) = source_graph.to_petgraph();
+        let (petgraph, id_to_idx) = source_graph.to_petgraph();
 
         // Convert to egui_graphs format (empty node/edge data for now)
         let mut empty_graph = StableDiGraph::<(), ()>::new();
@@ -175,6 +183,21 @@ impl VibeGraphApp {
 
         let dark_mode = cc.egui_ctx.style().visuals.dark_mode;
 
+        // Build mapping from node ID (u64) to egui NodeIndex
+        let mut node_id_to_egui = HashMap::new();
+        for (node_id, petgraph_idx) in &id_to_idx {
+            if let Some(&egui_idx) = petgraph_to_egui.get(petgraph_idx) {
+                node_id_to_egui.insert(node_id.0, egui_idx);
+            }
+        }
+
+        #[cfg(feature = "automaton")]
+        let automaton_mode = {
+            let mut mode = AutomatonMode::default();
+            mode.set_node_mapping(node_id_to_egui.clone());
+            mode
+        };
+
         Self {
             g: egui_graph,
             settings_interaction: SettingsInteraction::default(),
@@ -195,6 +218,9 @@ impl VibeGraphApp {
             original_node_labels,
             original_edge_labels,
             layout_initialized: false,
+            node_id_to_egui,
+            #[cfg(feature = "automaton")]
+            automaton_mode,
         }
     }
 
@@ -340,6 +366,24 @@ impl VibeGraphApp {
     pub fn update_git_changes(&mut self, snapshot: GitChangeSnapshot) {
         self.git_changes = snapshot;
         self.refresh_changed_nodes();
+    }
+
+    /// Set the automaton data path and initialize automaton mode.
+    ///
+    /// The path should point to the project root containing `.self/automaton/`.
+    #[cfg(feature = "automaton")]
+    pub fn set_automaton_path(&mut self, path: PathBuf) {
+        let store_path = path.join(".self");
+        self.automaton_mode = AutomatonMode::with_path(store_path);
+        self.automaton_mode
+            .set_node_mapping(self.node_id_to_egui.clone());
+    }
+
+    /// Enable automaton mode and load snapshots.
+    #[cfg(feature = "automaton")]
+    pub fn enable_automaton_mode(&mut self) {
+        self.automaton_mode.enabled = true;
+        self.automaton_mode.refresh();
     }
 
     /// Refresh the cached set of changed node indices.
@@ -1067,8 +1111,24 @@ impl App for VibeGraphApp {
         self.change_anim.enabled = self.settings_style.change_indicators;
         self.change_anim.tick(dt);
 
+        // Advance automaton playback (when enabled)
+        #[cfg(feature = "automaton")]
+        if self.automaton_mode.enabled && self.automaton_mode.playing {
+            if self.automaton_mode.tick(dt) {
+                ctx.request_repaint();
+            }
+        }
+
         // Request continuous repaint for animations
-        if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
+        let mut needs_repaint =
+            self.settings_style.change_indicators && !self.changed_nodes.is_empty();
+
+        #[cfg(feature = "automaton")]
+        if self.automaton_mode.enabled && self.automaton_mode.playing {
+            needs_repaint = true;
+        }
+
+        if needs_repaint {
             ctx.request_repaint();
         }
 
@@ -1120,6 +1180,21 @@ impl App for VibeGraphApp {
                     needs_neighborhood_update = true;
                 }
             }
+
+            // Automaton mode toggle (A key)
+            #[cfg(feature = "automaton")]
+            if i.key_pressed(egui::Key::A) && !i.modifiers.any() {
+                self.automaton_mode.enabled = !self.automaton_mode.enabled;
+                if self.automaton_mode.enabled && self.automaton_mode.snapshots.is_empty() {
+                    self.automaton_mode.refresh();
+                }
+            }
+
+            // Automaton playback controls (Space to play/pause when automaton mode is enabled)
+            #[cfg(feature = "automaton")]
+            if self.automaton_mode.enabled && i.key_pressed(egui::Key::Space) {
+                self.automaton_mode.playing = !self.automaton_mode.playing;
+            }
         });
 
         if needs_neighborhood_update {
@@ -1154,6 +1229,13 @@ impl App for VibeGraphApp {
                         ui.separator();
 
                         self.ui_selected(ui);
+
+                        // Automaton mode panel (when feature enabled)
+                        #[cfg(feature = "automaton")]
+                        {
+                            ui.separator();
+                            self.automaton_mode.ui_panel(ui);
+                        }
                     });
                 });
         }
@@ -1263,6 +1345,34 @@ impl App for VibeGraphApp {
                                 &self.change_anim,
                                 self.dark_mode,
                             );
+                        }
+                    }
+                }
+            }
+
+            // Draw automaton activation overlays when enabled
+            #[cfg(feature = "automaton")]
+            if self.automaton_mode.enabled && !self.automaton_mode.activations.is_empty() {
+                let painter = ui.painter();
+                let meta = MetadataFrame::new(None).load(ui);
+                let graph_rect = graph_response.rect;
+
+                for (&node_id, &activation) in &self.automaton_mode.activations {
+                    if let Some(&egui_idx) = self.node_id_to_egui.get(&node_id) {
+                        if let Some(node) = self.g.node(egui_idx) {
+                            let canvas_pos = node.location();
+                            let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
+                            let screen_pos = egui::pos2(
+                                widget_relative.x + graph_rect.min.x,
+                                widget_relative.y + graph_rect.min.y,
+                            );
+
+                            if graph_rect.contains(screen_pos) {
+                                let radius = 10.0 + activation as f32 * 4.0;
+                                let color =
+                                    AutomatonMode::activation_color(activation, self.dark_mode);
+                                painter.circle_filled(screen_pos, radius, color);
+                            }
                         }
                     }
                 }

@@ -11,6 +11,8 @@
 //! - `settings` - UI settings structures
 //! - `ui` - Overlay rendering (lasso, indicators)
 //! - `sample` - Sample graph generation
+//! - `automaton_mode` - Temporal state visualization mode (requires `automaton` feature)
+//! - `automaton_app` - Standalone automaton visualization app (requires `automaton` feature)
 
 mod app;
 mod sample;
@@ -21,10 +23,16 @@ mod ui;
 #[cfg(feature = "automaton")]
 pub mod automaton_app;
 
+#[cfg(feature = "automaton")]
+pub mod automaton_mode;
+
 pub use app::VibeGraphApp;
 
 #[cfg(feature = "automaton")]
 pub use automaton_app::AutomatonVizApp;
+
+#[cfg(feature = "automaton")]
+pub use automaton_mode::AutomatonMode;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

@@ -5,3 +5,6 @@ pub mod config;
 pub mod embedded_frontend;
 pub mod remote;
 pub mod serve;
+
+#[cfg(feature = "native-viz")]
+pub mod viz;

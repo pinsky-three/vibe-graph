@@ -25,6 +25,13 @@ embedded-viz = []
 # It cannot be enabled via crates.io install.
 # Build with: make build-release (or: pnpm --prefix frontend build && cargo build --release --features embedded-frontend)
 embedded-frontend = ["rust-embed"]
+# Native egui visualization with automaton temporal state viewer
+# Build with: cargo build --release --features native-viz
+native-viz = [
+    "vibe-graph-viz/native",
+    "vibe-graph-viz/automaton",
+    "eframe/default",
+]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -46,6 +53,8 @@ vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.0", path = "../vibe-graph-ops" }
 vibe-graph-api = { version = "0.2.0", path = "../vibe-graph-api" }
 vibe-graph-git = { version = "0.2.0", path = "../vibe-graph-git" }
+vibe-graph-viz = { path = "../vibe-graph-viz", optional = true }
+eframe = { workspace = true, optional = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 rust-embed = { version = "8", optional = true }

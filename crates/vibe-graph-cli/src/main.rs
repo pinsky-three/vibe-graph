@@ -175,6 +175,32 @@ enum Commands {
         frontend_dir: Option<PathBuf>,
     },
 
+    /// Launch native egui visualization (requires --features native-viz).
+    ///
+    /// Opens a native desktop window with the graph visualization.
+    /// Supports automaton mode to visualize temporal state evolution.
+    ///
+    /// Examples:
+    ///   vg viz                           # current directory
+    ///   vg viz ./my-project              # specific project
+    ///   vg viz --automaton               # enable automaton mode
+    ///
+    /// Keyboard shortcuts:
+    ///   A     - Toggle automaton mode
+    ///   Space - Play/pause timeline (in automaton mode)
+    ///   Tab   - Toggle sidebar
+    ///   L     - Toggle lasso selection
+    #[cfg(feature = "native-viz")]
+    Viz {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Enable automaton mode for temporal state visualization.
+        #[arg(short, long)]
+        automaton: bool,
+    },
+
     /// Clean the .self folder.
     Clean {
         /// Path to workspace (defaults to current directory).
@@ -505,6 +531,11 @@ async fn main() -> Result<()> {
         } => {
             // Serve still uses the internal implementation for now
             commands::serve::execute(&cli_config, &path, port, wasm_dir, frontend_dir).await?;
+        }
+
+        #[cfg(feature = "native-viz")]
+        Commands::Viz { path, automaton } => {
+            commands::viz::execute(&path, automaton)?;
         }
 
         Commands::Clean { path } => {

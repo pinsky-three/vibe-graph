@@ -43,7 +43,8 @@ pub struct AutomatonVizApp {
     grid_cell_size: f32,
     /// Show sidebar
     show_sidebar: bool,
-    /// Selected node for detail view
+    /// Selected node for detail view (reserved for future use)
+    #[allow(dead_code)]
     selected_node: Option<NodeIndex>,
     /// Playback state
     playing: bool,
@@ -452,7 +453,6 @@ impl App for AutomatonVizApp {
         // Main graph area
         egui::CentralPanel::default().show(ctx, |ui| {
             // Custom node coloring based on activation
-            let activations = self.activations.clone();
             let dark_mode = self.dark_mode;
 
             let settings_style = egui_graphs::SettingsStyle::new()

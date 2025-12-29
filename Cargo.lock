@@ -5373,6 +5373,7 @@ dependencies = [
  "clap",
  "directories",
  "dotenvy",
+ "eframe",
  "file-format",
  "git2",
  "humansize",
@@ -5390,6 +5391,7 @@ dependencies = [
  "vibe-graph-core",
  "vibe-graph-git",
  "vibe-graph-ops",
+ "vibe-graph-viz",
  "walkdir",
 ]
 
