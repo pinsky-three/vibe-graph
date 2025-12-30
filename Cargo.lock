@@ -5388,6 +5388,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vibe-graph-api",
+ "vibe-graph-automaton",
  "vibe-graph-core",
  "vibe-graph-git",
  "vibe-graph-ops",

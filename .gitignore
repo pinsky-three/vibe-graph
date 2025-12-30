@@ -6,3 +6,5 @@
 output/
 .self/
 node_modules
+crates/vibe-graph-automaton/examples/run_llm_gol.sh
+crates/vibe-graph-viz/examples/run_automaton_viz.sh

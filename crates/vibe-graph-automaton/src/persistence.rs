@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::automaton::{AutomatonConfig, TickResult};
+use crate::config::AutomatonDescription;
 use crate::error::AutomatonResult;
 use crate::temporal::SourceCodeTemporalGraph;
 use crate::GraphAutomaton;
@@ -36,6 +37,7 @@ const AUTOMATON_DIR: &str = "automaton";
 /// File names within the automaton directory.
 const STATE_FILE: &str = "state.json";
 const CONFIG_FILE: &str = "config.json";
+const DESCRIPTION_FILE: &str = "description.json";
 const TICK_HISTORY_FILE: &str = "tick_history.json";
 const SNAPSHOTS_DIR: &str = "snapshots";
 
@@ -237,6 +239,58 @@ impl AutomatonStore {
 
         debug!(path = %config_path.display(), "Loaded automaton config");
         Ok(Some(config))
+    }
+
+    // =========================================================================
+    // Description Persistence (Generated/Inferred Config)
+    // =========================================================================
+
+    /// Save automaton description (generated or inferred config).
+    pub fn save_description(&self, description: &AutomatonDescription) -> AutomatonResult<PathBuf> {
+        self.init()?;
+
+        let description_path = self.automaton_dir.join(DESCRIPTION_FILE);
+        let json = serde_json::to_string_pretty(description)?;
+        std::fs::write(&description_path, &json)?;
+
+        info!(
+            path = %description_path.display(),
+            name = %description.meta.name,
+            nodes = description.nodes.len(),
+            rules = description.rules.len(),
+            "Saved automaton description"
+        );
+        Ok(description_path)
+    }
+
+    /// Load automaton description.
+    pub fn load_description(&self) -> AutomatonResult<Option<AutomatonDescription>> {
+        let description_path = self.automaton_dir.join(DESCRIPTION_FILE);
+
+        if !description_path.exists() {
+            return Ok(None);
+        }
+
+        let json = std::fs::read_to_string(&description_path)?;
+        let description: AutomatonDescription = serde_json::from_str(&json)?;
+
+        info!(
+            path = %description_path.display(),
+            name = %description.meta.name,
+            nodes = description.nodes.len(),
+            "Loaded automaton description"
+        );
+        Ok(Some(description))
+    }
+
+    /// Check if a description file exists.
+    pub fn has_description(&self) -> bool {
+        self.automaton_dir.join(DESCRIPTION_FILE).exists()
+    }
+
+    /// Get the path to the description file.
+    pub fn description_path(&self) -> PathBuf {
+        self.automaton_dir.join(DESCRIPTION_FILE)
     }
 
     // =========================================================================
@@ -665,5 +719,40 @@ mod tests {
         assert!(store.has_state());
         assert!(store.automaton_dir.join(CONFIG_FILE).exists());
         assert!(store.automaton_dir.join(TICK_HISTORY_FILE).exists());
+    }
+
+    #[test]
+    fn test_save_and_load_description() {
+        use crate::config::{NodeConfig, RuleConfig};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = AutomatonStore::new(temp_dir.path());
+
+        // Create a description
+        let mut description = AutomatonDescription::new("test-project");
+        description.add_node(
+            NodeConfig::file(1, "src/main.rs")
+                .with_stability(1.0)
+                .with_rule("entry_point"),
+        );
+        description.add_node(
+            NodeConfig::directory(2, "src/")
+                .with_stability(0.9)
+                .with_rule("source_root"),
+        );
+        description.add_rule(RuleConfig::builtin("identity"));
+        description.add_rule(RuleConfig::llm("entry_point", "You are the entry point."));
+
+        // Save
+        store.save_description(&description).unwrap();
+        assert!(store.has_description());
+
+        // Load
+        let loaded = store.load_description().unwrap().unwrap();
+        assert_eq!(loaded.meta.name, "test-project");
+        assert_eq!(loaded.nodes.len(), 2);
+        assert_eq!(loaded.rules.len(), 2);
+        assert_eq!(loaded.effective_stability(1), 1.0);
+        assert_eq!(loaded.effective_rule(1), "entry_point");
     }
 }

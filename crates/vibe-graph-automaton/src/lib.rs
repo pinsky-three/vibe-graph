@@ -34,6 +34,8 @@
 //! - `llm` - Enable LLM-powered rules using the [Rig](https://github.com/0xPlaygrounds/rig) library
 
 mod automaton;
+pub mod config;
+pub mod description;
 mod error;
 pub mod persistence;
 mod rule;
@@ -62,6 +64,18 @@ pub use persistence::{
     AutomatonMetadata, AutomatonStore, PersistedState, PersistedTickHistory, SnapshotInfo,
     StoreStats, SELF_DIR,
 };
+
+// Configuration
+pub use config::{
+    AutomatonDescription, ConfigDefaults, ConfigMeta, ConfigSource, InheritanceMode, LocalRules,
+    NodeConfig, NodeKind, RuleConfig, RuleType,
+};
+
+// Description generation and inference
+pub use description::{DescriptionGenerator, GeneratorConfig, NodeClassification, StabilityCalculator};
+
+#[cfg(feature = "llm")]
+pub use description::{DescriptionInferencer, InferencerConfig, StructuralFeatures};
 
 // Source code specific extensions
 pub use source_code::{

@@ -208,6 +208,10 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Work with automaton descriptions (generate, infer, run).
+    #[command(subcommand)]
+    Automaton(AutomatonCommands),
+
     /// Work with remote GitHub organizations.
     #[command(subcommand)]
     Remote(RemoteCommands),
@@ -219,6 +223,61 @@ enum Commands {
     /// Show workspace status and info.
     Status {
         /// Path to check (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+/// Automaton description commands.
+#[derive(Subcommand, Debug)]
+enum AutomatonCommands {
+    /// Generate an automaton description from the source code graph.
+    ///
+    /// Analyzes the graph structure to compute stability values and assign rules
+    /// based on node classification (entry points, hubs, utilities, sinks).
+    ///
+    /// Examples:
+    ///   vg automaton generate                  # current directory
+    ///   vg automaton generate ./my-project     # specific project
+    ///   vg automaton generate --llm-rules      # generate LLM rule prompts
+    Generate {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Generate LLM rule prompts for key nodes.
+        #[arg(long)]
+        llm_rules: bool,
+
+        /// Output description to a specific file (defaults to .self/automaton/description.json).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Infer an automaton description using hybrid structural + LLM analysis.
+    ///
+    /// Requires LLM environment variables: OPENAI_API_URL, OPENAI_API_KEY, OPENAI_MODEL_NAME
+    ///
+    /// Examples:
+    ///   vg automaton infer                     # current directory
+    ///   vg automaton infer ./my-project        # specific project
+    Infer {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Maximum number of nodes to infer rules for.
+        #[arg(long, default_value = "50")]
+        max_nodes: usize,
+
+        /// Output description to a specific file (defaults to .self/automaton/description.json).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Show the current automaton description.
+    Show {
+        /// Path to workspace (defaults to current directory).
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -547,6 +606,10 @@ async fn main() -> Result<()> {
             } else {
                 println!("No .self folder found");
             }
+        }
+
+        Commands::Automaton(automaton_cmd) => {
+            commands::automaton::execute(&ctx, automaton_cmd).await?;
         }
 
         Commands::Remote(remote_cmd) => {

@@ -239,4 +239,3 @@ mod file_format_serde {
         })
     }
 }
-

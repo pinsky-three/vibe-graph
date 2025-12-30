@@ -32,6 +32,9 @@ native-viz = [
     "vibe-graph-viz/automaton",
     "eframe/default",
 ]
+# Enable LLM-based automaton inference
+# Build with: cargo build --release --features llm-inference
+llm-inference = ["vibe-graph-automaton/llm"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -53,6 +56,7 @@ vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.0", path = "../vibe-graph-ops" }
 vibe-graph-api = { version = "0.2.0", path = "../vibe-graph-api" }
 vibe-graph-git = { version = "0.2.0", path = "../vibe-graph-git" }
+vibe-graph-automaton = { path = "../vibe-graph-automaton" }
 vibe-graph-viz = { path = "../vibe-graph-viz", optional = true }
 eframe = { workspace = true, optional = true }
 axum = { workspace = true }

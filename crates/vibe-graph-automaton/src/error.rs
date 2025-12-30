@@ -45,5 +45,9 @@ pub enum AutomatonError {
     /// I/O error (file operations).
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// LLM operation error.
+    #[error("llm error: {0}")]
+    LlmError(String),
 }
 

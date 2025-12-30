@@ -1,5 +1,6 @@
 //! CLI command implementations.
 
+pub mod automaton;
 pub mod compose;
 pub mod config;
 pub mod embedded_frontend;
