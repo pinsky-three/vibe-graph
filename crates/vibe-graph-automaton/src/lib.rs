@@ -47,6 +47,10 @@ mod temporal;
 #[cfg(feature = "llm")]
 pub mod llm_runner;
 
+// Test fixtures (only for tests)
+#[cfg(test)]
+pub mod test_fixtures;
+
 pub use automaton::{
     ActivationConvergenceHeuristic, AutomatonConfig, GraphAutomaton, StabilityHeuristic,
     TickResult, TransitionRateHeuristic,

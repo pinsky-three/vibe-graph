@@ -2,7 +2,7 @@
 //!
 //! Commands for generating, inferring, and managing automaton descriptions.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -33,11 +33,11 @@ pub async fn execute(ctx: &OpsContext, cmd: AutomatonCommands) -> Result<()> {
 /// Generate an automaton description from the source code graph.
 async fn generate(
     ctx: &OpsContext,
-    path: &PathBuf,
+    path: &Path,
     llm_rules: bool,
     output: Option<PathBuf>,
 ) -> Result<()> {
-    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     // Ensure graph exists
     let ops_store = Store::new(&path);
@@ -122,7 +122,7 @@ async fn generate(
 #[allow(unused_variables)]
 async fn infer(
     ctx: &OpsContext,
-    path: &PathBuf,
+    path: &Path,
     max_nodes: usize,
     output: Option<PathBuf>,
 ) -> Result<()> {
@@ -133,7 +133,7 @@ async fn infer(
         println!();
         println!("💡 Alternatively, use 'vg automaton generate --llm-rules' to generate");
         println!("   LLM rule prompts without actual inference.");
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(feature = "llm-inference")]
@@ -203,8 +203,8 @@ async fn infer(
 }
 
 /// Show the current automaton description.
-fn show(path: &PathBuf) -> Result<()> {
-    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+fn show(path: &Path) -> Result<()> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = AutomatonStore::new(&path);
 
     if !store.has_description() {
