@@ -3,8 +3,6 @@
 //! Run with: cargo run --example native --features native
 //! With automaton mode: cargo run --example native --features "native,automaton" -- --automaton-path /path/to/project
 
-use std::path::PathBuf;
-
 use eframe::{run_native, NativeOptions};
 use vibe_graph_viz::VibeGraphApp;
 
@@ -24,7 +22,7 @@ fn main() -> eframe::Result<()> {
 
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
-    let mut automaton_path: Option<PathBuf> = None;
+    // let mut automaton_path: Option<PathBuf> = None;
     let mut enable_automaton = false;
 
     let mut i = 1;
@@ -32,7 +30,7 @@ fn main() -> eframe::Result<()> {
         match args[i].as_str() {
             "--automaton-path" | "-a" => {
                 if i + 1 < args.len() {
-                    automaton_path = Some(PathBuf::from(&args[i + 1]));
+                    // automaton_path = Some(PathBuf::from(&args[i + 1]));
                     enable_automaton = true;
                     i += 2;
                 } else {
@@ -81,7 +79,7 @@ fn main() -> eframe::Result<()> {
     };
 
     #[allow(unused_mut)]
-    let automaton_path_clone = automaton_path.clone();
+    // let automaton_path_clone = automaton_path.clone();
     #[allow(unused_variables)]
     let enable_automaton_flag = enable_automaton;
 
@@ -89,7 +87,7 @@ fn main() -> eframe::Result<()> {
         "Vibe Graph Viz",
         options,
         Box::new(move |cc| {
-            let mut app = VibeGraphApp::new(cc);
+            let app = VibeGraphApp::new(cc);
 
             #[cfg(feature = "automaton")]
             {
