@@ -27,7 +27,7 @@ use tokio::time::{interval, Duration};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use vibe_graph_api::WsServerMessage;
-use vibe_graph_api::{create_api_state_with_changes, create_full_api_router};
+use vibe_graph_api::{create_api_state_with_changes, create_full_api_router_with_git};
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
 
@@ -185,8 +185,8 @@ pub async fn execute(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Create full API router (mounted at /api) - includes ops routes
-    let api_router = create_full_api_router(api_state.clone(), ctx);
+    // Create full API router (mounted at /api) - includes ops routes and git commands
+    let api_router = create_full_api_router_with_git(api_state.clone(), ctx, path.clone());
 
     // Build main router with embedded assets
     // Serve WASM from both root and /wasm/ for backwards compatibility
@@ -206,6 +206,7 @@ pub async fn execute(
     println!("🚀 Vibe Graph Server");
     println!("   URL: http://localhost:{}", port);
     println!("   API: http://localhost:{}/api/health", port);
+    println!("   Git: http://localhost:{}/api/git/cmd/branches", port);
     println!();
     println!("   Press Ctrl+C to stop");
     println!();

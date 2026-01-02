@@ -26,6 +26,16 @@
 //! - `DELETE /api/ops/clean?path=...` - Clean .self folder
 //! - `GET /api/ops/git-changes?path=...` - Get git changes
 //!
+//! ### Git Commands API (for executing git operations)
+//!
+//! - `POST /api/git/cmd/add` - Stage files
+//! - `POST /api/git/cmd/commit` - Create commit
+//! - `POST /api/git/cmd/reset` - Unstage files
+//! - `GET /api/git/cmd/branches` - List branches
+//! - `POST /api/git/cmd/checkout` - Switch branch
+//! - `GET /api/git/cmd/log` - Commit history
+//! - `GET /api/git/cmd/diff` - Get diff
+//!
 //! ## Usage
 //!
 //! ```rust,no_run
@@ -47,7 +57,10 @@ mod routes;
 mod types;
 mod ws;
 
-pub use routes::{create_api_router, create_full_api_router, create_ops_router};
+pub use routes::{
+    create_api_router, create_full_api_router, create_full_api_router_with_git,
+    create_git_commands_router, create_ops_router,
+};
 pub use types::{ApiResponse, ApiState, WsClientMessage, WsServerMessage};
 
 use std::sync::Arc;

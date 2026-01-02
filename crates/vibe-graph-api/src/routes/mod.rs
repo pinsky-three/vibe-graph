@@ -1,10 +1,11 @@
 //! API route handlers.
 
-mod git;
+pub mod git;
 mod graph;
 mod health;
 pub mod ops;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -18,6 +19,7 @@ use vibe_graph_ops::OpsContext;
 
 use crate::types::ApiState;
 use crate::ws::ws_handler;
+use git::GitOpsState;
 use ops::OpsState;
 
 /// Create the API router with all endpoints.
@@ -94,6 +96,52 @@ pub fn create_ops_router(ctx: OpsContext) -> Router {
         .with_state(state)
 }
 
+/// Create a git commands router for executing git operations.
+///
+/// This router provides REST access to git commands:
+/// - POST /add - Stage files
+/// - POST /commit - Create commit
+/// - POST /reset - Unstage files
+/// - GET /branches - List branches
+/// - POST /checkout - Switch branch
+/// - GET /log - Commit history
+/// - GET /diff - Get diff
+pub fn create_git_commands_router(workspace_path: PathBuf) -> Router {
+    let state = Arc::new(GitOpsState { workspace_path });
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        // Stage files
+        .route("/add", post(git::add_handler))
+        // Commit
+        .route("/commit", post(git::commit_handler))
+        // Unstage files
+        .route("/reset", post(git::reset_handler))
+        // List branches
+        .route("/branches", get(git::branches_handler))
+        // Checkout branch
+        .route("/checkout", post(git::checkout_handler))
+        // Commit history
+        .route("/log", get(git::log_handler))
+        // Diff
+        .route("/diff", get(git::diff_handler))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(Level::INFO)
+                        .include_headers(false),
+                )
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        .layer(cors)
+        .with_state(state)
+}
+
 /// Create a combined API router with both graph/ws and ops endpoints.
 ///
 /// This creates a router that serves:
@@ -122,6 +170,56 @@ pub fn create_full_api_router(api_state: Arc<ApiState>, ops_ctx: OpsContext) -> 
     // Merge both routers
     Router::new()
         .nest("/ops", ops_router)
+        .merge(viz_router)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(Level::INFO)
+                        .include_headers(false),
+                )
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        .layer(cors)
+}
+
+/// Create a complete API router including git commands.
+///
+/// This creates a router that serves:
+/// - `/ops/*` - Operations API (sync, graph build, status, etc.)
+/// - `/git/cmd/*` - Git command API (add, commit, reset, etc.)
+/// - `/health`, `/graph/*`, `/git/changes`, `/ws` - Graph visualization API
+pub fn create_full_api_router_with_git(
+    api_state: Arc<ApiState>,
+    ops_ctx: OpsContext,
+    workspace_path: PathBuf,
+) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    // Create the ops router
+    let ops_router = create_ops_router(ops_ctx);
+
+    // Create the git commands router
+    let git_cmd_router = create_git_commands_router(workspace_path);
+
+    // Create the visualization API router with its state
+    let viz_router = Router::new()
+        .route("/health", get(health::health_handler))
+        .route("/graph", get(graph::graph_handler))
+        .route("/graph/nodes", get(graph::nodes_handler))
+        .route("/graph/edges", get(graph::edges_handler))
+        .route("/graph/metadata", get(graph::metadata_handler))
+        .route("/git/changes", get(git::changes_handler))
+        .route("/ws", get(ws_handler))
+        .with_state(api_state);
+
+    // Merge all routers
+    Router::new()
+        .nest("/ops", ops_router)
+        .nest("/git/cmd", git_cmd_router)
         .merge(viz_router)
         .layer(
             TraceLayer::new_for_http()

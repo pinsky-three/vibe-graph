@@ -3,7 +3,7 @@
 //! Provides async functions to communicate with the vibe-graph-api server.
 //! Uses gloo-net for HTTP requests in WASM environment.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use vibe_graph_core::{GitChangeSnapshot, SourceCodeGraph};
 
 /// Generic API response wrapper.
@@ -77,6 +77,126 @@ pub struct GraphBuildResponse {
 #[derive(Debug, Deserialize)]
 pub struct CleanResponse {
     pub cleaned: bool,
+}
+
+// =============================================================================
+// Git Command Types
+// =============================================================================
+
+/// Request for git add operation.
+#[derive(Debug, Serialize)]
+pub struct GitAddRequest {
+    /// Files to stage. Empty array means stage all.
+    pub paths: Vec<String>,
+}
+
+/// Response from git add operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitAddResponse {
+    /// Files that were staged.
+    pub staged_files: Vec<String>,
+    /// Number of files staged.
+    pub count: usize,
+}
+
+/// Request for git commit operation.
+#[derive(Debug, Serialize)]
+pub struct GitCommitRequest {
+    /// Commit message.
+    pub message: String,
+}
+
+/// Response from git commit operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitCommitResponse {
+    /// The commit hash (SHA).
+    pub commit_id: String,
+    /// The commit message.
+    pub message: String,
+    /// Number of files in the commit.
+    pub file_count: usize,
+}
+
+/// Request for git reset operation.
+#[derive(Debug, Serialize)]
+pub struct GitResetRequest {
+    /// Files to unstage. Empty array means unstage all.
+    pub paths: Vec<String>,
+}
+
+/// Response from git reset operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitResetResponse {
+    /// Files that were unstaged.
+    pub unstaged_files: Vec<String>,
+    /// Number of files unstaged.
+    pub count: usize,
+}
+
+/// Request for git checkout operation.
+#[derive(Debug, Serialize)]
+pub struct GitCheckoutRequest {
+    /// Branch name to checkout.
+    pub branch: String,
+}
+
+/// Branch information.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitBranch {
+    /// Branch name.
+    pub name: String,
+    /// Whether this is the current branch.
+    pub is_current: bool,
+    /// Whether this is a remote branch.
+    pub is_remote: bool,
+    /// Latest commit SHA on this branch.
+    pub commit_id: Option<String>,
+}
+
+/// Response from git branches operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitBranchesResponse {
+    /// All branches.
+    pub branches: Vec<GitBranch>,
+    /// Current branch name (if any).
+    pub current: Option<String>,
+}
+
+/// Commit log entry.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitLogEntry {
+    /// Commit SHA.
+    pub commit_id: String,
+    /// Short SHA (7 chars).
+    pub short_id: String,
+    /// Commit message.
+    pub message: String,
+    /// Author name.
+    pub author: String,
+    /// Author email.
+    pub author_email: String,
+    /// Unix timestamp.
+    pub timestamp: i64,
+}
+
+/// Response from git log operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitLogResponse {
+    /// Commit entries.
+    pub commits: Vec<GitLogEntry>,
+}
+
+/// Response from git diff operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitDiffResponse {
+    /// The diff output as text.
+    pub diff: String,
+    /// Number of files changed.
+    pub files_changed: usize,
+    /// Lines added.
+    pub insertions: usize,
+    /// Lines removed.
+    pub deletions: usize,
 }
 
 /// Operation state for UI feedback.
@@ -304,6 +424,175 @@ mod wasm_impl {
             })
             .collect()
     }
+
+    // =========================================================================
+    // Git Command Functions
+    // =========================================================================
+
+    /// Stage files via POST /api/git/cmd/add.
+    ///
+    /// Pass empty `paths` to stage all changes (like `git add -A`).
+    pub async fn git_add(paths: Vec<String>) -> Result<GitAddResponse, String> {
+        let request = GitAddRequest { paths };
+
+        let resp = Request::post("/api/git/cmd/add")
+            .json(&request)
+            .map_err(|e| format!("Failed to build request: {}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git add failed: {}", text));
+        }
+
+        let body: ApiResponse<GitAddResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
+
+    /// Create a commit via POST /api/git/cmd/commit.
+    pub async fn git_commit(message: &str) -> Result<GitCommitResponse, String> {
+        let request = GitCommitRequest {
+            message: message.to_string(),
+        };
+
+        let resp = Request::post("/api/git/cmd/commit")
+            .json(&request)
+            .map_err(|e| format!("Failed to build request: {}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git commit failed: {}", text));
+        }
+
+        let body: ApiResponse<GitCommitResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
+
+    /// Unstage files via POST /api/git/cmd/reset.
+    ///
+    /// Pass empty `paths` to unstage all changes.
+    pub async fn git_reset(paths: Vec<String>) -> Result<GitResetResponse, String> {
+        let request = GitResetRequest { paths };
+
+        let resp = Request::post("/api/git/cmd/reset")
+            .json(&request)
+            .map_err(|e| format!("Failed to build request: {}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git reset failed: {}", text));
+        }
+
+        let body: ApiResponse<GitResetResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
+
+    /// List branches via GET /api/git/cmd/branches.
+    pub async fn git_branches() -> Result<GitBranchesResponse, String> {
+        let resp = Request::get("/api/git/cmd/branches")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git branches failed: {}", text));
+        }
+
+        let body: ApiResponse<GitBranchesResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
+
+    /// Checkout a branch via POST /api/git/cmd/checkout.
+    pub async fn git_checkout(branch: &str) -> Result<(), String> {
+        let request = GitCheckoutRequest {
+            branch: branch.to_string(),
+        };
+
+        let resp = Request::post("/api/git/cmd/checkout")
+            .json(&request)
+            .map_err(|e| format!("Failed to build request: {}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git checkout failed: {}", text));
+        }
+
+        Ok(())
+    }
+
+    /// Get commit log via GET /api/git/cmd/log.
+    pub async fn git_log(limit: usize) -> Result<GitLogResponse, String> {
+        let url = format!("/api/git/cmd/log?limit={}", limit);
+
+        let resp = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git log failed: {}", text));
+        }
+
+        let body: ApiResponse<GitLogResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
+
+    /// Get diff via GET /api/git/cmd/diff.
+    ///
+    /// Set `staged` to true to get staged changes, false for working directory.
+    pub async fn git_diff(staged: bool) -> Result<GitDiffResponse, String> {
+        let url = format!("/api/git/cmd/diff?staged={}", staged);
+
+        let resp = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git diff failed: {}", text));
+        }
+
+        let body: ApiResponse<GitDiffResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -340,5 +629,44 @@ pub async fn get_status(_path: &str) -> Result<StatusResponse, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn clean(_path: &str) -> Result<CleanResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+// =============================================================================
+// Native Git Command Stubs
+// =============================================================================
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_add(_paths: Vec<String>) -> Result<GitAddResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_commit(_message: &str) -> Result<GitCommitResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_reset(_paths: Vec<String>) -> Result<GitResetResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_branches() -> Result<GitBranchesResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_checkout(_branch: &str) -> Result<(), String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_log(_limit: usize) -> Result<GitLogResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_diff(_staged: bool) -> Result<GitDiffResponse, String> {
     Err("Not implemented for native".to_string())
 }

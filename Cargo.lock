@@ -5349,6 +5349,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "vibe-graph-core",
+ "vibe-graph-git",
  "vibe-graph-ops",
 ]
 
