@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-api"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 description = "REST + WebSocket API service for Vibe-Graph"
 license = "MIT"
@@ -10,7 +10,7 @@ homepage = "https://github.com/pinsky-three/vibe-graph"
 [dependencies]
 vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.0", path = "../vibe-graph-ops" }
-vibe-graph-git = { version = "0.2.0", path = "../vibe-graph-git" }
+vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
 axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true }
 serde = { workspace = true }
