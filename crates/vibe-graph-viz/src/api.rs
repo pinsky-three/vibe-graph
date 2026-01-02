@@ -3,6 +3,12 @@
 //! Provides async functions to communicate with the vibe-graph-api server.
 //! Uses gloo-net for HTTP requests in WASM environment.
 
+// Allow dead code warnings for this module:
+// - Serde types are deserialized from JSON, not "constructed" by Rust code
+// - Native stubs exist only for compilation compatibility
+// - Some types/functions are only used in WASM target
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use vibe_graph_core::{GitChangeSnapshot, SourceCodeGraph};
 
@@ -239,20 +245,35 @@ pub enum OperationState {
     Error,
 }
 
-/// Pending operation type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PendingOperation {
-    FetchGraph,
-    FetchGitChanges,
-    Sync,
-    BuildGraph,
-    Status,
-    Clean,
+/// Result from an async API operation.
+#[derive(Clone)]
+pub enum OpResult {
+    /// Sync completed.
+    SyncDone { repos: usize, files: usize },
+    /// Graph built.
+    GraphDone {
+        nodes: usize,
+        edges: usize,
+        cached: bool,
+    },
+    /// Status retrieved.
+    StatusDone(StatusResponse),
+    /// Clean completed.
+    CleanDone { cleaned: bool },
+    /// Operation failed.
+    Error(String),
 }
 
-/// API client state for the visualization.
-#[derive(Default)]
+/// Shared channel for async operation results (WASM only).
+#[cfg(target_arch = "wasm32")]
+pub type SharedResult = std::rc::Rc<std::cell::RefCell<Option<OpResult>>>;
+
+/// API client for managing operations and their state.
+///
+/// Centralizes state management for API operations with async support in WASM.
 pub struct ApiClient {
+    /// Current workspace path.
+    pub path: String,
     /// Current operation state.
     pub state: OperationState,
     /// Last status message.
@@ -261,49 +282,215 @@ pub struct ApiClient {
     pub error: Option<String>,
     /// Cached status response.
     pub status: Option<StatusResponse>,
-    /// Pending operation (polled by update loop).
-    pub pending: Option<PendingOperation>,
-    /// Result graph (when pending completes).
-    pub pending_graph: Option<SourceCodeGraph>,
-    /// Result git changes (when pending completes).
-    pub pending_git_changes: Option<GitChangeSnapshot>,
+    /// Result channel for async operations (WASM only).
+    #[cfg(target_arch = "wasm32")]
+    result_channel: SharedResult,
+}
+
+impl Default for ApiClient {
+    fn default() -> Self {
+        Self {
+            path: ".".to_string(),
+            state: OperationState::Idle,
+            message: String::new(),
+            error: None,
+            status: None,
+            #[cfg(target_arch = "wasm32")]
+            result_channel: std::rc::Rc::new(std::cell::RefCell::new(None)),
+        }
+    }
 }
 
 impl ApiClient {
+    /// Create a new API client.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Set loading state with message.
-    pub fn set_loading(&mut self, msg: &str) {
-        self.state = OperationState::Loading;
-        self.message = msg.to_string();
-        self.error = None;
-    }
-
-    /// Set success state with message.
-    pub fn set_success(&mut self, msg: &str) {
-        self.state = OperationState::Success;
-        self.message = msg.to_string();
-        self.error = None;
-    }
-
-    /// Set error state with message.
-    pub fn set_error(&mut self, msg: &str) {
-        self.state = OperationState::Error;
-        self.error = Some(msg.to_string());
-    }
-
-    /// Clear pending operation.
-    pub fn clear_pending(&mut self) {
-        self.pending = None;
-        self.pending_graph = None;
-        self.pending_git_changes = None;
     }
 
     /// Check if an operation is in progress.
     pub fn is_loading(&self) -> bool {
         self.state == OperationState::Loading
+    }
+
+    /// Poll for async operation results and update state.
+    ///
+    /// Should be called each frame when loading. Returns true if state changed.
+    #[cfg(target_arch = "wasm32")]
+    pub fn poll_results(&mut self) -> bool {
+        let result = self.result_channel.borrow_mut().take();
+        if let Some(res) = result {
+            match res {
+                OpResult::SyncDone { repos, files } => {
+                    self.state = OperationState::Success;
+                    self.message = format!("✅ Synced: {} repos, {} files", repos, files);
+                    self.error = None;
+                }
+                OpResult::GraphDone {
+                    nodes,
+                    edges,
+                    cached,
+                } => {
+                    self.state = OperationState::Success;
+                    let cache_str = if cached { " (cached)" } else { "" };
+                    self.message =
+                        format!("✅ Graph: {} nodes, {} edges{}", nodes, edges, cache_str);
+                    self.error = None;
+                }
+                OpResult::StatusDone(status) => {
+                    self.state = OperationState::Success;
+                    let synced = if status.store_exists {
+                        "synced"
+                    } else {
+                        "not synced"
+                    };
+                    self.message = format!("✅ {}: {}", status.workspace.name, synced);
+                    self.status = Some(status);
+                    self.error = None;
+                }
+                OpResult::CleanDone { cleaned } => {
+                    self.state = OperationState::Success;
+                    self.message = if cleaned {
+                        "✅ Cleaned .self folder".to_string()
+                    } else {
+                        "ℹ️ Nothing to clean".to_string()
+                    };
+                    self.error = None;
+                }
+                OpResult::Error(e) => {
+                    self.state = OperationState::Error;
+                    self.error = Some(e);
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Poll for async operation results (native stub).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn poll_results(&mut self) -> bool {
+        false
+    }
+
+    // =========================================================================
+    // Operation Triggers
+    // =========================================================================
+
+    /// Trigger sync operation.
+    #[cfg(target_arch = "wasm32")]
+    pub fn trigger_sync(&mut self) {
+        self.state = OperationState::Loading;
+        self.message = "Syncing...".to_string();
+
+        let path = self.path.clone();
+        let result_channel = self.result_channel.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match trigger_sync(&path, false).await {
+                Ok(resp) => {
+                    let file_count: usize = resp
+                        .project
+                        .repositories
+                        .iter()
+                        .map(|r| r.sources.len())
+                        .sum();
+                    OpResult::SyncDone {
+                        repos: resp.project.repositories.len(),
+                        files: file_count,
+                    }
+                }
+                Err(e) => OpResult::Error(e),
+            };
+            *result_channel.borrow_mut() = Some(result);
+        });
+    }
+
+    /// Trigger sync operation (native stub).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn trigger_sync(&mut self) {
+        self.state = OperationState::Error;
+        self.error = Some("Sync not available in native mode".to_string());
+    }
+
+    /// Trigger graph build operation.
+    #[cfg(target_arch = "wasm32")]
+    pub fn trigger_graph(&mut self) {
+        self.state = OperationState::Loading;
+        self.message = "Building graph...".to_string();
+
+        let path = self.path.clone();
+        let result_channel = self.result_channel.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match build_graph(&path, false).await {
+                Ok(resp) => OpResult::GraphDone {
+                    nodes: resp.graph.nodes.len(),
+                    edges: resp.graph.edges.len(),
+                    cached: resp.from_cache,
+                },
+                Err(e) => OpResult::Error(e),
+            };
+            *result_channel.borrow_mut() = Some(result);
+        });
+    }
+
+    /// Trigger graph build operation (native stub).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn trigger_graph(&mut self) {
+        self.state = OperationState::Error;
+        self.error = Some("Graph build not available in native mode".to_string());
+    }
+
+    /// Trigger status operation.
+    #[cfg(target_arch = "wasm32")]
+    pub fn trigger_status(&mut self) {
+        self.state = OperationState::Loading;
+        self.message = "Getting status...".to_string();
+
+        let path = self.path.clone();
+        let result_channel = self.result_channel.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match get_status(&path).await {
+                Ok(resp) => OpResult::StatusDone(resp),
+                Err(e) => OpResult::Error(e),
+            };
+            *result_channel.borrow_mut() = Some(result);
+        });
+    }
+
+    /// Trigger status operation (native stub).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn trigger_status(&mut self) {
+        self.state = OperationState::Error;
+        self.error = Some("Status not available in native mode".to_string());
+    }
+
+    /// Trigger clean operation.
+    #[cfg(target_arch = "wasm32")]
+    pub fn trigger_clean(&mut self) {
+        self.state = OperationState::Loading;
+        self.message = "Cleaning...".to_string();
+
+        let path = self.path.clone();
+        let result_channel = self.result_channel.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match clean(&path).await {
+                Ok(resp) => OpResult::CleanDone {
+                    cleaned: resp.cleaned,
+                },
+                Err(e) => OpResult::Error(e),
+            };
+            *result_channel.borrow_mut() = Some(result);
+        });
+    }
+
+    /// Trigger clean operation (native stub).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn trigger_clean(&mut self) {
+        self.state = OperationState::Error;
+        self.error = Some("Clean not available in native mode".to_string());
     }
 }
 
@@ -483,7 +670,10 @@ mod wasm_impl {
     ///
     /// Pass empty `paths` to stage all changes (like `git add -A`).
     /// Pass `None` for `repo` to use the default repository.
-    pub async fn git_add(repo: Option<String>, paths: Vec<String>) -> Result<GitAddResponse, String> {
+    pub async fn git_add(
+        repo: Option<String>,
+        paths: Vec<String>,
+    ) -> Result<GitAddResponse, String> {
         let request = GitAddRequest { repo, paths };
 
         let resp = Request::post("/api/git/cmd/add")
@@ -509,7 +699,10 @@ mod wasm_impl {
     /// Create a commit via POST /api/git/cmd/commit.
     ///
     /// Pass `None` for `repo` to use the default repository.
-    pub async fn git_commit(repo: Option<String>, message: &str) -> Result<GitCommitResponse, String> {
+    pub async fn git_commit(
+        repo: Option<String>,
+        message: &str,
+    ) -> Result<GitCommitResponse, String> {
         let request = GitCommitRequest {
             repo,
             message: message.to_string(),
@@ -539,7 +732,10 @@ mod wasm_impl {
     ///
     /// Pass empty `paths` to unstage all changes.
     /// Pass `None` for `repo` to use the default repository.
-    pub async fn git_reset(repo: Option<String>, paths: Vec<String>) -> Result<GitResetResponse, String> {
+    pub async fn git_reset(
+        repo: Option<String>,
+        paths: Vec<String>,
+    ) -> Result<GitResetResponse, String> {
         let request = GitResetRequest { repo, paths };
 
         let resp = Request::post("/api/git/cmd/reset")
@@ -646,7 +842,11 @@ mod wasm_impl {
     /// Pass `None` for `repo` to use the default repository.
     pub async fn git_diff(repo: Option<&str>, staged: bool) -> Result<GitDiffResponse, String> {
         let url = match repo {
-            Some(r) => format!("/api/git/cmd/diff?repo={}&staged={}", urlencoding(r), staged),
+            Some(r) => format!(
+                "/api/git/cmd/diff?repo={}&staged={}",
+                urlencoding(r),
+                staged
+            ),
             None => format!("/api/git/cmd/diff?staged={}", staged),
         };
 
@@ -721,12 +921,18 @@ pub async fn git_add(_repo: Option<String>, _paths: Vec<String>) -> Result<GitAd
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_commit(_repo: Option<String>, _message: &str) -> Result<GitCommitResponse, String> {
+pub async fn git_commit(
+    _repo: Option<String>,
+    _message: &str,
+) -> Result<GitCommitResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_reset(_repo: Option<String>, _paths: Vec<String>) -> Result<GitResetResponse, String> {
+pub async fn git_reset(
+    _repo: Option<String>,
+    _paths: Vec<String>,
+) -> Result<GitResetResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
