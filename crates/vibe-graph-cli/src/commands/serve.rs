@@ -27,7 +27,10 @@ use tokio::time::{interval, Duration};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use vibe_graph_api::WsServerMessage;
-use vibe_graph_api::{create_api_state_with_changes, create_full_api_router_with_git};
+use vibe_graph_api::{
+    create_api_state_with_changes, create_full_api_router_with_git,
+    create_full_api_router_with_git_multi,
+};
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
 
@@ -185,8 +188,35 @@ pub async fn execute(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Create full API router (mounted at /api) - includes ops routes and git commands
-    let api_router = create_full_api_router_with_git(api_state.clone(), ctx, path.clone());
+    // Detect workspace type and create appropriate API router
+    let api_router = if let Ok(Some(project)) = store.load() {
+        // Multi-repo workspace: extract repos from project
+        let repos: Vec<(String, std::path::PathBuf)> = project
+            .repositories
+            .iter()
+            .map(|repo| {
+                let name = repo
+                    .local_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                (name, repo.local_path.clone())
+            })
+            .collect();
+
+        if repos.len() > 1 {
+            println!("📦 Multi-repo workspace: {} repositories", repos.len());
+            for (name, repo_path) in &repos {
+                println!("   - {} ({})", name, repo_path.display());
+            }
+        }
+
+        create_full_api_router_with_git_multi(api_state.clone(), ctx, path.clone(), repos)
+    } else {
+        // Single-repo workspace
+        create_full_api_router_with_git(api_state.clone(), ctx, path.clone())
+    };
 
     // Build main router with embedded assets
     // Serve WASM from both root and /wasm/ for backwards compatibility
@@ -206,7 +236,7 @@ pub async fn execute(
     println!("🚀 Vibe Graph Server");
     println!("   URL: http://localhost:{}", port);
     println!("   API: http://localhost:{}/api/health", port);
-    println!("   Git: http://localhost:{}/api/git/cmd/branches", port);
+    println!("   Git: http://localhost:{}/api/git/cmd/repos", port);
     println!();
     println!("   Press Ctrl+C to stop");
     println!();

@@ -83,9 +83,30 @@ pub struct CleanResponse {
 // Git Command Types
 // =============================================================================
 
+/// Repository info from /api/git/cmd/repos.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitRepoInfo {
+    /// Repository name.
+    pub name: String,
+    /// Repository path.
+    pub path: String,
+}
+
+/// Response from git repos operation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitReposResponse {
+    /// Available repositories.
+    pub repos: Vec<GitRepoInfo>,
+    /// Default repository name (if any).
+    pub default: Option<String>,
+}
+
 /// Request for git add operation.
 #[derive(Debug, Serialize)]
 pub struct GitAddRequest {
+    /// Repository name (optional in single-repo workspace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Files to stage. Empty array means stage all.
     pub paths: Vec<String>,
 }
@@ -102,6 +123,9 @@ pub struct GitAddResponse {
 /// Request for git commit operation.
 #[derive(Debug, Serialize)]
 pub struct GitCommitRequest {
+    /// Repository name (optional in single-repo workspace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Commit message.
     pub message: String,
 }
@@ -120,6 +144,9 @@ pub struct GitCommitResponse {
 /// Request for git reset operation.
 #[derive(Debug, Serialize)]
 pub struct GitResetRequest {
+    /// Repository name (optional in single-repo workspace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Files to unstage. Empty array means unstage all.
     pub paths: Vec<String>,
 }
@@ -136,6 +163,9 @@ pub struct GitResetResponse {
 /// Request for git checkout operation.
 #[derive(Debug, Serialize)]
 pub struct GitCheckoutRequest {
+    /// Repository name (optional in single-repo workspace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Branch name to checkout.
     pub branch: String,
 }
@@ -429,11 +459,32 @@ mod wasm_impl {
     // Git Command Functions
     // =========================================================================
 
+    /// List available repositories via GET /api/git/cmd/repos.
+    pub async fn git_repos() -> Result<GitReposResponse, String> {
+        let resp = Request::get("/api/git/cmd/repos")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Git repos failed: {}", text));
+        }
+
+        let body: ApiResponse<GitReposResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
+
     /// Stage files via POST /api/git/cmd/add.
     ///
     /// Pass empty `paths` to stage all changes (like `git add -A`).
-    pub async fn git_add(paths: Vec<String>) -> Result<GitAddResponse, String> {
-        let request = GitAddRequest { paths };
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_add(repo: Option<String>, paths: Vec<String>) -> Result<GitAddResponse, String> {
+        let request = GitAddRequest { repo, paths };
 
         let resp = Request::post("/api/git/cmd/add")
             .json(&request)
@@ -456,8 +507,11 @@ mod wasm_impl {
     }
 
     /// Create a commit via POST /api/git/cmd/commit.
-    pub async fn git_commit(message: &str) -> Result<GitCommitResponse, String> {
+    ///
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_commit(repo: Option<String>, message: &str) -> Result<GitCommitResponse, String> {
         let request = GitCommitRequest {
+            repo,
             message: message.to_string(),
         };
 
@@ -484,8 +538,9 @@ mod wasm_impl {
     /// Unstage files via POST /api/git/cmd/reset.
     ///
     /// Pass empty `paths` to unstage all changes.
-    pub async fn git_reset(paths: Vec<String>) -> Result<GitResetResponse, String> {
-        let request = GitResetRequest { paths };
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_reset(repo: Option<String>, paths: Vec<String>) -> Result<GitResetResponse, String> {
+        let request = GitResetRequest { repo, paths };
 
         let resp = Request::post("/api/git/cmd/reset")
             .json(&request)
@@ -508,8 +563,15 @@ mod wasm_impl {
     }
 
     /// List branches via GET /api/git/cmd/branches.
-    pub async fn git_branches() -> Result<GitBranchesResponse, String> {
-        let resp = Request::get("/api/git/cmd/branches")
+    ///
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_branches(repo: Option<&str>) -> Result<GitBranchesResponse, String> {
+        let url = match repo {
+            Some(r) => format!("/api/git/cmd/branches?repo={}", urlencoding(r)),
+            None => "/api/git/cmd/branches".to_string(),
+        };
+
+        let resp = Request::get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {}", e))?;
@@ -528,8 +590,11 @@ mod wasm_impl {
     }
 
     /// Checkout a branch via POST /api/git/cmd/checkout.
-    pub async fn git_checkout(branch: &str) -> Result<(), String> {
+    ///
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_checkout(repo: Option<String>, branch: &str) -> Result<(), String> {
         let request = GitCheckoutRequest {
+            repo,
             branch: branch.to_string(),
         };
 
@@ -549,8 +614,13 @@ mod wasm_impl {
     }
 
     /// Get commit log via GET /api/git/cmd/log.
-    pub async fn git_log(limit: usize) -> Result<GitLogResponse, String> {
-        let url = format!("/api/git/cmd/log?limit={}", limit);
+    ///
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_log(repo: Option<&str>, limit: usize) -> Result<GitLogResponse, String> {
+        let url = match repo {
+            Some(r) => format!("/api/git/cmd/log?repo={}&limit={}", urlencoding(r), limit),
+            None => format!("/api/git/cmd/log?limit={}", limit),
+        };
 
         let resp = Request::get(&url)
             .send()
@@ -573,8 +643,12 @@ mod wasm_impl {
     /// Get diff via GET /api/git/cmd/diff.
     ///
     /// Set `staged` to true to get staged changes, false for working directory.
-    pub async fn git_diff(staged: bool) -> Result<GitDiffResponse, String> {
-        let url = format!("/api/git/cmd/diff?staged={}", staged);
+    /// Pass `None` for `repo` to use the default repository.
+    pub async fn git_diff(repo: Option<&str>, staged: bool) -> Result<GitDiffResponse, String> {
+        let url = match repo {
+            Some(r) => format!("/api/git/cmd/diff?repo={}&staged={}", urlencoding(r), staged),
+            None => format!("/api/git/cmd/diff?staged={}", staged),
+        };
 
         let resp = Request::get(&url)
             .send()
@@ -637,36 +711,41 @@ pub async fn clean(_path: &str) -> Result<CleanResponse, String> {
 // =============================================================================
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_add(_paths: Vec<String>) -> Result<GitAddResponse, String> {
+pub async fn git_repos() -> Result<GitReposResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_commit(_message: &str) -> Result<GitCommitResponse, String> {
+pub async fn git_add(_repo: Option<String>, _paths: Vec<String>) -> Result<GitAddResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_reset(_paths: Vec<String>) -> Result<GitResetResponse, String> {
+pub async fn git_commit(_repo: Option<String>, _message: &str) -> Result<GitCommitResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_branches() -> Result<GitBranchesResponse, String> {
+pub async fn git_reset(_repo: Option<String>, _paths: Vec<String>) -> Result<GitResetResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_checkout(_branch: &str) -> Result<(), String> {
+pub async fn git_branches(_repo: Option<&str>) -> Result<GitBranchesResponse, String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_log(_limit: usize) -> Result<GitLogResponse, String> {
+pub async fn git_checkout(_repo: Option<String>, _branch: &str) -> Result<(), String> {
     Err("Not implemented for native".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn git_diff(_staged: bool) -> Result<GitDiffResponse, String> {
+pub async fn git_log(_repo: Option<&str>, _limit: usize) -> Result<GitLogResponse, String> {
+    Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn git_diff(_repo: Option<&str>, _staged: bool) -> Result<GitDiffResponse, String> {
     Err("Not implemented for native".to_string())
 }

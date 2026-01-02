@@ -96,9 +96,10 @@ pub fn create_ops_router(ctx: OpsContext) -> Router {
         .with_state(state)
 }
 
-/// Create a git commands router for executing git operations.
+/// Create a git commands router for a single-repo workspace.
 ///
 /// This router provides REST access to git commands:
+/// - GET /repos - List available repositories
 /// - POST /add - Stage files
 /// - POST /commit - Create commit
 /// - POST /reset - Unstage files
@@ -107,14 +108,34 @@ pub fn create_ops_router(ctx: OpsContext) -> Router {
 /// - GET /log - Commit history
 /// - GET /diff - Get diff
 pub fn create_git_commands_router(workspace_path: PathBuf) -> Router {
-    let state = Arc::new(GitOpsState { workspace_path });
+    let state = Arc::new(GitOpsState::single_repo(workspace_path));
+    build_git_commands_router(state)
+}
 
+/// Create a git commands router for a multi-repo workspace.
+///
+/// # Arguments
+///
+/// * `workspace_path` - The root workspace path
+/// * `repos` - List of (name, path) tuples for each repository
+pub fn create_git_commands_router_multi(
+    workspace_path: PathBuf,
+    repos: Vec<(String, PathBuf)>,
+) -> Router {
+    let state = Arc::new(GitOpsState::multi_repo(workspace_path, repos));
+    build_git_commands_router(state)
+}
+
+/// Internal helper to build git commands router with given state.
+fn build_git_commands_router(state: Arc<GitOpsState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
     Router::new()
+        // List repos
+        .route("/repos", get(git::repos_handler))
         // Stage files
         .route("/add", post(git::add_handler))
         // Commit
@@ -183,7 +204,7 @@ pub fn create_full_api_router(api_state: Arc<ApiState>, ops_ctx: OpsContext) -> 
         .layer(cors)
 }
 
-/// Create a complete API router including git commands.
+/// Create a complete API router including git commands (single-repo).
 ///
 /// This creates a router that serves:
 /// - `/ops/*` - Operations API (sync, graph build, status, etc.)
@@ -194,6 +215,32 @@ pub fn create_full_api_router_with_git(
     ops_ctx: OpsContext,
     workspace_path: PathBuf,
 ) -> Router {
+    let git_cmd_router = create_git_commands_router(workspace_path);
+    build_full_api_router_with_git_router(api_state, ops_ctx, git_cmd_router)
+}
+
+/// Create a complete API router including git commands (multi-repo).
+///
+/// This creates a router that serves:
+/// - `/ops/*` - Operations API (sync, graph build, status, etc.)
+/// - `/git/cmd/*` - Git command API with multi-repo support
+/// - `/health`, `/graph/*`, `/git/changes`, `/ws` - Graph visualization API
+pub fn create_full_api_router_with_git_multi(
+    api_state: Arc<ApiState>,
+    ops_ctx: OpsContext,
+    workspace_path: PathBuf,
+    repos: Vec<(String, PathBuf)>,
+) -> Router {
+    let git_cmd_router = create_git_commands_router_multi(workspace_path, repos);
+    build_full_api_router_with_git_router(api_state, ops_ctx, git_cmd_router)
+}
+
+/// Internal helper to build full router with git commands.
+fn build_full_api_router_with_git_router(
+    api_state: Arc<ApiState>,
+    ops_ctx: OpsContext,
+    git_cmd_router: Router,
+) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -201,9 +248,6 @@ pub fn create_full_api_router_with_git(
 
     // Create the ops router
     let ops_router = create_ops_router(ops_ctx);
-
-    // Create the git commands router
-    let git_cmd_router = create_git_commands_router(workspace_path);
 
     // Create the visualization API router with its state
     let viz_router = Router::new()
