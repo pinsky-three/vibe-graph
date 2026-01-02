@@ -452,15 +452,9 @@ pub fn git_reset(repo_path: &Path, paths: &[PathBuf]) -> Result<GitResetResult> 
     let head_commit = head.as_ref().and_then(|h| h.peel_to_commit().ok());
 
     let unstaged_files = if paths.is_empty() {
-        // Reset all staged files
-        if let Some(commit) = &head_commit {
-            repo.reset_default(Some(commit.as_object()), std::iter::empty::<&Path>())
-                .context("Failed to reset index")?;
-        }
-
-        // Get list of files that were staged
+        // Get list of staged files BEFORE resetting
         let statuses = repo.statuses(None)?;
-        statuses
+        let staged_files: Vec<PathBuf> = statuses
             .iter()
             .filter(|e| {
                 let s = e.status();
@@ -469,7 +463,25 @@ pub fn git_reset(repo_path: &Path, paths: &[PathBuf]) -> Result<GitResetResult> 
                     || s.contains(Status::INDEX_DELETED)
             })
             .filter_map(|e| e.path().map(PathBuf::from))
-            .collect()
+            .collect();
+
+        // Reset all staged files by passing them explicitly
+        if !staged_files.is_empty() {
+            if let Some(commit) = &head_commit {
+                let path_refs: Vec<&Path> = staged_files.iter().map(|p| p.as_path()).collect();
+                repo.reset_default(Some(commit.as_object()), path_refs.iter().copied())
+                    .context("Failed to reset index")?;
+            } else {
+                // No HEAD commit (initial repo) - reset index to empty
+                let mut index = repo.index()?;
+                for path in &staged_files {
+                    let _ = index.remove_path(path);
+                }
+                index.write()?;
+            }
+        }
+
+        staged_files
     } else {
         // Reset specific files
         if let Some(commit) = &head_commit {

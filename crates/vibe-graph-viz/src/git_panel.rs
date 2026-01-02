@@ -120,10 +120,19 @@ pub struct GitPanelState {
     /// Files to stage (paths).
     pub stage_paths: Vec<String>,
 
+    // Polling state
+    /// Last time we polled for changes (seconds since start).
+    last_poll_time: f32,
+    /// Auto-refresh enabled.
+    pub auto_refresh: bool,
+
     /// Result channel for async operations.
     #[cfg(target_arch = "wasm32")]
     result_channel: SharedGitResult,
 }
+
+/// Polling interval for auto-refresh in seconds.
+const POLL_INTERVAL: f32 = 2.0;
 
 impl Default for GitPanelState {
     fn default() -> Self {
@@ -143,6 +152,8 @@ impl Default for GitPanelState {
             diff_staged: false,
             commit_message: String::new(),
             stage_paths: Vec::new(),
+            last_poll_time: 0.0,
+            auto_refresh: true,
             #[cfg(target_arch = "wasm32")]
             result_channel: Rc::new(RefCell::new(None)),
         }
@@ -505,6 +516,20 @@ impl GitPanelState {
             return;
         }
 
+        // Auto-refresh polling when panel is visible
+        let current_time = ctx.input(|i| i.time) as f32;
+        if self.auto_refresh && !self.is_loading() {
+            if current_time - self.last_poll_time > POLL_INTERVAL {
+                self.last_poll_time = current_time;
+                // Only refresh diff when on status or diff tab
+                if self.tab == GitPanelTab::Status || self.tab == GitPanelTab::Diff {
+                    self.fetch_diff();
+                }
+            }
+            // Request repaint to keep polling
+            ctx.request_repaint_after(std::time::Duration::from_secs_f32(POLL_INTERVAL));
+        }
+
         egui::Window::new("🔧 Git Tools")
             .id(egui::Id::new("git_panel"))
             .default_pos([100.0, 100.0])
@@ -559,15 +584,27 @@ impl GitPanelState {
                 );
             }
 
-            // Refresh button
+            // Right side controls
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Refresh button
                 let enabled = !self.is_loading();
                 if ui
                     .add_enabled(enabled, egui::Button::new("🔄"))
-                    .on_hover_text("Refresh")
+                    .on_hover_text("Refresh now")
                     .clicked()
                 {
                     refresh_clicked = true;
+                }
+
+                // Auto-refresh toggle
+                let auto_icon = if self.auto_refresh { "⏸" } else { "▶" };
+                let auto_tip = if self.auto_refresh {
+                    "Auto-refresh ON (click to disable)"
+                } else {
+                    "Auto-refresh OFF (click to enable)"
+                };
+                if ui.button(auto_icon).on_hover_text(auto_tip).clicked() {
+                    self.auto_refresh = !self.auto_refresh;
                 }
             });
         });
