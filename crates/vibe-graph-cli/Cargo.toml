@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-cli"
-version = "1.2.1"
+version = "1.3.0"
 edition.workspace = true
 description = "CLI for analyzing codebases - single repos or multi-repo workspaces. Auto-detects structure, persists analysis in .self folder."
 license = "MIT"
@@ -46,8 +46,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.0", path = "../vibe-graph-ops" }
-vibe-graph-api = { version = "0.2.0", path = "../vibe-graph-api" }
-vibe-graph-git = { version = "0.2.0", path = "../vibe-graph-git" }
+vibe-graph-api = { version = "0.3.0", path = "../vibe-graph-api" }
+vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
 vibe-graph-automaton = { path = "../vibe-graph-automaton" }
 vibe-graph-viz = { path = "../vibe-graph-viz", optional = true }
 eframe = { workspace = true, optional = true }
