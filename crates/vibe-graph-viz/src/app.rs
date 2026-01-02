@@ -14,6 +14,7 @@ use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
 use vibe_graph_core::{ChangeIndicatorState, GitChangeKind, GitChangeSnapshot, SourceCodeGraph};
 
+use crate::git_panel::GitPanelState;
 use crate::sample::{create_sample_git_changes, create_sample_graph, rand_simple};
 use crate::selection::{
     apply_neighborhood_depth, select_nodes_in_lasso, sync_selection_from_graph, LassoState,
@@ -80,6 +81,8 @@ pub struct VibeGraphApp {
     layout_initialized: bool,
     /// Top bar state (operations controls)
     top_bar: TopBarState,
+    /// Git tools panel state
+    git_panel: GitPanelState,
     /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
     // node_id_to_egui: HashMap<u64, NodeIndex>,
     /// Automaton mode state (temporal evolution visualization)
@@ -222,6 +225,7 @@ impl VibeGraphApp {
             original_edge_labels,
             layout_initialized: false,
             top_bar: TopBarState::new(),
+            git_panel: GitPanelState::new(),
             // node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
@@ -1108,6 +1112,9 @@ impl App for VibeGraphApp {
         // Render top bar with operations controls
         self.top_bar.show(ctx);
 
+        // Render Git tools floating panel
+        self.git_panel.show(ctx);
+
         // Check for git changes from TypeScript layer (WASM only)
         #[cfg(target_arch = "wasm32")]
         self.try_load_git_changes_from_window();
@@ -1165,6 +1172,11 @@ impl App for VibeGraphApp {
             if i.key_pressed(egui::Key::Escape) && self.lasso.active {
                 self.lasso.active = false;
                 self.lasso.clear();
+            }
+
+            // Git panel toggle (G key)
+            if i.key_pressed(egui::Key::G) && !i.modifiers.any() {
+                self.git_panel.toggle();
             }
 
             // Arrow keys for neighborhood navigation

@@ -18,6 +18,7 @@
 
 mod api;
 mod app;
+mod git_panel;
 mod sample;
 mod selection;
 mod settings;
