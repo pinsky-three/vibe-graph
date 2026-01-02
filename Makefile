@@ -1,6 +1,4 @@
-.PHONY: dev dev-api dev-frontend dev-all ui-dev \
-        build build-wasm build-frontend build-full \
-        bump-auto release release-auto publish \
+.PHONY: dev build build-wasm build-release \
         serve clean check test lint fmt help
 
 # Default target
@@ -10,26 +8,12 @@
 # Development
 # =============================================================================
 
-dev: ## Start dev servers (shows instructions)
-	@echo "🚀 Starting development servers..."
-	@echo ""
-	@echo "Run these in separate terminals:"
-	@echo "  Terminal 1: make dev-api"
-	@echo "  Terminal 2: make dev-frontend"
-	@echo ""
-	@echo "Or use: make dev-all (requires tmux)"
-
-dev-api: ## Start API server on port 3000 (serves WASM from frontend/public/wasm)
-	cargo run -p vibe-graph-cli -- serve --port 3000 --wasm-dir frontend/public/wasm
-
-dev-frontend: ## Start frontend dev server (port 5173)
-	cd frontend && pnpm dev
-
-dev-all: ## Start both servers using tmux
-	@command -v tmux >/dev/null 2>&1 || { echo "Error: tmux not installed"; exit 1; }
-	tmux new-session -d -s vibe 'make dev-api' \; \
-		split-window -h 'make dev-frontend' \; \
-		attach
+dev: ## Start dev server (builds WASM if needed, then serves)
+	@if [ ! -f crates/vibe-graph-cli/assets/vibe_graph_viz_bg.wasm ]; then \
+		echo "📦 WASM assets not found, building..."; \
+		$(MAKE) build-wasm; \
+	fi
+	cargo run -p vibe-graph-cli -- serve --port 3000
 
 ui-dev: ## Run native egui app (vibe-graph-viz example runner)
 	cargo run -p vibe-graph-viz --example native --features native
@@ -41,42 +25,28 @@ ui-dev: ## Run native egui app (vibe-graph-viz example runner)
 check: ## Check all crates compile
 	cargo check --workspace
 
-build-wasm: ## Build WASM to frontend/public/wasm/ and update embedded assets
+build-wasm: ## Build WASM visualization to CLI assets
 	@command -v wasm-pack >/dev/null 2>&1 || { echo "Installing wasm-pack..."; cargo install wasm-pack; }
 	@echo "📦 Building WASM..."
-	cd crates/vibe-graph-viz && wasm-pack build --target web --release --out-dir ../../frontend/public/wasm
-	@echo "✅ WASM built to frontend/public/wasm/"
-	@echo "📦 Updating embedded assets..."
+	cd crates/vibe-graph-viz && wasm-pack build --target web --release --out-dir pkg
+	@echo "📦 Copying to CLI assets..."
 	@mkdir -p crates/vibe-graph-cli/assets
-	@cp frontend/public/wasm/vibe_graph_viz_bg.wasm crates/vibe-graph-cli/assets/
-	@cp frontend/public/wasm/vibe_graph_viz.js crates/vibe-graph-cli/assets/
-	@echo "✅ Embedded assets updated"
+	@cp crates/vibe-graph-viz/pkg/vibe_graph_viz_bg.wasm crates/vibe-graph-cli/assets/
+	@cp crates/vibe-graph-viz/pkg/vibe_graph_viz.js crates/vibe-graph-cli/assets/
+	@echo "✅ WASM built to crates/vibe-graph-cli/assets/"
 
-build-frontend: build-wasm ## Build frontend (TS + WASM)
-	@echo "📦 Building frontend..."
-	cd frontend && pnpm install && pnpm build
-	@echo "✅ Frontend built to frontend/dist/"
-
-build-cli-embedded: ## Build CLI with embedded WASM
-	@echo "📦 Building WASM for embedding..."
-	@command -v wasm-pack >/dev/null 2>&1 || { echo "Installing wasm-pack..."; cargo install wasm-pack; }
-	cd crates/vibe-graph-viz && wasm-pack build --target web --release
-	@mkdir -p crates/vibe-graph-cli/assets
-	cp crates/vibe-graph-viz/pkg/vibe_graph_viz_bg.wasm crates/vibe-graph-cli/assets/
-	cp crates/vibe-graph-viz/pkg/vibe_graph_viz.js crates/vibe-graph-cli/assets/
-	@echo "📦 Building CLI with embedded viz..."
-	cargo build --release -p vibe-graph-cli --features embedded-viz
-	@echo "✅ Built: target/release/vg ($$(ls -lh target/release/vg | awk '{print $$5}'))"
-
-build: ## Build minimal CLI (D3.js fallback)
+build: ## Build CLI (minimal, D3.js fallback if WASM missing)
 	cargo build --release -p vibe-graph-cli
 	@echo "✅ Built: target/release/vg ($$(ls -lh target/release/vg | awk '{print $$5}'))"
 
-build-full: build-frontend build ## Full production build
+build-release: build-wasm ## Build production CLI with embedded WASM
+	cargo build --release -p vibe-graph-cli
 	@echo ""
 	@echo "✅ Production build complete!"
-	@echo "   Frontend: frontend/dist/"
 	@echo "   CLI: target/release/vg"
+	@ls -lh target/release/vg | awk '{print "   Size:", $$5}'
+	@echo ""
+	@echo "This binary includes embedded WASM visualization."
 
 # =============================================================================
 # Testing & Linting
@@ -94,20 +64,14 @@ fmt: ## Run Rust formatter
 fmt-check: ## Check Rust formatting
 	cargo fmt --all -- --check
 
-typecheck: ## Type check frontend
-	cd frontend && pnpm typecheck
-
-ci: fmt-check lint test typecheck ## Run all CI checks
+ci: fmt-check lint test ## Run all CI checks
 	@echo "✅ All CI checks passed!"
 
 # =============================================================================
 # Serving
 # =============================================================================
 
-serve: ## Serve with legacy mode (D3.js fallback)
-	cargo run --bin vg -- serve
-
-serve-prod: ## Serve production build
+serve: ## Serve with production build
 	./target/release/vg serve
 
 # =============================================================================
@@ -141,10 +105,17 @@ bump-auto: ## Bump patch versions for crates changed since last tag
 
 release: ## Publish crates to crates.io (dependency order)
 	@echo "Publishing workspace crates (dependency order)..."
+	@echo "1/5: vibe-graph-core"
 	cargo publish -p vibe-graph-core
+	@echo "2/5: vibe-graph-git"
 	cargo publish -p vibe-graph-git
+	@echo "3/5: vibe-graph-ops"
+	cargo publish -p vibe-graph-ops
+	@echo "4/5: vibe-graph-api"
 	cargo publish -p vibe-graph-api
+	@echo "5/5: vibe-graph-cli"
 	cargo publish -p vibe-graph-cli
+	@echo "✅ All crates published!"
 
 release-auto: bump-auto release ## Auto-bump (changed crates) then publish
 
@@ -158,15 +129,13 @@ publish: ## Publish to crates.io
 clean: ## Clean all build artifacts
 	cargo clean
 	rm -rf crates/vibe-graph-viz/pkg
-	rm -rf frontend/dist
-	rm -rf frontend/node_modules
-	rm -rf frontend/public/wasm/*.wasm
-	rm -rf frontend/public/wasm/*.js
+	rm -rf crates/vibe-graph-cli/assets/*.wasm
+	rm -rf crates/vibe-graph-cli/assets/*.js
 
 clean-wasm: ## Clean only WASM artifacts
 	rm -rf crates/vibe-graph-viz/pkg
-	rm -rf frontend/public/wasm/*.wasm
-	rm -rf frontend/public/wasm/*.js
+	rm -rf crates/vibe-graph-cli/assets/*.wasm
+	rm -rf crates/vibe-graph-cli/assets/*.js
 
 # =============================================================================
 # Setup
@@ -176,9 +145,12 @@ setup: ## Install development dependencies
 	@echo "📦 Installing Rust tools..."
 	rustup target add wasm32-unknown-unknown
 	cargo install wasm-pack
-	@echo "📦 Installing frontend dependencies..."
-	cd frontend && pnpm install
 	@echo "✅ Setup complete!"
+	@echo ""
+	@echo "Quick start:"
+	@echo "  1. make build-wasm   # Build WASM visualization"
+	@echo "  2. make dev          # Start dev server"
+	@echo "  3. Open http://localhost:3000"
 
 # =============================================================================
 # Help
@@ -194,6 +166,5 @@ help: ## Show this help message
 	@echo "Quick Start:"
 	@echo "  1. make setup        # Install dependencies"
 	@echo "  2. make build-wasm   # Build WASM visualization"
-	@echo "  3. make dev-api      # Terminal 1: Start API server"
-	@echo "  4. make dev-frontend # Terminal 2: Start frontend"
-	@echo "  5. Open http://localhost:5173"
+	@echo "  3. make dev          # Start server"
+	@echo "  4. Open http://localhost:3000"

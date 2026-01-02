@@ -14,9 +14,11 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 native = ["eframe/default"]
+automaton = ["vibe-graph-automaton"]
 
 [dependencies]
 vibe-graph-core = { path = "../vibe-graph-core" }
+vibe-graph-automaton = { path = "../vibe-graph-automaton", optional = true }
 eframe = { workspace = true, features = ["glow"] }
 egui = { workspace = true }
 egui_graphs = { workspace = true }
@@ -37,6 +39,12 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 js-sys = "0.3"
+gloo-net = "0.6"
+gloo-timers = "0.3"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "automaton_viz"
+required-features = ["native", "automaton"]

@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-core"
-version = "0.1.3"
+version = "0.2.1"
 edition.workspace = true
 description = "Core domain model for the Vibe-Graph neural OS"
 license = "MIT"
@@ -12,3 +12,7 @@ categories = ["data-structures", "development-tools"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 petgraph = { workspace = true }
+
+# WASM-compatible time (std::time::Instant panics in WASM)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1.1"

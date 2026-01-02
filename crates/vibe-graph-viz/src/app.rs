@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use eframe::{App, CreationContext};
 use egui::{CollapsingHeader, Context, ScrollArea};
 use egui_graphs::{
-    FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, Graph,
-    GraphView, LayoutForceDirected, MetadataFrame,
+    CenterGravityParams, Extra, FruchtermanReingoldState, FruchtermanReingoldWithCenterGravity,
+    FruchtermanReingoldWithCenterGravityState, Graph, GraphView, LayoutForceDirected,
+    MetadataFrame,
 };
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
@@ -21,7 +22,11 @@ use crate::selection::{
 use crate::settings::{
     SelectionPanelState, SettingsInteraction, SettingsNavigation, SettingsStyle,
 };
+use crate::top_bar::TopBarState;
 use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
+
+#[cfg(feature = "automaton")]
+use crate::automaton_mode::AutomatonMode;
 
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
@@ -67,6 +72,19 @@ pub struct VibeGraphApp {
     change_anim: ChangeIndicatorState,
     /// Set of node indices with changes (cached for fast lookup)
     changed_nodes: HashMap<NodeIndex, GitChangeKind>,
+    /// Original node labels (for restoring when toggling visibility)
+    original_node_labels: HashMap<NodeIndex, String>,
+    /// Original edge labels (for restoring when toggling visibility)
+    original_edge_labels: HashMap<petgraph::stable_graph::EdgeIndex, String>,
+    /// Whether layout has been initialized with custom defaults
+    layout_initialized: bool,
+    /// Top bar state (operations controls)
+    top_bar: TopBarState,
+    /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
+    // node_id_to_egui: HashMap<u64, NodeIndex>,
+    /// Automaton mode state (temporal evolution visualization)
+    #[cfg(feature = "automaton")]
+    automaton_mode: AutomatonMode,
 }
 
 impl VibeGraphApp {
@@ -85,7 +103,10 @@ impl VibeGraphApp {
 
     /// Create app from a SourceCodeGraph.
     pub fn from_source_graph(cc: &CreationContext<'_>, source_graph: SourceCodeGraph) -> Self {
-        let (petgraph, _id_to_idx) = source_graph.to_petgraph();
+        // Apply OLED-optimized dark theme
+        Self::apply_oled_dark_theme(&cc.egui_ctx);
+
+        let (petgraph, id_to_idx) = source_graph.to_petgraph();
 
         // Convert to egui_graphs format (empty node/edge data for now)
         let mut empty_graph = StableDiGraph::<(), ()>::new();
@@ -140,16 +161,45 @@ impl VibeGraphApp {
             }
         }
 
-        // Set labels
+        // Set labels and store originals for visibility toggling
+        let mut original_node_labels = HashMap::new();
         for &egui_idx in petgraph_to_egui.values() {
             if let Some(label) = labels.get(&egui_idx) {
                 if let Some(node) = egui_graph.node_mut(egui_idx) {
                     node.set_label(label.clone());
+                    original_node_labels.insert(egui_idx, label.clone());
                 }
             }
         }
 
+        // Store original edge labels and clear them (edge labels are off by default)
+        let mut original_edge_labels = HashMap::new();
+        let edge_indices: Vec<_> = egui_graph.edges_iter().map(|(idx, _)| idx).collect();
+        for edge_idx in edge_indices {
+            if let Some(edge) = egui_graph.edge_mut(edge_idx) {
+                let label = edge.label().to_string();
+                original_edge_labels.insert(edge_idx, label);
+                // Clear edge labels by default (show_edge_labels defaults to false)
+                edge.set_label(String::new());
+            }
+        }
+
         let dark_mode = cc.egui_ctx.style().visuals.dark_mode;
+
+        // Build mapping from node ID (u64) to egui NodeIndex
+        let mut node_id_to_egui = HashMap::new();
+        for (node_id, petgraph_idx) in &id_to_idx {
+            if let Some(&egui_idx) = petgraph_to_egui.get(petgraph_idx) {
+                node_id_to_egui.insert(node_id.0, egui_idx);
+            }
+        }
+
+        #[cfg(feature = "automaton")]
+        let automaton_mode = {
+            let mut mode = AutomatonMode::default();
+            mode.set_node_mapping(node_id_to_egui.clone());
+            mode
+        };
 
         Self {
             g: egui_graph,
@@ -168,7 +218,81 @@ impl VibeGraphApp {
             last_git_changes_raw: None,
             change_anim: ChangeIndicatorState::default(),
             changed_nodes: HashMap::new(),
+            original_node_labels,
+            original_edge_labels,
+            layout_initialized: false,
+            top_bar: TopBarState::new(),
+            // node_id_to_egui,
+            #[cfg(feature = "automaton")]
+            automaton_mode,
         }
+    }
+
+    /// Apply OLED-optimized dark theme with true black background and vibrant colors.
+    fn apply_oled_dark_theme(ctx: &Context) {
+        let mut visuals = egui::Visuals::dark();
+
+        // True black background for OLED
+        visuals.panel_fill = egui::Color32::BLACK;
+        visuals.window_fill = egui::Color32::from_rgb(8, 8, 8);
+        visuals.extreme_bg_color = egui::Color32::BLACK;
+        visuals.faint_bg_color = egui::Color32::from_rgb(12, 12, 16);
+
+        // Vibrant accent colors
+        visuals.selection.bg_fill = egui::Color32::from_rgba_unmultiplied(0, 212, 255, 60);
+        visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 212, 255));
+
+        // Hyperlink color - electric cyan
+        visuals.hyperlink_color = egui::Color32::from_rgb(0, 212, 255);
+
+        // Widget styling for OLED
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(16, 16, 20);
+        visuals.widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(144, 144, 168));
+        visuals.widgets.noninteractive.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(26, 26, 36));
+
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(20, 20, 28);
+        visuals.widgets.inactive.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 180, 200));
+        visuals.widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 36, 48));
+
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(32, 32, 44);
+        visuals.widgets.hovered.fg_stroke =
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 45, 85));
+        visuals.widgets.hovered.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 45, 85));
+
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(40, 40, 56);
+        visuals.widgets.active.fg_stroke =
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(0, 212, 255));
+        visuals.widgets.active.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 212, 255));
+
+        visuals.widgets.open.bg_fill = egui::Color32::from_rgb(24, 24, 32);
+        visuals.widgets.open.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 220));
+
+        // Window shadows for depth on black (u8 values, [i8; 2] for offset)
+        visuals.popup_shadow = egui::epaint::Shadow {
+            offset: [4, 4],
+            blur: 12,
+            spread: 0,
+            color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180),
+        };
+
+        visuals.window_shadow = egui::epaint::Shadow {
+            offset: [6, 6],
+            blur: 16,
+            spread: 0,
+            color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200),
+        };
+
+        // Subtle window stroke
+        visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(26, 26, 40));
+
+        ctx.set_visuals(visuals);
     }
 
     /// Load graph from embedded data or return sample.
@@ -248,6 +372,24 @@ impl VibeGraphApp {
         self.refresh_changed_nodes();
     }
 
+    /// Set the automaton data path and initialize automaton mode.
+    ///
+    /// The path should point to the project root containing `.self/automaton/`.
+    #[cfg(feature = "automaton")]
+    pub fn set_automaton_path(&mut self, path: PathBuf) {
+        let store_path = path.join(".self");
+        self.automaton_mode = AutomatonMode::with_path(store_path);
+        self.automaton_mode
+            .set_node_mapping(self.node_id_to_egui.clone());
+    }
+
+    /// Enable automaton mode and load snapshots.
+    #[cfg(feature = "automaton")]
+    pub fn enable_automaton_mode(&mut self) {
+        self.automaton_mode.enabled = true;
+        self.automaton_mode.refresh();
+    }
+
     /// Refresh the cached set of changed node indices.
     fn refresh_changed_nodes(&mut self) {
         self.changed_nodes.clear();
@@ -281,6 +423,84 @@ impl VibeGraphApp {
     /// Check if a node has changes.
     pub fn node_has_changes(&self, idx: NodeIndex) -> Option<GitChangeKind> {
         self.changed_nodes.get(&idx).copied()
+    }
+
+    /// Apply node label visibility setting.
+    fn apply_label_visibility(&mut self) {
+        let show = self.settings_style.show_node_labels;
+        // Collect indices first to avoid borrow issues
+        let indices: Vec<_> = self.g.nodes_iter().map(|(idx, _)| idx).collect();
+        for node_idx in indices {
+            if let Some(node) = self.g.node_mut(node_idx) {
+                if show {
+                    // Restore original label
+                    if let Some(original) = self.original_node_labels.get(&node_idx) {
+                        node.set_label(original.clone());
+                    }
+                } else {
+                    // Clear label
+                    node.set_label(String::new());
+                }
+            }
+        }
+    }
+
+    /// Apply edge label visibility setting.
+    fn apply_edge_label_visibility(&mut self) {
+        let show = self.settings_style.show_edge_labels;
+        // Collect indices first to avoid borrow issues
+        let indices: Vec<_> = self.g.edges_iter().map(|(idx, _)| idx).collect();
+        for edge_idx in indices {
+            if let Some(edge) = self.g.edge_mut(edge_idx) {
+                if show {
+                    // Restore original label
+                    if let Some(original) = self.original_edge_labels.get(&edge_idx) {
+                        edge.set_label(original.clone());
+                    }
+                } else {
+                    // Clear label
+                    edge.set_label(String::new());
+                }
+            }
+        }
+    }
+
+    /// Initialize layout with custom default parameters.
+    /// These values produce a nicely spread, stable graph layout.
+    fn initialize_layout_defaults(&self, ctx: &Context) {
+        use egui_graphs::CenterGravity;
+
+        // Create custom layout state with optimized defaults
+        let custom_state = FruchtermanReingoldWithCenterGravityState {
+            base: FruchtermanReingoldState {
+                is_running: true,
+                dt: 0.021, // Slower, more stable simulation
+                epsilon: 1e-3,
+                damping: 0.30, // Standard damping
+                max_step: 10.0,
+                k_scale: 0.55,   // Larger ideal edge length
+                c_attract: 1.57, // Stronger attraction between connected nodes
+                c_repulse: 0.20, // Weaker repulsion for tighter clusters
+                last_avg_displacement: None,
+                step_count: 0,
+            },
+            extras: (
+                Extra::<CenterGravity, true> {
+                    enabled: true,
+                    params: CenterGravityParams { c: 0.60 }, // Stronger center pull
+                },
+                (),
+            ),
+        };
+
+        // Apply the custom state
+        egui::Area::new(egui::Id::new("layout_init_dummy")).show(ctx, |ui| {
+            egui_graphs::set_layout_state::<FruchtermanReingoldWithCenterGravityState>(
+                ui,
+                custom_state,
+                None,
+            );
+        });
     }
 }
 
@@ -511,7 +731,7 @@ impl VibeGraphApp {
                 let mut dark = ui.ctx().style().visuals.dark_mode;
                 if ui.checkbox(&mut dark, "dark mode").changed() {
                     if dark {
-                        ui.ctx().set_visuals(egui::Visuals::dark());
+                        Self::apply_oled_dark_theme(ui.ctx());
                     } else {
                         ui.ctx().set_visuals(egui::Visuals::light());
                     }
@@ -523,9 +743,40 @@ impl VibeGraphApp {
             ui.label(egui::RichText::new("Labels").strong());
 
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.settings_style.labels_always, "Always show labels");
-                Self::info_icon(ui, "Show node names always vs on hover");
+                if ui
+                    .checkbox(
+                        &mut self.settings_style.show_node_labels,
+                        "Show node labels",
+                    )
+                    .changed()
+                {
+                    self.apply_label_visibility();
+                }
+                Self::info_icon(ui, "Toggle node name visibility");
             });
+
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(
+                        &mut self.settings_style.show_edge_labels,
+                        "Show edge labels",
+                    )
+                    .changed()
+                {
+                    self.apply_edge_label_visibility();
+                }
+                Self::info_icon(ui, "Toggle edge ID labels (edge 0, edge 1, etc.)");
+            });
+
+            ui.add_enabled_ui(
+                self.settings_style.show_node_labels || self.settings_style.show_edge_labels,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
+                        Self::info_icon(ui, "Show labels always vs on hover only");
+                    });
+                },
+            );
 
             ui.separator();
             ui.label(egui::RichText::new("Change Indicators").strong());
@@ -562,18 +813,19 @@ impl VibeGraphApp {
                 if total == 0 {
                     ui.label(
                         egui::RichText::new("✓ No changes detected")
-                            .color(egui::Color32::from_rgb(100, 200, 100)),
+                            .color(egui::Color32::from_rgb(0, 255, 136)), // Electric green
                     );
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(format!("Total: {}", total));
                     });
 
+                    // OLED-optimized vibrant status colors
                     if modified > 0 {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Modified", modified))
-                                    .color(egui::Color32::from_rgb(255, 200, 50)),
+                                    .color(egui::Color32::from_rgb(255, 170, 0)), // Vibrant amber
                             );
                         });
                     }
@@ -581,7 +833,7 @@ impl VibeGraphApp {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Added", added))
-                                    .color(egui::Color32::from_rgb(100, 255, 100)),
+                                    .color(egui::Color32::from_rgb(0, 255, 136)), // Electric green
                             );
                         });
                     }
@@ -589,7 +841,7 @@ impl VibeGraphApp {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Deleted", deleted))
-                                    .color(egui::Color32::from_rgb(255, 100, 100)),
+                                    .color(egui::Color32::from_rgb(255, 68, 102)), // Hot coral
                             );
                         });
                     }
@@ -597,7 +849,7 @@ impl VibeGraphApp {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("● {} Untracked", untracked))
-                                    .color(egui::Color32::from_rgb(150, 150, 150)),
+                                    .color(egui::Color32::from_rgb(120, 140, 160)), // Subtle cyan-gray
                             );
                         });
                     }
@@ -628,26 +880,27 @@ impl VibeGraphApp {
                                 orphan_changes.len()
                             ))
                             .small()
-                            .color(egui::Color32::from_rgb(255, 180, 100)),
+                            .color(egui::Color32::from_rgb(255, 170, 0)), // Vibrant amber warning
                         );
                         egui::ScrollArea::vertical()
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 for change in orphan_changes.iter().take(10) {
+                                    // OLED-optimized vibrant colors
                                     let color = match change.kind {
                                         GitChangeKind::Modified => {
-                                            egui::Color32::from_rgb(255, 200, 50)
+                                            egui::Color32::from_rgb(255, 170, 0)
                                         }
                                         GitChangeKind::Added => {
-                                            egui::Color32::from_rgb(100, 255, 100)
+                                            egui::Color32::from_rgb(0, 255, 136)
                                         }
                                         GitChangeKind::Deleted => {
-                                            egui::Color32::from_rgb(255, 100, 100)
+                                            egui::Color32::from_rgb(255, 68, 102)
                                         }
                                         GitChangeKind::Untracked => {
-                                            egui::Color32::from_rgb(150, 150, 150)
+                                            egui::Color32::from_rgb(120, 140, 160)
                                         }
-                                        _ => egui::Color32::GRAY,
+                                        _ => egui::Color32::from_rgb(100, 100, 120),
                                     };
                                     let filename = change
                                         .path
@@ -852,6 +1105,9 @@ impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let mut needs_neighborhood_update = false;
 
+        // Render top bar with operations controls
+        self.top_bar.show(ctx);
+
         // Check for git changes from TypeScript layer (WASM only)
         #[cfg(target_arch = "wasm32")]
         self.try_load_git_changes_from_window();
@@ -862,9 +1118,30 @@ impl App for VibeGraphApp {
         self.change_anim.enabled = self.settings_style.change_indicators;
         self.change_anim.tick(dt);
 
+        // Advance automaton playback (when enabled)
+        #[cfg(feature = "automaton")]
+        if self.automaton_mode.enabled && self.automaton_mode.playing {
+            if self.automaton_mode.tick(dt) {
+                ctx.request_repaint();
+            }
+        }
+
         // Request continuous repaint for animations
-        if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
+        let needs_repaint = self.settings_style.change_indicators && !self.changed_nodes.is_empty();
+
+        #[cfg(feature = "automaton")]
+        if self.automaton_mode.enabled && self.automaton_mode.playing {
+            needs_repaint = true;
+        }
+
+        if needs_repaint {
             ctx.request_repaint();
+        }
+
+        // Initialize layout with custom defaults on first frame
+        if !self.layout_initialized {
+            self.initialize_layout_defaults(ctx);
+            self.layout_initialized = true;
         }
 
         // Handle keyboard shortcuts
@@ -909,6 +1186,21 @@ impl App for VibeGraphApp {
                     needs_neighborhood_update = true;
                 }
             }
+
+            // Automaton mode toggle (A key)
+            #[cfg(feature = "automaton")]
+            if i.key_pressed(egui::Key::A) && !i.modifiers.any() {
+                self.automaton_mode.enabled = !self.automaton_mode.enabled;
+                if self.automaton_mode.enabled && self.automaton_mode.snapshots.is_empty() {
+                    self.automaton_mode.refresh();
+                }
+            }
+
+            // Automaton playback controls (Space to play/pause when automaton mode is enabled)
+            #[cfg(feature = "automaton")]
+            if self.automaton_mode.enabled && i.key_pressed(egui::Key::Space) {
+                self.automaton_mode.playing = !self.automaton_mode.playing;
+            }
         });
 
         if needs_neighborhood_update {
@@ -943,6 +1235,13 @@ impl App for VibeGraphApp {
                         ui.separator();
 
                         self.ui_selected(ui);
+
+                        // Automaton mode panel (when feature enabled)
+                        #[cfg(feature = "automaton")]
+                        {
+                            ui.separator();
+                            self.automaton_mode.ui_panel(ui);
+                        }
                     });
                 });
         }
@@ -985,28 +1284,32 @@ impl App for VibeGraphApp {
 
             // Note: Edge labels are disabled by not setting labels on edges (we use () for edge data)
             // Node labels are controlled by with_labels_always
+            // Vibrant OLED-optimized selection colors
             let settings_style = egui_graphs::SettingsStyle::new()
                 .with_labels_always(self.settings_style.labels_always)
                 .with_node_stroke_hook(move |selected, dragged, _color, _stroke, _style| {
                     if selected {
+                        // Electric cyan for selected nodes - pops on black
                         let color = if dark_mode {
-                            egui::Color32::from_rgb(0, 255, 255)
+                            egui::Color32::from_rgb(0, 212, 255)
                         } else {
                             egui::Color32::from_rgb(0, 150, 200)
                         };
                         egui::Stroke::new(3.0, color)
                     } else if dragged {
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 0))
+                        // Vibrant gold/amber for dragged
+                        egui::Stroke::new(2.5, egui::Color32::from_rgb(255, 204, 0))
                     } else {
                         egui::Stroke::NONE
                     }
                 })
                 .with_edge_stroke_hook(move |selected, _order, stroke, _style| {
                     if selected {
+                        // Hot magenta for selected edges
                         let color = if dark_mode {
-                            egui::Color32::from_rgb(255, 100, 255)
+                            egui::Color32::from_rgb(255, 45, 85)
                         } else {
-                            egui::Color32::from_rgb(200, 50, 200)
+                            egui::Color32::from_rgb(200, 50, 100)
                         };
                         egui::Stroke::new(3.0, color)
                     } else {
@@ -1048,6 +1351,34 @@ impl App for VibeGraphApp {
                                 &self.change_anim,
                                 self.dark_mode,
                             );
+                        }
+                    }
+                }
+            }
+
+            // Draw automaton activation overlays when enabled
+            #[cfg(feature = "automaton")]
+            if self.automaton_mode.enabled && !self.automaton_mode.activations.is_empty() {
+                let painter = ui.painter();
+                let meta = MetadataFrame::new(None).load(ui);
+                let graph_rect = graph_response.rect;
+
+                for (&node_id, &activation) in &self.automaton_mode.activations {
+                    if let Some(&egui_idx) = self.node_id_to_egui.get(&node_id) {
+                        if let Some(node) = self.g.node(egui_idx) {
+                            let canvas_pos = node.location();
+                            let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
+                            let screen_pos = egui::pos2(
+                                widget_relative.x + graph_rect.min.x,
+                                widget_relative.y + graph_rect.min.y,
+                            );
+
+                            if graph_rect.contains(screen_pos) {
+                                let radius = 10.0 + activation as f32 * 4.0;
+                                let color =
+                                    AutomatonMode::activation_color(activation, self.dark_mode);
+                                painter.circle_filled(screen_pos, radius, color);
+                            }
                         }
                     }
                 }

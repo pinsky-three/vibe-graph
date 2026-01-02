@@ -118,12 +118,45 @@ vg sync && vg serve
 vibe-graph/
 ├── crates/
 │   ├── vibe-graph-core        # Domain model: graphs, nodes, edges, references
+│   ├── vibe-graph-automaton   # Temporal state evolution & rule-driven automaton
 │   ├── vibe-graph-cli         # CLI entry point (vg command)
 │   ├── vibe-graph-api         # REST + WebSocket API (Axum-based)
 │   ├── vibe-graph-viz         # egui/WASM visualization
 │   ├── vibe-graph-git         # Git status and fossilization
 │   └── ...                    # Additional crates (ssot, semantic, llmca, etc.)
 └── frontend/                  # TypeScript/Vite host for WASM visualization
+```
+
+### Graph Automaton (vibe-graph-automaton)
+
+The automaton crate enables **temporal state evolution** on graphs—a foundation for "vibe coding" where code structure evolves over time via rule-driven transitions.
+
+```rust
+use vibe_graph_automaton::{GraphAutomaton, Rule, StateData, TemporalGraph};
+
+// Each node tracks: history: Vec<(rule, state)>, current: (rule, state)
+let mut automaton = GraphAutomaton::new(temporal_graph)
+    .with_rule(Arc::new(MyRule));
+
+// Evolve the graph
+automaton.tick()?;
+```
+
+**Features:**
+- 🕰️ **Temporal State** — Each node maintains full transition history
+- 🔄 **Pluggable Rules** — Implement `Rule` trait for custom evolution logic
+- 🧠 **LLM-Powered Rules** — Use `--features llm` for AI-driven state transitions via [Rig](https://github.com/0xPlaygrounds/rig)
+- 🎮 **Examples** — Conway's Game of Life (deterministic & LLM-powered)
+
+```bash
+# Run Game of Life example
+cargo run --example game_of_life -p vibe-graph-automaton
+
+# LLM-powered version (requires API key)
+export OPENAI_API_URL="https://openrouter.ai/api/v1"
+export OPENAI_API_KEY="sk-or-..."
+export OPENAI_MODEL_NAME="anthropic/claude-3.5-sonnet"
+cargo run --example llm_game_of_life -p vibe-graph-automaton --features llm
 ```
 
 ## The `.self` Folder
