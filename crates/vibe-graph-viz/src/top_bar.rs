@@ -120,6 +120,11 @@ impl TopBarState {
         // Poll for async results
         self.poll_results();
 
+        // Request continuous repaints while loading so we can poll results
+        if self.state == OperationState::Loading {
+            ctx.request_repaint();
+        }
+
         if !self.visible {
             return;
         }
