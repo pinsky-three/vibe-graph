@@ -668,6 +668,18 @@ impl GitPanelState {
             {
                 self.unstage_all();
             }
+
+            ui.separator();
+
+            // Copy summary button
+            if ui
+                .button("📋 Summary")
+                .on_hover_text("Copy git status summary")
+                .clicked()
+            {
+                let summary = self.format_status_summary();
+                ui.ctx().copy_text(summary);
+            }
         });
 
         ui.separator();
@@ -679,7 +691,7 @@ impl GitPanelState {
             ui.label("Message:");
             let te = egui::TextEdit::singleline(&mut self.commit_message)
                 .hint_text("Enter commit message...")
-                .desired_width(250.0);
+                .desired_width(220.0);
             ui.add(te);
         });
 
@@ -696,7 +708,17 @@ impl GitPanelState {
 
         // Diff summary
         if let Some(diff) = &self.diff {
-            ui.label(RichText::new("Changes").strong());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Changes").strong());
+
+                // Quick copy diff button
+                if !diff.diff.is_empty()
+                    && ui.small_button("📋").on_hover_text("Copy diff").clicked()
+                {
+                    ui.ctx().copy_text(diff.diff.clone());
+                }
+            });
+
             ui.horizontal(|ui| {
                 ui.label(format!("Files: {}", diff.files_changed));
                 ui.label(
@@ -734,7 +756,48 @@ impl GitPanelState {
         // Track branch to checkout
         let mut checkout_branch: Option<String> = None;
 
-        ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        // Copy buttons at top
+        ui.horizontal(|ui| {
+            if ui
+                .button("📋 Copy Current")
+                .on_hover_text("Copy current branch name")
+                .clicked()
+            {
+                if let Some(branch) = &self.current_branch {
+                    ui.ctx().copy_text(branch.clone());
+                }
+            }
+
+            if ui
+                .button("📋 Copy All")
+                .on_hover_text("Copy all branch names")
+                .clicked()
+            {
+                let text = branches
+                    .iter()
+                    .filter(|b| !b.is_remote)
+                    .map(|b| {
+                        if b.is_current {
+                            format!("* {}", b.name)
+                        } else {
+                            format!("  {}", b.name)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                ui.ctx().copy_text(text);
+            }
+
+            ui.label(
+                RichText::new(format!("{} branches", branches.len()))
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
+        });
+
+        ui.separator();
+
+        ScrollArea::vertical().max_height(270.0).show(ui, |ui| {
             // Local branches
             ui.label(RichText::new("Local").strong());
             for branch in branches.iter().filter(|b| !b.is_remote) {
@@ -772,6 +835,15 @@ impl GitPanelState {
         let mut checkout_clicked = None;
 
         ui.horizontal(|ui| {
+            // Copy branch name button
+            if ui
+                .small_button("📋")
+                .on_hover_text("Copy branch name")
+                .clicked()
+            {
+                ui.ctx().copy_text(branch.name.clone());
+            }
+
             let is_current = branch.is_current;
             let icon = if is_current { "●" } else { "○" };
             let color = if is_current {
@@ -816,15 +888,57 @@ impl GitPanelState {
             return;
         }
 
-        ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
-            for entry in &self.log_entries {
-                self.render_log_entry(ui, entry);
+        // Copy buttons at top
+        ui.horizontal(|ui| {
+            if ui
+                .button("📋 Copy All")
+                .on_hover_text("Copy all commits to clipboard")
+                .clicked()
+            {
+                let log_text = self.format_log_for_clipboard();
+                ui.ctx().copy_text(log_text);
+            }
+
+            if ui
+                .button("📋 Copy Last 5")
+                .on_hover_text("Copy last 5 commits")
+                .clicked()
+            {
+                let log_text = self.format_log_for_clipboard_n(5);
+                ui.ctx().copy_text(log_text);
+            }
+
+            ui.label(
+                RichText::new(format!("{} commits", self.log_entries.len()))
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
+        });
+
+        ui.separator();
+
+        ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            // Clone entries to avoid borrow issues
+            let entries: Vec<_> = self.log_entries.clone();
+            for entry in &entries {
+                Self::render_log_entry_static(ui, entry);
             }
         });
     }
 
-    fn render_log_entry(&self, ui: &mut Ui, entry: &GitLogEntry) {
+    /// Render a single log entry (static to avoid borrow issues).
+    fn render_log_entry_static(ui: &mut Ui, entry: &GitLogEntry) {
         ui.horizontal(|ui| {
+            // Copy SHA button
+            if ui
+                .small_button("📋")
+                .on_hover_text("Copy commit info")
+                .clicked()
+            {
+                let text = format!("{} {} - {}", entry.short_id, entry.author, entry.message);
+                ui.ctx().copy_text(text);
+            }
+
             // Short SHA
             ui.label(
                 RichText::new(&entry.short_id)
@@ -833,8 +947,8 @@ impl GitPanelState {
             );
 
             // Message (truncated)
-            let msg = if entry.message.len() > 50 {
-                format!("{}...", &entry.message[..47])
+            let msg = if entry.message.len() > 45 {
+                format!("{}...", &entry.message[..42])
             } else {
                 entry.message.clone()
             };
@@ -843,14 +957,14 @@ impl GitPanelState {
 
         // Author and time on second line
         ui.horizontal(|ui| {
-            ui.add_space(60.0); // Indent
+            ui.add_space(32.0); // Indent (adjusted for copy button)
             ui.label(
                 RichText::new(&entry.author)
                     .small()
                     .color(egui::Color32::GRAY),
             );
 
-            // Relative time (using current time estimation)
+            // Relative time
             let age = get_current_timestamp() - entry.timestamp;
             let age_str = format_relative_time(age);
             ui.label(
@@ -861,6 +975,54 @@ impl GitPanelState {
         });
 
         ui.add_space(4.0);
+    }
+
+    /// Format log entries for clipboard.
+    fn format_log_for_clipboard(&self) -> String {
+        self.format_log_for_clipboard_n(self.log_entries.len())
+    }
+
+    /// Format N log entries for clipboard.
+    fn format_log_for_clipboard_n(&self, n: usize) -> String {
+        self.log_entries
+            .iter()
+            .take(n)
+            .map(|e| format!("{} {} - {}", e.short_id, e.author, e.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Format git status summary for clipboard.
+    fn format_status_summary(&self) -> String {
+        let mut lines = Vec::new();
+
+        // Repo and branch info
+        if let Some(repo) = self.effective_repo() {
+            lines.push(format!("Repository: {}", repo));
+        }
+        if let Some(branch) = &self.current_branch {
+            lines.push(format!("Branch: {}", branch));
+        }
+
+        // Changes summary
+        if let Some(diff) = &self.diff {
+            lines.push(String::new()); // Empty line
+            lines.push(format!(
+                "Changes: {} files, +{} -{}",
+                diff.files_changed, diff.insertions, diff.deletions
+            ));
+        }
+
+        // Recent commits
+        if !self.log_entries.is_empty() {
+            lines.push(String::new()); // Empty line
+            lines.push("Recent commits:".to_string());
+            for entry in self.log_entries.iter().take(3) {
+                lines.push(format!("  {} {}", entry.short_id, entry.message));
+            }
+        }
+
+        lines.join("\n")
     }
 
     fn render_diff_tab(&mut self, ui: &mut Ui) {
@@ -874,6 +1036,33 @@ impl GitPanelState {
             if ui.selectable_label(self.diff_staged, "Staged").clicked() {
                 self.diff_staged = true;
                 self.fetch_diff();
+            }
+
+            ui.separator();
+
+            // Copy buttons
+            if let Some(diff) = &self.diff {
+                if !diff.diff.is_empty() {
+                    if ui
+                        .button("📋 Copy Diff")
+                        .on_hover_text("Copy full diff to clipboard")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(diff.diff.clone());
+                    }
+
+                    if ui
+                        .button("📋 Stats")
+                        .on_hover_text("Copy stats summary")
+                        .clicked()
+                    {
+                        let stats = format!(
+                            "{} files changed, {} insertions(+), {} deletions(-)",
+                            diff.files_changed, diff.insertions, diff.deletions
+                        );
+                        ui.ctx().copy_text(stats);
+                    }
+                }
             }
         });
 
@@ -903,7 +1092,7 @@ impl GitPanelState {
                 ui.separator();
 
                 // Diff content with syntax highlighting
-                ScrollArea::both().max_height(300.0).show(ui, |ui| {
+                ScrollArea::both().max_height(280.0).show(ui, |ui| {
                     self.render_diff_content(ui, &diff.diff);
                 });
             }
@@ -918,7 +1107,7 @@ impl GitPanelState {
 
     fn render_diff_content(&self, ui: &mut Ui, diff: &str) {
         for line in diff.lines() {
-            let (color, prefix) = if line.starts_with('+') && !line.starts_with("+++") {
+            let (color, _prefix) = if line.starts_with('+') && !line.starts_with("+++") {
                 (egui::Color32::from_rgb(0, 255, 136), "+")
             } else if line.starts_with('-') && !line.starts_with("---") {
                 (egui::Color32::from_rgb(255, 68, 102), "-")
@@ -930,7 +1119,7 @@ impl GitPanelState {
                 (egui::Color32::from_rgb(160, 160, 180), " ")
             };
 
-            let display_line = if prefix.is_empty() { line } else { line };
+            let display_line = line;
 
             ui.label(RichText::new(display_line).monospace().color(color));
         }
