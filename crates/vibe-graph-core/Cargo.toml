@@ -12,3 +12,7 @@ categories = ["data-structures", "development-tools"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 petgraph = { workspace = true }
+
+# WASM-compatible time (std::time::Instant panics in WASM)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1.1"

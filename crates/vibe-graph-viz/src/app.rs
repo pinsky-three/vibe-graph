@@ -22,6 +22,7 @@ use crate::selection::{
 use crate::settings::{
     SelectionPanelState, SettingsInteraction, SettingsNavigation, SettingsStyle,
 };
+use crate::top_bar::TopBarState;
 use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
 
 #[cfg(feature = "automaton")]
@@ -77,8 +78,10 @@ pub struct VibeGraphApp {
     original_edge_labels: HashMap<petgraph::stable_graph::EdgeIndex, String>,
     /// Whether layout has been initialized with custom defaults
     layout_initialized: bool,
+    /// Top bar state (operations controls)
+    top_bar: TopBarState,
     /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
-    node_id_to_egui: HashMap<u64, NodeIndex>,
+    // node_id_to_egui: HashMap<u64, NodeIndex>,
     /// Automaton mode state (temporal evolution visualization)
     #[cfg(feature = "automaton")]
     automaton_mode: AutomatonMode,
@@ -218,7 +221,8 @@ impl VibeGraphApp {
             original_node_labels,
             original_edge_labels,
             layout_initialized: false,
-            node_id_to_egui,
+            top_bar: TopBarState::new(),
+            // node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
         }
@@ -1101,6 +1105,9 @@ impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let mut needs_neighborhood_update = false;
 
+        // Render top bar with operations controls
+        self.top_bar.show(ctx);
+
         // Check for git changes from TypeScript layer (WASM only)
         #[cfg(target_arch = "wasm32")]
         self.try_load_git_changes_from_window();
@@ -1120,8 +1127,7 @@ impl App for VibeGraphApp {
         }
 
         // Request continuous repaint for animations
-        let mut needs_repaint =
-            self.settings_style.change_indicators && !self.changed_nodes.is_empty();
+        let needs_repaint = self.settings_style.change_indicators && !self.changed_nodes.is_empty();
 
         #[cfg(feature = "automaton")]
         if self.automaton_mode.enabled && self.automaton_mode.playing {

@@ -141,7 +141,7 @@ pub fn create_sample_git_changes() -> GitChangeSnapshot {
                 staged: false,
             },
         ],
-        captured_at: Some(std::time::Instant::now()),
+        captured_at: None, // Sample data doesn't need timestamp
     }
 }
 
