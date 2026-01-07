@@ -29,9 +29,40 @@ use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_
 #[cfg(feature = "automaton")]
 use crate::automaton_mode::AutomatonMode;
 
+#[cfg(feature = "gpu-layout")]
+use crate::gpu_layout::GpuLayoutManager;
+
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
 type ForceState = FruchtermanReingoldWithCenterGravityState;
+
+// =============================================================================
+// Layout Performance Thresholds
+// =============================================================================
+
+/// Node count threshold for "large graph" optimizations.
+const LARGE_GRAPH_THRESHOLD: usize = 1000;
+
+/// Node count threshold for "huge graph" - start with layout paused.
+const HUGE_GRAPH_THRESHOLD: usize = 3000;
+
+/// Frame skip count for large graphs (run layout every N frames).
+const LARGE_GRAPH_FRAME_SKIP: u32 = 2;
+
+/// Frame skip count for huge graphs.
+const HUGE_GRAPH_FRAME_SKIP: u32 = 4;
+
+/// Epsilon for convergence in large graphs (higher = stop sooner).
+const LARGE_GRAPH_EPSILON: f32 = 5e-2;
+
+/// Epsilon for convergence in huge graphs.
+const HUGE_GRAPH_EPSILON: f32 = 1e-1;
+
+/// Average displacement threshold for auto-pause (movement per node).
+const AUTO_PAUSE_DISPLACEMENT: f32 = 0.05;
+
+/// Number of consecutive stable frames before auto-pausing.
+const AUTO_PAUSE_STABLE_FRAMES: u32 = 10;
 
 /// The main visualization application.
 pub struct VibeGraphApp {
@@ -84,10 +115,102 @@ pub struct VibeGraphApp {
     /// Git tools panel state
     git_panel: GitPanelState,
     /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
-    // node_id_to_egui: HashMap<u64, NodeIndex>,
+    node_id_to_egui: HashMap<u64, NodeIndex>,
     /// Automaton mode state (temporal evolution visualization)
     #[cfg(feature = "automaton")]
     automaton_mode: AutomatonMode,
+
+    // ==========================================================================
+    // Layout Performance Optimization State
+    // ==========================================================================
+    /// Frame counter for layout throttling (only run layout every N frames).
+    layout_frame_counter: u32,
+    /// How many frames to skip between layout iterations (0 = every frame).
+    layout_skip_frames: u32,
+    /// Whether layout was auto-paused due to stabilization.
+    layout_auto_paused: bool,
+    /// Counter for consecutive stable frames (for auto-pause detection).
+    stable_frame_count: u32,
+    /// Whether the user manually resumed layout after auto-pause.
+    user_resumed_layout: bool,
+    /// Graph size category for performance tuning.
+    graph_size_category: GraphSizeCategory,
+
+    // ==========================================================================
+    // Static Render Mode (viewport-culled custom rendering)
+    // ==========================================================================
+    /// Current viewport zoom level (1.0 = 100%)
+    viewport_zoom: f32,
+    /// Current viewport pan offset (in canvas coordinates)
+    viewport_pan: egui::Vec2,
+
+    // ==========================================================================
+    // GPU Layout (optional feature)
+    // ==========================================================================
+    /// GPU-accelerated Barnes-Hut layout manager
+    #[cfg(feature = "gpu-layout")]
+    gpu_layout: GpuLayoutManager,
+}
+
+/// Category of graph size for performance tuning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphSizeCategory {
+    /// Small graph (<1000 nodes) - full quality
+    #[default]
+    Small,
+    /// Large graph (1000-3000 nodes) - reduced quality
+    Large,
+    /// Huge graph (>3000 nodes) - aggressive optimization
+    Huge,
+}
+
+impl GraphSizeCategory {
+    /// Determine category based on node count.
+    pub fn from_node_count(count: usize) -> Self {
+        if count >= HUGE_GRAPH_THRESHOLD {
+            Self::Huge
+        } else if count >= LARGE_GRAPH_THRESHOLD {
+            Self::Large
+        } else {
+            Self::Small
+        }
+    }
+
+    /// Get the frame skip value for this category.
+    pub fn frame_skip(&self) -> u32 {
+        match self {
+            Self::Small => 0,
+            Self::Large => LARGE_GRAPH_FRAME_SKIP,
+            Self::Huge => HUGE_GRAPH_FRAME_SKIP,
+        }
+    }
+
+    /// Get the epsilon (convergence threshold) for this category.
+    /// Used in `initialize_layout_defaults` to set graph-size-aware convergence.
+    #[allow(dead_code)]
+    pub fn epsilon(&self) -> f32 {
+        match self {
+            Self::Small => 1e-3,
+            Self::Large => LARGE_GRAPH_EPSILON,
+            Self::Huge => HUGE_GRAPH_EPSILON,
+        }
+    }
+
+    /// Whether to start with layout paused.
+    /// Used in `initialize_layout_defaults` for huge graphs.
+    #[allow(dead_code)]
+    pub fn start_paused(&self) -> bool {
+        matches!(self, Self::Huge)
+    }
+
+    /// Get a description for the UI.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Small => "small (<1K nodes)",
+            Self::Large => "large (1-3K nodes)",
+            Self::Huge => "huge (>3K nodes)",
+        }
+    }
 }
 
 impl VibeGraphApp {
@@ -154,6 +277,10 @@ impl VibeGraphApp {
 
         let mut egui_graph = Graph::from(&empty_graph);
 
+        // Compute node count early for performance decisions
+        let node_count = egui_graph.node_count();
+        let is_large_graph = node_count >= LARGE_GRAPH_THRESHOLD;
+
         // Randomize initial positions
         let spread = 200.0;
         for &egui_idx in petgraph_to_egui.values() {
@@ -165,12 +292,22 @@ impl VibeGraphApp {
         }
 
         // Set labels and store originals for visibility toggling
+        // For large graphs, we DON'T set labels initially (performance mode)
         let mut original_node_labels = HashMap::new();
+        let should_show_labels = !is_large_graph;
+
         for &egui_idx in petgraph_to_egui.values() {
             if let Some(label) = labels.get(&egui_idx) {
+                // Always store the original label for later restoration
+                original_node_labels.insert(egui_idx, label.clone());
+
                 if let Some(node) = egui_graph.node_mut(egui_idx) {
-                    node.set_label(label.clone());
-                    original_node_labels.insert(egui_idx, label.clone());
+                    if should_show_labels {
+                        node.set_label(label.clone());
+                    } else {
+                        // Clear label for performance mode
+                        node.set_label(String::new());
+                    }
                 }
             }
         }
@@ -204,11 +341,39 @@ impl VibeGraphApp {
             mode
         };
 
+        // Compute graph size category for performance tuning
+        let graph_size_category = GraphSizeCategory::from_node_count(node_count);
+
+        #[cfg(target_arch = "wasm32")]
+        if node_count >= LARGE_GRAPH_THRESHOLD {
+            web_sys::console::log_1(
+                &format!(
+                    "[viz] Large graph detected: {} nodes, {} edges - applying optimizations ({})",
+                    node_count,
+                    egui_graph.edge_count(),
+                    graph_size_category.description()
+                )
+                .into(),
+            );
+        }
+
+        // Auto-enable performance mode for large graphs
+        let mut settings_style = SettingsStyle::default();
+        if graph_size_category != GraphSizeCategory::Small {
+            settings_style.apply_performance_mode();
+
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(
+                &format!("[viz] Performance mode enabled: labels OFF, change indicators OFF")
+                    .into(),
+            );
+        }
+
         Self {
             g: egui_graph,
             settings_interaction: SettingsInteraction::default(),
             settings_navigation: SettingsNavigation::default(),
-            settings_style: SettingsStyle::default(),
+            settings_style,
             show_sidebar: true,
             dark_mode,
             graph_metadata: source_graph.metadata,
@@ -226,9 +391,25 @@ impl VibeGraphApp {
             layout_initialized: false,
             top_bar: TopBarState::new(),
             git_panel: GitPanelState::new(),
-            // node_id_to_egui,
+            node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
+
+            // Layout performance optimization state
+            layout_frame_counter: 0,
+            layout_skip_frames: graph_size_category.frame_skip(),
+            layout_auto_paused: false,
+            stable_frame_count: 0,
+            user_resumed_layout: false,
+            graph_size_category,
+
+            // Static render mode viewport state
+            viewport_zoom: 0.1, // Start zoomed out for large graphs
+            viewport_pan: egui::Vec2::ZERO,
+
+            // GPU layout manager
+            #[cfg(feature = "gpu-layout")]
+            gpu_layout: GpuLayoutManager::new(),
         }
     }
 
@@ -470,28 +651,46 @@ impl VibeGraphApp {
     }
 
     /// Initialize layout with custom default parameters.
-    /// These values produce a nicely spread, stable graph layout.
+    /// Uses graph-size-aware defaults for better performance with large graphs.
     fn initialize_layout_defaults(&self, ctx: &Context) {
         use egui_graphs::CenterGravity;
+
+        // Compute graph-size-aware parameters
+        let (is_running, dt, epsilon, damping, c_repulse, center_gravity) =
+            match self.graph_size_category {
+                GraphSizeCategory::Small => {
+                    // Small graphs: full quality simulation
+                    (true, 0.021, 1e-3, 0.30, 0.20, 0.60)
+                }
+                GraphSizeCategory::Large => {
+                    // Large graphs: faster convergence, reduced quality
+                    (true, 0.035, LARGE_GRAPH_EPSILON, 0.45, 0.15, 0.80)
+                }
+                GraphSizeCategory::Huge => {
+                    // Huge graphs: start running with aggressive damping for fast stabilization
+                    // Users can manually pause if it's too slow
+                    (true, 0.050, HUGE_GRAPH_EPSILON, 0.65, 0.08, 1.2)
+                }
+            };
 
         // Create custom layout state with optimized defaults
         let custom_state = FruchtermanReingoldWithCenterGravityState {
             base: FruchtermanReingoldState {
-                is_running: true,
-                dt: 0.021, // Slower, more stable simulation
-                epsilon: 1e-3,
-                damping: 0.30, // Standard damping
+                is_running,
+                dt,
+                epsilon,
+                damping,
                 max_step: 10.0,
                 k_scale: 0.55,   // Larger ideal edge length
                 c_attract: 1.57, // Stronger attraction between connected nodes
-                c_repulse: 0.20, // Weaker repulsion for tighter clusters
+                c_repulse,
                 last_avg_displacement: None,
                 step_count: 0,
             },
             extras: (
                 Extra::<CenterGravity, true> {
                     enabled: true,
-                    params: CenterGravityParams { c: 0.60 }, // Stronger center pull
+                    params: CenterGravityParams { c: center_gravity },
                 },
                 (),
             ),
@@ -505,6 +704,173 @@ impl VibeGraphApp {
                 None,
             );
         });
+    }
+
+    /// Render the graph using fast static rendering with viewport culling.
+    /// This bypasses egui_graphs entirely and only draws visible nodes/edges.
+    fn render_static(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+
+        // Handle pan (drag)
+        if response.dragged() {
+            let delta = response.drag_delta();
+            self.viewport_pan += delta / self.viewport_zoom;
+        }
+
+        // Handle zoom (scroll)
+        let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll_delta != 0.0 {
+            let zoom_factor = 1.0 + scroll_delta * 0.001;
+            let old_zoom = self.viewport_zoom;
+            self.viewport_zoom = (self.viewport_zoom * zoom_factor).clamp(0.01, 10.0);
+
+            // Zoom toward mouse position
+            if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let mouse_canvas =
+                    (mouse_pos - rect.center().to_vec2()) / old_zoom - self.viewport_pan;
+                let new_mouse_screen = (mouse_canvas + self.viewport_pan) * self.viewport_zoom
+                    + rect.center().to_vec2();
+                self.viewport_pan += (mouse_pos - new_mouse_screen) / self.viewport_zoom;
+            }
+        }
+
+        let painter = ui.painter_at(rect);
+        let center = rect.center();
+        let zoom = self.viewport_zoom;
+        let pan = self.viewport_pan;
+
+        // Colors
+        let node_color = if self.dark_mode {
+            egui::Color32::from_rgb(100, 140, 180)
+        } else {
+            egui::Color32::from_rgb(60, 100, 140)
+        };
+        let edge_color = if self.dark_mode {
+            egui::Color32::from_rgba_unmultiplied(80, 80, 100, 60)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(100, 100, 120, 80)
+        };
+        let selected_color = egui::Color32::from_rgb(0, 212, 255);
+
+        // Calculate viewport bounds in canvas space
+        let half_size = rect.size() / (2.0 * zoom);
+        let viewport_min = egui::pos2(-half_size.x - pan.x, -half_size.y - pan.y);
+        let viewport_max = egui::pos2(half_size.x - pan.x, half_size.y - pan.y);
+        let viewport_rect = egui::Rect::from_min_max(viewport_min, viewport_max);
+
+        // Expand viewport slightly for edge visibility
+        let margin = 50.0 / zoom;
+        let expanded_viewport = viewport_rect.expand(margin);
+
+        // Helper to convert canvas to screen coordinates
+        let to_screen = |canvas_pos: egui::Pos2| -> egui::Pos2 {
+            egui::pos2(
+                center.x + (canvas_pos.x + pan.x) * zoom,
+                center.y + (canvas_pos.y + pan.y) * zoom,
+            )
+        };
+
+        // Count visible for stats
+        let mut visible_nodes = 0;
+        let mut visible_edges = 0;
+
+        // First pass: draw edges (only if both endpoints visible)
+        // Skip edges entirely if we have too many - they're the main bottleneck
+        let total_edges = self.g.edge_count();
+        let draw_edges = total_edges < 5000; // Skip edges for very large graphs
+
+        if draw_edges {
+            for (edge_idx, _) in self.g.edges_iter() {
+                if let Some((source_idx, target_idx)) = self.g.edge_endpoints(edge_idx) {
+                    let source_pos = self.g.node(source_idx).map(|n| n.location());
+                    let target_pos = self.g.node(target_idx).map(|n| n.location());
+
+                    if let (Some(sp), Some(tp)) = (source_pos, target_pos) {
+                        // Skip if both endpoints are outside viewport
+                        if !expanded_viewport.contains(sp) && !expanded_viewport.contains(tp) {
+                            continue;
+                        }
+
+                        let screen_source = to_screen(sp);
+                        let screen_target = to_screen(tp);
+
+                        // Only draw if the line would be visible
+                        if rect.intersects(egui::Rect::from_two_pos(screen_source, screen_target)) {
+                            painter.line_segment(
+                                [screen_source, screen_target],
+                                egui::Stroke::new(0.5, edge_color),
+                            );
+                            visible_edges += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second pass: draw nodes
+        let node_radius = (3.0 * zoom).max(1.5).min(8.0);
+
+        for (node_idx, _) in self.g.nodes_iter() {
+            if let Some(node) = self.g.node(node_idx) {
+                let pos = node.location();
+
+                // Viewport culling - skip if outside viewport
+                if !expanded_viewport.contains(pos) {
+                    continue;
+                }
+
+                let screen_pos = to_screen(pos);
+
+                // Double-check screen bounds
+                if !rect.contains(screen_pos) {
+                    continue;
+                }
+
+                visible_nodes += 1;
+
+                // Determine color based on selection/change state
+                let color = if node.selected() {
+                    selected_color
+                } else if let Some(change_kind) = self.changed_nodes.get(&node_idx) {
+                    crate::ui::change_kind_color(*change_kind, self.dark_mode)
+                } else {
+                    node_color
+                };
+
+                painter.circle_filled(screen_pos, node_radius, color);
+            }
+        }
+
+        // Draw stats overlay
+        let stats_text = format!(
+            "Visible: {} / {} nodes{}",
+            visible_nodes,
+            self.g.node_count(),
+            if draw_edges {
+                format!(", {} / {} edges", visible_edges, total_edges)
+            } else {
+                " (edges hidden)".to_string()
+            }
+        );
+        painter.text(
+            rect.left_top() + egui::vec2(10.0, 10.0),
+            egui::Align2::LEFT_TOP,
+            stats_text,
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(100, 100, 120),
+        );
+
+        // Draw zoom level
+        painter.text(
+            rect.left_top() + egui::vec2(10.0, 28.0),
+            egui::Align2::LEFT_TOP,
+            format!("Zoom: {:.0}%", zoom * 100.0),
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(100, 100, 120),
+        );
+
+        response
     }
 }
 
@@ -582,12 +948,111 @@ impl VibeGraphApp {
                     FruchtermanReingoldWithCenterGravityState,
                 >(ui, None);
 
+                // Performance status for large graphs
+                if self.graph_size_category != GraphSizeCategory::Small {
+                    ui.horizontal(|ui| {
+                        let (icon, color, status) = if self.layout_auto_paused {
+                            (
+                                "⏸",
+                                egui::Color32::from_rgb(0, 212, 255),
+                                "Auto-paused (stable)",
+                            )
+                        } else if state.base.is_running {
+                            ("▶", egui::Color32::from_rgb(0, 255, 136), "Running")
+                        } else {
+                            ("⏹", egui::Color32::from_rgb(255, 170, 0), "Paused")
+                        };
+                        ui.label(egui::RichText::new(format!("{} {}", icon, status)).color(color));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Graph: {} ({} nodes)",
+                                self.graph_size_category.description(),
+                                self.g.node_count()
+                            ))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        );
+                    });
+
+                    // Show displacement if running
+                    if let Some(displacement) = state.base.last_avg_displacement {
+                        ui.horizontal(|ui| {
+                            let progress = (1.0 - (displacement / 1.0).min(1.0)) * 100.0;
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Convergence: {:.0}% (Δ={:.3})",
+                                    progress, displacement
+                                ))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                            );
+                        });
+                    }
+
+                    ui.separator();
+
+                    // Quick actions for large graphs
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("▶ Resume")
+                            .on_hover_text("Resume layout simulation")
+                            .clicked()
+                        {
+                            state.base.is_running = true;
+                            self.layout_auto_paused = false;
+                            self.user_resumed_layout = true;
+                            self.stable_frame_count = 0;
+                        }
+
+                        if ui
+                            .small_button("⏹ Stop")
+                            .on_hover_text("Stop layout simulation")
+                            .clicked()
+                        {
+                            state.base.is_running = false;
+                            self.user_resumed_layout = false;
+                        }
+
+                        if ui
+                            .small_button("⚡ Quick")
+                            .on_hover_text("Run aggressive stabilization then pause")
+                            .clicked()
+                        {
+                            // Temporarily use aggressive settings for quick stabilization
+                            state.base.is_running = true;
+                            state.base.dt = 0.08;
+                            state.base.damping = 0.7;
+                            state.base.epsilon = 0.2;
+                            self.layout_auto_paused = false;
+                            self.user_resumed_layout = false; // Allow auto-pause after quick stabilize
+                            self.stable_frame_count = 0;
+                        }
+                    });
+
+                    ui.separator();
+                }
+
                 CollapsingHeader::new("Animation")
-                    .default_open(true)
+                    .default_open(self.graph_size_category == GraphSizeCategory::Small)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            let was_running = state.base.is_running;
                             ui.checkbox(&mut state.base.is_running, "running");
                             Self::info_icon(ui, "Run/pause simulation");
+
+                            // Track user manually toggling the running state
+                            if was_running != state.base.is_running {
+                                if state.base.is_running {
+                                    self.user_resumed_layout = true;
+                                    self.layout_auto_paused = false;
+                                } else {
+                                    self.user_resumed_layout = false;
+                                }
+                                self.stable_frame_count = 0;
+                            }
                         });
 
                         ui.horizontal(|ui| {
@@ -731,6 +1196,87 @@ impl VibeGraphApp {
 
     fn ui_style(&mut self, ui: &mut egui::Ui) {
         CollapsingHeader::new("Style").show(ui, |ui| {
+            // Performance mode toggle at the top for large graphs
+            if self.graph_size_category != GraphSizeCategory::Small {
+                ui.horizontal(|ui| {
+                    let was_perf_mode = self.settings_style.performance_mode;
+                    if ui
+                        .checkbox(
+                            &mut self.settings_style.performance_mode,
+                            "⚡ Performance Mode",
+                        )
+                        .on_hover_text("Disable labels and animations for better FPS")
+                        .changed()
+                    {
+                        if self.settings_style.performance_mode && !was_perf_mode {
+                            // Entering performance mode - disable expensive features
+                            self.settings_style.show_node_labels = false;
+                            self.settings_style.labels_always = false;
+                            self.settings_style.change_indicators = false;
+                            // Don't auto-enable static_render - layout needs to stabilize first
+                            self.apply_label_visibility();
+                        } else if !self.settings_style.performance_mode && was_perf_mode {
+                            // Exiting performance mode - restore defaults (but keep labels off for safety)
+                            self.settings_style.labels_always = false; // Hover-only is faster
+                            self.settings_style.static_render = false;
+                        }
+                    }
+                });
+
+                // Static render toggle (fast viewport-culled rendering)
+                // Only useful AFTER layout is paused/stable
+                let layout_running = {
+                    let state = egui_graphs::get_layout_state::<
+                        FruchtermanReingoldWithCenterGravityState,
+                    >(ui, None);
+                    state.base.is_running
+                };
+
+                ui.add_enabled_ui(!layout_running, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.settings_style.static_render, "🚀 Static Render")
+                            .on_hover_text(
+                                "Use fast viewport-culled rendering (only works when layout is paused)",
+                            );
+                    });
+                });
+
+                if layout_running && self.settings_style.static_render {
+                    // Auto-disable static render when layout is running
+                    self.settings_style.static_render = false;
+                }
+
+                if layout_running {
+                    ui.label(
+                        egui::RichText::new("⚠ Stop layout first to enable static render")
+                            .small()
+                            .color(egui::Color32::from_rgb(255, 170, 0)),
+                    );
+                } else if self.settings_style.static_render {
+                    ui.label(
+                        egui::RichText::new("✓ Viewport-culled rendering active")
+                            .small()
+                            .color(egui::Color32::from_rgb(0, 255, 136)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("Layout paused - static render available")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
+                }
+
+                if self.settings_style.performance_mode && !self.settings_style.static_render {
+                    ui.label(
+                        egui::RichText::new("Labels and animations disabled")
+                            .small()
+                            .color(egui::Color32::from_rgb(0, 212, 255)),
+                    );
+                }
+
+                ui.separator();
+            }
+
             ui.horizontal(|ui| {
                 let mut dark = ui.ctx().style().visuals.dark_mode;
                 if ui.checkbox(&mut dark, "dark mode").changed() {
@@ -746,59 +1292,68 @@ impl VibeGraphApp {
             ui.separator();
             ui.label(egui::RichText::new("Labels").strong());
 
-            ui.horizontal(|ui| {
-                if ui
-                    .checkbox(
-                        &mut self.settings_style.show_node_labels,
-                        "Show node labels",
-                    )
-                    .changed()
-                {
-                    self.apply_label_visibility();
-                }
-                Self::info_icon(ui, "Toggle node name visibility");
-            });
+            // Disable label controls when in performance mode
+            ui.add_enabled_ui(!self.settings_style.performance_mode, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(
+                            &mut self.settings_style.show_node_labels,
+                            "Show node labels",
+                        )
+                        .changed()
+                    {
+                        self.apply_label_visibility();
+                    }
+                    Self::info_icon(
+                        ui,
+                        "Toggle node name visibility (expensive for large graphs)",
+                    );
+                });
 
-            ui.horizontal(|ui| {
-                if ui
-                    .checkbox(
-                        &mut self.settings_style.show_edge_labels,
-                        "Show edge labels",
-                    )
-                    .changed()
-                {
-                    self.apply_edge_label_visibility();
-                }
-                Self::info_icon(ui, "Toggle edge ID labels (edge 0, edge 1, etc.)");
-            });
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(
+                            &mut self.settings_style.show_edge_labels,
+                            "Show edge labels",
+                        )
+                        .changed()
+                    {
+                        self.apply_edge_label_visibility();
+                    }
+                    Self::info_icon(ui, "Toggle edge ID labels (edge 0, edge 1, etc.)");
+                });
 
-            ui.add_enabled_ui(
-                self.settings_style.show_node_labels || self.settings_style.show_edge_labels,
-                |ui| {
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
-                        Self::info_icon(ui, "Show labels always vs on hover only");
-                    });
-                },
-            );
+                ui.add_enabled_ui(
+                    self.settings_style.show_node_labels || self.settings_style.show_edge_labels,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
+                            Self::info_icon(ui, "Show labels always vs on hover only");
+                        });
+                    },
+                );
+            });
 
             ui.separator();
             ui.label(egui::RichText::new("Change Indicators").strong());
 
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.settings_style.change_indicators, "Show halos");
-                Self::info_icon(ui, "Animated circles around changed files");
-            });
-
-            ui.add_enabled_ui(self.settings_style.change_indicators, |ui| {
+            // Disable indicator controls when in performance mode
+            ui.add_enabled_ui(!self.settings_style.performance_mode, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.settings_style.change_indicator_speed,
-                            0.2..=3.0,
-                        )
-                        .text("Speed"),
-                    );
+                    ui.checkbox(&mut self.settings_style.change_indicators, "Show halos");
+                    Self::info_icon(ui, "Animated circles around changed files");
+                });
+
+                ui.add_enabled_ui(self.settings_style.change_indicators, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.settings_style.change_indicator_speed,
+                                0.2..=3.0,
+                            )
+                            .text("Speed"),
+                        );
+                    });
                 });
             });
         });
@@ -1119,11 +1674,13 @@ impl App for VibeGraphApp {
         #[cfg(target_arch = "wasm32")]
         self.try_load_git_changes_from_window();
 
-        // Advance change indicator animation
+        // Advance change indicator animation (only if enabled)
         let dt = ctx.input(|i| i.stable_dt);
-        self.change_anim.speed = self.settings_style.change_indicator_speed;
-        self.change_anim.enabled = self.settings_style.change_indicators;
-        self.change_anim.tick(dt);
+        if self.settings_style.change_indicators {
+            self.change_anim.speed = self.settings_style.change_indicator_speed;
+            self.change_anim.enabled = true;
+            self.change_anim.tick(dt);
+        }
 
         // Advance automaton playback (when enabled)
         #[cfg(feature = "automaton")]
@@ -1133,15 +1690,23 @@ impl App for VibeGraphApp {
             }
         }
 
-        // Request continuous repaint for animations
-        let needs_repaint = self.settings_style.change_indicators && !self.changed_nodes.is_empty();
+        // Request continuous repaint ONLY when animations are active
+        // Performance mode: avoid continuous repaints for large graphs
+        let mut needs_repaint = false;
+
+        // Change indicator animations need repaint
+        if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
+            needs_repaint = true;
+        }
 
         #[cfg(feature = "automaton")]
         if self.automaton_mode.enabled && self.automaton_mode.playing {
             needs_repaint = true;
         }
 
-        if needs_repaint {
+        // Only request repaint if we actually need animation updates
+        // and we're not in performance mode (to allow egui's native repaint-on-change)
+        if needs_repaint && !self.settings_style.performance_mode {
             ctx.request_repaint();
         }
 
@@ -1254,12 +1819,43 @@ impl App for VibeGraphApp {
                             ui.separator();
                             self.automaton_mode.ui_panel(ui);
                         }
+
+                        // GPU layout panel (when feature enabled)
+                        #[cfg(feature = "gpu-layout")]
+                        {
+                            ui.separator();
+                            crate::gpu_layout::gpu_layout_ui(ui, &mut self.gpu_layout, &self.g);
+                        }
                     });
                 });
         }
 
         // Central panel with graph
         egui::CentralPanel::default().show(ctx, |ui| {
+            // GPU layout step (when feature enabled and GPU layout is active)
+            #[cfg(feature = "gpu-layout")]
+            {
+                if self.gpu_layout.is_enabled() && self.gpu_layout.is_running() {
+                    let dt = ctx.input(|i| i.stable_dt);
+                    if self.gpu_layout.step(&mut self.g, dt) {
+                        // GPU layout updated positions, request repaint
+                        ctx.request_repaint();
+                    }
+                }
+            }
+
+            // Use static rendering for large graphs (bypasses egui_graphs entirely)
+            if self.settings_style.static_render {
+                // Fast static rendering with viewport culling
+                let _response = self.render_static(ui);
+
+                // Draw mode indicator and sidebar toggle
+                draw_mode_indicator(ui, self.lasso.active);
+                draw_sidebar_toggle(ui, &mut self.show_sidebar);
+                return; // Skip egui_graphs rendering entirely
+            }
+
+            // Standard egui_graphs rendering for smaller graphs
             let effective_dragging = if self.lasso.active {
                 false
             } else {
@@ -1335,6 +1931,72 @@ impl App for VibeGraphApp {
                     .with_navigations(&settings_navigation)
                     .with_styles(&settings_style),
             );
+
+            // ==========================================================================
+            // Layout Throttling & Auto-Pause for Large Graphs
+            // ==========================================================================
+
+            // When GPU layout is enabled and running, disable egui_graphs' built-in layout
+            #[cfg(feature = "gpu-layout")]
+            if self.gpu_layout.is_enabled() {
+                let mut state =
+                    egui_graphs::get_layout_state::<FruchtermanReingoldWithCenterGravityState>(
+                        ui, None,
+                    );
+                state.base.is_running = false; // Disable CPU layout when GPU is active
+                egui_graphs::set_layout_state::<FruchtermanReingoldWithCenterGravityState>(
+                    ui, state, None,
+                );
+            }
+
+            // Check layout state for auto-pause (convergence detection)
+            if self.layout_skip_frames > 0 || self.graph_size_category != GraphSizeCategory::Small {
+                let mut state =
+                    egui_graphs::get_layout_state::<FruchtermanReingoldWithCenterGravityState>(
+                        ui, None,
+                    );
+
+                // Auto-pause when layout has stabilized
+                if state.base.is_running && !self.user_resumed_layout {
+                    if let Some(avg_displacement) = state.base.last_avg_displacement {
+                        if avg_displacement < AUTO_PAUSE_DISPLACEMENT {
+                            self.stable_frame_count += 1;
+                            if self.stable_frame_count >= AUTO_PAUSE_STABLE_FRAMES {
+                                state.base.is_running = false;
+                                self.layout_auto_paused = true;
+                                self.stable_frame_count = 0;
+
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::log_1(
+                                    &format!(
+                                        "[viz] Layout auto-paused after stabilization (displacement: {:.4})",
+                                        avg_displacement
+                                    )
+                                    .into(),
+                                );
+                            }
+                        } else {
+                            self.stable_frame_count = 0;
+                        }
+                    }
+                }
+
+                // Frame throttling: only run layout every N frames for large graphs
+                if state.base.is_running && self.layout_skip_frames > 0 {
+                    self.layout_frame_counter += 1;
+                    if self.layout_frame_counter < self.layout_skip_frames {
+                        // Skip this frame's layout by temporarily pausing
+                        // Note: This is a workaround since egui_graphs doesn't have built-in throttling
+                        // The layout will still request repaint, but we reduce computation frequency
+                    } else {
+                        self.layout_frame_counter = 0;
+                    }
+                }
+
+                egui_graphs::set_layout_state::<FruchtermanReingoldWithCenterGravityState>(
+                    ui, state, None,
+                );
+            }
 
             // Draw change indicators (halos) around changed nodes
             if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {

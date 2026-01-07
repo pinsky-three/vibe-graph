@@ -25,6 +25,9 @@ mod settings;
 mod top_bar;
 mod ui;
 
+#[cfg(feature = "gpu-layout")]
+pub mod gpu_layout;
+
 #[cfg(feature = "automaton")]
 pub mod automaton_app;
 

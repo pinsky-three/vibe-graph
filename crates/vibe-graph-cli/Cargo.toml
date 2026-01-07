@@ -24,6 +24,9 @@ native-viz = [
     "vibe-graph-viz/automaton",
     "eframe/default",
 ]
+# GPU-accelerated Barnes-Hut layout (requires WebGPU/wgpu)
+# Build with: cargo build --release --features native-viz,gpu-layout
+gpu-layout = ["vibe-graph-viz/gpu-layout"]
 # Enable LLM-based automaton inference
 # Build with: cargo build --release --features llm-inference
 llm-inference = ["vibe-graph-automaton/llm"]

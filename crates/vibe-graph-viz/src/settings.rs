@@ -43,6 +43,11 @@ pub struct SettingsStyle {
     pub change_indicator_speed: f32,
     #[allow(dead_code)]
     pub edge_deemphasis: bool,
+    /// Performance mode - reduces visual fidelity for better FPS on large graphs.
+    pub performance_mode: bool,
+    /// Static render mode - uses custom viewport-culled rendering instead of egui_graphs.
+    /// This is the fastest option for very large graphs.
+    pub static_render: bool,
 }
 
 impl Default for SettingsStyle {
@@ -54,7 +59,29 @@ impl Default for SettingsStyle {
             change_indicators: true,
             change_indicator_speed: 1.0,
             edge_deemphasis: false,
+            performance_mode: false,
+            static_render: false,
         }
+    }
+}
+
+impl SettingsStyle {
+    /// Apply performance mode settings for large graphs.
+    /// Disables expensive rendering features.
+    /// Note: static_render is NOT auto-enabled because layout needs to stabilize first.
+    pub fn apply_performance_mode(&mut self) {
+        self.performance_mode = true;
+        self.labels_always = false; // Only show labels on hover
+        self.show_node_labels = false; // Disable labels entirely
+        self.change_indicators = false; // Disable animated halos
+                                        // Don't auto-enable static_render - layout needs to run first!
+                                        // self.static_render = true;
+    }
+
+    /// Check if any performance-heavy features are enabled.
+    #[allow(dead_code)]
+    pub fn has_heavy_features(&self) -> bool {
+        self.show_node_labels || self.labels_always || self.change_indicators
     }
 }
 

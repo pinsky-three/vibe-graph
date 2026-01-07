@@ -34,10 +34,12 @@ build-wasm: ## Build WASM visualization to CLI assets
 	@cp crates/vibe-graph-viz/pkg/vibe_graph_viz_bg.wasm crates/vibe-graph-cli/assets/
 	@cp crates/vibe-graph-viz/pkg/vibe_graph_viz.js crates/vibe-graph-cli/assets/
 	@echo "✅ WASM built to crates/vibe-graph-cli/assets/"
+	@echo "   Note: GPU layout is only available in native builds"
 
-build: ## Build CLI (minimal, D3.js fallback if WASM missing)
-	cargo build --release -p vibe-graph-cli
+build: ## Build CLI with native viz and GPU layout
+	cargo build --release -p vibe-graph-cli --features native-viz,gpu-layout
 	@echo "✅ Built: target/release/vg ($$(ls -lh target/release/vg | awk '{print $$5}'))"
+	@echo "   GPU layout available via: vg viz"
 
 build-release: build-wasm ## Build production CLI with embedded WASM
 	cargo build --release -p vibe-graph-cli
