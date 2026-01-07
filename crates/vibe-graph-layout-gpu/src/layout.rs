@@ -2,8 +2,18 @@
 
 use crate::gpu::{GpuContext, LayoutBuffers, LayoutPipeline};
 use crate::quadtree::QuadTree;
-use crate::shaders::{FORCE_SHADER, SIMPLE_FORCE_SHADER};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::shaders::FORCE_SHADER;
+use crate::shaders::SIMPLE_FORCE_SHADER;
 use crate::{Edge, LayoutError, LayoutParams, Position, Result};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 /// Configuration for the GPU layout.
 #[derive(Debug, Clone)]
@@ -57,6 +67,22 @@ pub enum LayoutState {
     Converged,
 }
 
+/// Shared state for async position updates (native uses Mutex, WASM uses RefCell)
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct AsyncPositions {
+    data: Vec<Position>,
+    pending_update: bool,
+}
+
+/// Shared state for async position updates (WASM)
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct AsyncPositionsWasm {
+    data: Vec<Position>,
+    pending_update: bool,
+}
+
 /// GPU-accelerated force-directed graph layout.
 pub struct GpuLayout {
     ctx: GpuContext,
@@ -68,6 +94,16 @@ pub struct GpuLayout {
     positions: Vec<Position>,
     edges: Vec<Edge>,
     iteration: u32,
+    /// Frame counter for periodic readback
+    frame_counter: u32,
+    /// How often to read back positions (every N frames)
+    readback_interval: u32,
+    /// Shared state for async updates (WASM) - uses RefCell since WASM is single-threaded
+    #[cfg(target_arch = "wasm32")]
+    async_positions: Rc<RefCell<AsyncPositionsWasm>>,
+    /// Whether a readback is currently in progress (WASM)
+    #[cfg(target_arch = "wasm32")]
+    readback_pending: bool,
 }
 
 impl GpuLayout {
@@ -75,6 +111,11 @@ impl GpuLayout {
     pub async fn new(config: LayoutConfig) -> Result<Self> {
         let ctx = GpuContext::new().await?;
 
+        // For WASM, always use simple shader (no CPU quadtree dependency)
+        #[cfg(target_arch = "wasm32")]
+        let shader = SIMPLE_FORCE_SHADER;
+
+        #[cfg(not(target_arch = "wasm32"))]
         let shader = if config.use_barnes_hut {
             FORCE_SHADER
         } else {
@@ -93,6 +134,12 @@ impl GpuLayout {
             positions: Vec::new(),
             edges: Vec::new(),
             iteration: 0,
+            frame_counter: 0,
+            readback_interval: 1, // Read back every 30 frames (~0.5s at 60fps)
+            #[cfg(target_arch = "wasm32")]
+            async_positions: Rc::new(RefCell::new(AsyncPositionsWasm::default())),
+            #[cfg(target_arch = "wasm32")]
+            readback_pending: false,
         })
     }
 
@@ -105,21 +152,19 @@ impl GpuLayout {
         self.positions = positions;
         self.edges = edges;
 
-        // Build initial quadtree
+        // Build initial quadtree (only used on native with Barnes-Hut)
+        #[cfg(not(target_arch = "wasm32"))]
         let tree = if self.config.use_barnes_hut {
             QuadTree::build(&self.positions, self.config.max_tree_depth)
         } else {
-            // Empty tree for simple mode
             QuadTree::build(&[], 1)
         };
 
+        #[cfg(target_arch = "wasm32")]
+        let tree = QuadTree::build(&[], 1); // Empty tree for WASM
+
         // Create GPU buffers
-        let buffers = LayoutBuffers::new(
-            &self.ctx,
-            &self.positions,
-            &self.edges,
-            tree.nodes(),
-        )?;
+        let buffers = LayoutBuffers::new(&self.ctx, &self.positions, &self.edges, tree.nodes())?;
 
         // Update params
         let params = self.create_params(tree.nodes().len() as u32);
@@ -132,6 +177,15 @@ impl GpuLayout {
         self.bind_group = Some(bind_group);
         self.state = LayoutState::Paused;
         self.iteration = 0;
+        self.frame_counter = 0;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.readback_pending = false;
+            let mut async_pos = self.async_positions.borrow_mut();
+            async_pos.data = self.positions.clone();
+            async_pos.pending_update = false;
+        }
 
         tracing::info!(
             "GPU layout initialized: {} nodes, {} edges",
@@ -182,8 +236,9 @@ impl GpuLayout {
         self.iteration
     }
 
-    /// Run one iteration of the layout algorithm.
+    /// Run one iteration of the layout algorithm (native - blocking).
     /// Returns the updated positions.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn step(&mut self) -> Result<&[Position]> {
         if self.state != LayoutState::Running {
             return Ok(&self.positions);
@@ -196,7 +251,7 @@ impl GpuLayout {
         // Rebuild quadtree with current positions (CPU side)
         if self.config.use_barnes_hut {
             // Read back positions from GPU first
-            self.read_positions()?;
+            self.read_positions_blocking()?;
 
             let tree = QuadTree::build(&self.positions, self.config.max_tree_depth);
             let params = self.create_params(tree.nodes().len() as u32);
@@ -204,14 +259,65 @@ impl GpuLayout {
             // Update buffers
             let buffers = self.buffers.as_ref().unwrap();
             if !buffers.update_tree(&self.ctx, tree.nodes()) {
-                // Tree exceeded buffer capacity - this shouldn't happen with 8x allocation
-                // but if it does, skip this iteration
                 return Ok(&self.positions);
             }
             buffers.update_params(&self.ctx, &params);
         }
 
         // Run compute shader
+        self.dispatch_compute();
+        self.iteration += 1;
+
+        // Read back positions
+        self.read_positions_blocking()?;
+
+        Ok(&self.positions)
+    }
+
+    /// Run one iteration of the layout algorithm (WASM - non-blocking).
+    /// Returns the updated positions (may be stale by up to readback_interval frames).
+    #[cfg(target_arch = "wasm32")]
+    pub fn step(&mut self) -> Result<&[Position]> {
+        if self.state != LayoutState::Running {
+            return Ok(&self.positions);
+        }
+
+        if self.buffers.is_none() || self.bind_group.is_none() {
+            return Err(LayoutError::NotInitialized);
+        }
+
+        // Check for async position updates (using RefCell for WASM)
+        {
+            let mut async_pos = self.async_positions.borrow_mut();
+            if async_pos.pending_update && async_pos.data.len() == self.positions.len() {
+                self.positions.copy_from_slice(&async_pos.data);
+                async_pos.pending_update = false;
+                self.readback_pending = false;
+            }
+        }
+
+        // Run compute shader (non-blocking on WASM)
+        self.dispatch_compute();
+        self.iteration += 1;
+        self.frame_counter += 1;
+
+        // Poll GPU (non-blocking) - always poll to process async callbacks
+        self.ctx.device.poll(wgpu::Maintain::Poll);
+
+        // Periodically request position readback
+        if self.frame_counter >= self.readback_interval && !self.readback_pending {
+            self.frame_counter = 0;
+            self.request_positions_async();
+        }
+
+        Ok(&self.positions)
+    }
+
+    /// Dispatch the compute shader.
+    fn dispatch_compute(&self) {
+        let buffers = self.buffers.as_ref().unwrap();
+        let bind_group = self.bind_group.as_ref().unwrap();
+
         let mut encoder = self
             .ctx
             .device
@@ -220,9 +326,6 @@ impl GpuLayout {
             });
 
         {
-            let buffers = self.buffers.as_ref().unwrap();
-            let bind_group = self.bind_group.as_ref().unwrap();
-
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Layout Compute Pass"),
                 timestamp_writes: None,
@@ -231,26 +334,17 @@ impl GpuLayout {
             compute_pass.set_bind_group(0, bind_group, &[]);
 
             // Dispatch enough workgroups to cover all nodes
-            let workgroup_count = (buffers.node_count + 255) / 256;
+            let workgroup_count = (buffers.node_count as u32).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
         self.ctx.queue.submit(Some(encoder.finish()));
-
-        self.iteration += 1;
-
-        // Read back positions
-        self.read_positions()?;
-
-        Ok(&self.positions)
     }
 
-    /// Read positions back from GPU.
-    fn read_positions(&mut self) -> Result<()> {
-        let buffers = self
-            .buffers
-            .as_ref()
-            .ok_or(LayoutError::NotInitialized)?;
+    /// Read positions back from GPU (blocking - native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_positions_blocking(&mut self) -> Result<()> {
+        let buffers = self.buffers.as_ref().ok_or(LayoutError::NotInitialized)?;
 
         let mut encoder = self
             .ctx
@@ -289,6 +383,61 @@ impl GpuLayout {
         Ok(())
     }
 
+    /// Request positions asynchronously (WASM - non-blocking).
+    /// The positions will be updated in `self.positions` when ready.
+    #[cfg(target_arch = "wasm32")]
+    fn request_positions_async(&mut self) {
+        let Some(buffers) = &self.buffers else {
+            return;
+        };
+
+        self.readback_pending = true;
+
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Readback Encoder"),
+            });
+
+        let size = (self.positions.len() * std::mem::size_of::<Position>()) as u64;
+        encoder.copy_buffer_to_buffer(&buffers.positions, 0, &buffers.staging, 0, size);
+
+        self.ctx.queue.submit(Some(encoder.finish()));
+
+        // Clone staging buffer handle for callback
+        let staging = buffers.staging.clone();
+        let async_positions = Rc::clone(&self.async_positions);
+        let positions_len = self.positions.len();
+
+        // Map the staging buffer with async callback
+        // wgpu::Buffer is internally Arc-wrapped, so we can safely move it into the closure
+        // We use RefCell for WASM since it's single-threaded
+        buffers
+            .staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                if result.is_ok() {
+                    // Create a new slice from the cloned buffer inside the callback
+                    let buffer_slice = staging.slice(..);
+                    let data = buffer_slice.get_mapped_range();
+                    let positions: &[Position] = bytemuck::cast_slice(&data);
+
+                    let mut async_pos = async_positions.borrow_mut();
+                    if async_pos.data.len() != positions_len {
+                        async_pos
+                            .data
+                            .resize(positions_len, Position { x: 0.0, y: 0.0 });
+                    }
+                    async_pos.data.copy_from_slice(positions);
+                    async_pos.pending_update = true;
+
+                    drop(data);
+                    staging.unmap();
+                }
+            });
+    }
+
     /// Get current positions (without GPU readback).
     pub fn positions(&self) -> &[Position] {
         &self.positions
@@ -299,19 +448,25 @@ impl GpuLayout {
         self.config = config;
 
         if let Some(buffers) = &self.buffers {
+            #[cfg(not(target_arch = "wasm32"))]
             let tree_size = if self.config.use_barnes_hut {
                 let tree = QuadTree::build(&self.positions, self.config.max_tree_depth);
                 tree.nodes().len() as u32
             } else {
                 1
             };
+
+            #[cfg(target_arch = "wasm32")]
+            let tree_size = 1u32;
+
             let params = self.create_params(tree_size);
             buffers.update_params(&self.ctx, &params);
         }
     }
 }
 
-/// Synchronous wrapper for environments without async runtime.
+/// Synchronous wrapper for environments without async runtime (native only).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sync {
     use super::*;
 
@@ -332,4 +487,3 @@ mod tests {
         assert!(config.theta > 0.0);
     }
 }
-

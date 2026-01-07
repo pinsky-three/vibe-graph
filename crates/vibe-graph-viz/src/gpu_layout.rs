@@ -4,40 +4,75 @@
 //! the egui_graphs visualization, using GPU for position calculation
 //! while keeping egui_graphs for rendering and interaction.
 //!
-//! **Note:** GPU layout is only available on native targets. WASM uses
-//! the standard CPU layout due to async initialization requirements.
+//! On WASM, GPU initialization is async and uses WebGPU.
+//! On native, GPU initialization is blocking and uses Vulkan/Metal/DX12.
 
 use egui_graphs::Graph;
-#[cfg(not(target_arch = "wasm32"))]
 use petgraph::stable_graph::NodeIndex;
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 
-#[cfg(not(target_arch = "wasm32"))]
 use vibe_graph_layout_gpu::{Edge, GpuLayout, LayoutConfig, LayoutState, Position};
 
 #[cfg(target_arch = "wasm32")]
-use vibe_graph_layout_gpu::{LayoutConfig, LayoutState};
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+
+/// Initialization state for GPU layout.
+#[derive(Clone)]
+pub enum GpuInitState {
+    /// Not yet started
+    NotStarted,
+    /// Async initialization in progress
+    Pending,
+    /// Ready with initialized layout
+    Ready,
+    /// Initialization failed
+    Failed(String),
+}
+
+/// Shared state for WASM async initialization.
+#[cfg(target_arch = "wasm32")]
+pub struct SharedGpuState {
+    pub layout: Option<GpuLayout>,
+    pub init_state: GpuInitState,
+    pub node_to_gpu_idx: Vec<NodeIndex>,
+    pub gpu_idx_map: HashMap<NodeIndex, usize>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Default for SharedGpuState {
+    fn default() -> Self {
+        Self {
+            layout: None,
+            init_state: GpuInitState::NotStarted,
+            node_to_gpu_idx: Vec::new(),
+            gpu_idx_map: HashMap::new(),
+        }
+    }
+}
 
 /// GPU layout wrapper that manages the layout engine and synchronization with egui_graphs.
-///
-/// On WASM, GPU layout is not available due to async initialization requirements.
-/// The manager will report "not available" and fall back to CPU layout.
 pub struct GpuLayoutManager {
-    /// The GPU layout engine (native only)
+    // Native: direct ownership
     #[cfg(not(target_arch = "wasm32"))]
     layout: Option<GpuLayout>,
-    /// Mapping from egui NodeIndex to GPU buffer index
     #[cfg(not(target_arch = "wasm32"))]
     node_to_gpu_idx: Vec<NodeIndex>,
-    /// Reverse mapping from NodeIndex to GPU index
     #[cfg(not(target_arch = "wasm32"))]
     gpu_idx_map: HashMap<NodeIndex, usize>,
-    /// Whether GPU layout is enabled
+    #[cfg(not(target_arch = "wasm32"))]
+    init_state: GpuInitState,
+
+    // WASM: shared state for async access
+    #[cfg(target_arch = "wasm32")]
+    shared: Rc<RefCell<SharedGpuState>>,
+
+    /// Whether GPU layout is enabled by the user
     enabled: bool,
     /// Whether the layout is currently running
     running: bool,
-    /// Initialization error (if any)
+    /// Initialization error (if any) - for display purposes
     error: Option<String>,
     /// Layout configuration
     config: LayoutConfig,
@@ -56,11 +91,14 @@ impl Default for GpuLayoutManager {
             node_to_gpu_idx: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             gpu_idx_map: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            init_state: GpuInitState::NotStarted,
+
+            #[cfg(target_arch = "wasm32")]
+            shared: Rc::new(RefCell::new(SharedGpuState::default())),
+
             enabled: false,
             running: false,
-            #[cfg(target_arch = "wasm32")]
-            error: Some("GPU layout not available in browser (use native build)".into()),
-            #[cfg(not(target_arch = "wasm32"))]
             error: None,
             config: LayoutConfig::default(),
             last_fps: 0.0,
@@ -75,16 +113,31 @@ impl GpuLayoutManager {
         Self::default()
     }
 
+    /// Get the current initialization state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn init_state(&self) -> GpuInitState {
+        self.init_state.clone()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn init_state(&self) -> GpuInitState {
+        self.shared.borrow().init_state.clone()
+    }
+
     /// Check if GPU layout is available and enabled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn is_enabled(&self) -> bool {
         self.enabled && self.layout.is_some()
     }
 
-    /// GPU layout is not available on WASM.
     #[cfg(target_arch = "wasm32")]
     pub fn is_enabled(&self) -> bool {
-        false
+        self.enabled && self.shared.borrow().layout.is_some()
+    }
+
+    /// Check if initialization is pending.
+    pub fn is_initializing(&self) -> bool {
+        matches!(self.init_state(), GpuInitState::Pending)
     }
 
     /// Check if layout is currently running.
@@ -112,11 +165,11 @@ impl GpuLayoutManager {
         self.last_fps
     }
 
-    /// Initialize the GPU layout from an egui_graphs Graph.
-    /// Only available on native targets.
+    /// Initialize the GPU layout from an egui_graphs Graph (native - blocking).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn initialize(&mut self, graph: &Graph<(), ()>) {
         self.error = None;
+        self.init_state = GpuInitState::Pending;
 
         // Extract node positions and build mappings
         let node_count = graph.node_count();
@@ -143,11 +196,12 @@ impl GpuLayoutManager {
             }
         }
 
-        // Initialize GPU layout (blocking - only works on native)
+        // Initialize GPU layout (blocking on native)
         match pollster::block_on(GpuLayout::new(self.config.clone())) {
             Ok(mut layout) => {
                 if let Err(e) = layout.init(positions, edges) {
                     self.error = Some(format!("GPU layout init failed: {}", e));
+                    self.init_state = GpuInitState::Failed(self.error.clone().unwrap());
                     self.layout = None;
                     return;
                 }
@@ -155,18 +209,93 @@ impl GpuLayoutManager {
                 self.layout = Some(layout);
                 self.node_to_gpu_idx = node_to_gpu_idx;
                 self.gpu_idx_map = gpu_idx_map;
+                self.init_state = GpuInitState::Ready;
             }
             Err(e) => {
                 self.error = Some(format!("GPU init failed: {}", e));
+                self.init_state = GpuInitState::Failed(self.error.clone().unwrap());
                 self.layout = None;
             }
         }
     }
 
-    /// GPU layout initialization is not available on WASM.
+    /// Initialize the GPU layout from an egui_graphs Graph (WASM - async).
     #[cfg(target_arch = "wasm32")]
-    pub fn initialize(&mut self, _graph: &Graph<(), ()>) {
-        self.error = Some("GPU layout not available in browser".into());
+    pub fn initialize(&mut self, graph: &Graph<(), ()>) {
+        self.error = None;
+
+        // Check if already initializing
+        {
+            let state = self.shared.borrow();
+            if matches!(state.init_state, GpuInitState::Pending) {
+                return;
+            }
+        }
+
+        // Extract node positions and build mappings
+        let node_count = graph.node_count();
+        let mut positions = Vec::with_capacity(node_count);
+        let mut node_to_gpu_idx = Vec::with_capacity(node_count);
+        let mut gpu_idx_map = HashMap::with_capacity(node_count);
+
+        for (idx, (node_idx, node)) in graph.nodes_iter().enumerate() {
+            let loc = node.location();
+            positions.push(Position::new(loc.x, loc.y));
+            node_to_gpu_idx.push(node_idx);
+            gpu_idx_map.insert(node_idx, idx);
+        }
+
+        // Extract edges
+        let mut edges = Vec::with_capacity(graph.edge_count());
+        for (edge_idx, _) in graph.edges_iter() {
+            if let Some((source_idx, target_idx)) = graph.edge_endpoints(edge_idx) {
+                if let (Some(&src), Some(&tgt)) =
+                    (gpu_idx_map.get(&source_idx), gpu_idx_map.get(&target_idx))
+                {
+                    edges.push(Edge::new(src as u32, tgt as u32));
+                }
+            }
+        }
+
+        // Store mappings in shared state
+        {
+            let mut state = self.shared.borrow_mut();
+            state.init_state = GpuInitState::Pending;
+            state.node_to_gpu_idx = node_to_gpu_idx;
+            state.gpu_idx_map = gpu_idx_map;
+        }
+
+        let shared = self.shared.clone();
+        let config = self.config.clone();
+
+        // Spawn async initialization
+        wasm_bindgen_futures::spawn_local(async move {
+            web_sys::console::log_1(&"[gpu-layout] Starting WebGPU initialization...".into());
+
+            match GpuLayout::new(config).await {
+                Ok(mut layout) => {
+                    if let Err(e) = layout.init(positions, edges) {
+                        let err = format!("GPU layout init failed: {}", e);
+                        web_sys::console::error_1(&err.clone().into());
+                        shared.borrow_mut().init_state = GpuInitState::Failed(err);
+                    } else {
+                        web_sys::console::log_1(
+                            &"[gpu-layout] WebGPU initialization complete!".into(),
+                        );
+                        let mut state = shared.borrow_mut();
+                        state.layout = Some(layout);
+                        state.init_state = GpuInitState::Ready;
+                    }
+                }
+                Err(e) => {
+                    let err = format!("GPU init failed: {}", e);
+                    web_sys::console::error_1(&err.clone().into());
+                    shared.borrow_mut().init_state = GpuInitState::Failed(err);
+                }
+            }
+        });
+
+        web_sys::console::log_1(&"[gpu-layout] Async initialization spawned".into());
     }
 
     /// Enable or disable GPU layout.
@@ -188,7 +317,11 @@ impl GpuLayoutManager {
 
     #[cfg(target_arch = "wasm32")]
     pub fn start(&mut self) {
-        // No-op on WASM
+        let mut state = self.shared.borrow_mut();
+        if let Some(layout) = &mut state.layout {
+            layout.start();
+            self.running = true;
+        }
     }
 
     /// Pause the GPU layout animation.
@@ -202,6 +335,10 @@ impl GpuLayoutManager {
 
     #[cfg(target_arch = "wasm32")]
     pub fn pause(&mut self) {
+        let mut state = self.shared.borrow_mut();
+        if let Some(layout) = &mut state.layout {
+            layout.pause();
+        }
         self.running = false;
     }
 
@@ -256,16 +393,66 @@ impl GpuLayoutManager {
         true
     }
 
-    /// GPU layout step is not available on WASM.
     #[cfg(target_arch = "wasm32")]
-    pub fn step(&mut self, _graph: &mut Graph<(), ()>, _dt: f32) -> bool {
-        false
+    pub fn step(&mut self, graph: &mut Graph<(), ()>, dt: f32) -> bool {
+        // Check for initialization state changes
+        {
+            let state = self.shared.borrow();
+            match &state.init_state {
+                GpuInitState::Failed(err) => {
+                    self.error = Some(err.clone());
+                    return false;
+                }
+                GpuInitState::Pending | GpuInitState::NotStarted => {
+                    return false;
+                }
+                GpuInitState::Ready => {}
+            }
+        }
+
+        if !self.enabled || !self.running {
+            return false;
+        }
+
+        // Track frame time for FPS calculation
+        self.frame_times.push(dt);
+        if self.frame_times.len() > 60 {
+            self.frame_times.remove(0);
+        }
+        let avg_dt: f32 = self.frame_times.iter().sum::<f32>() / self.frame_times.len() as f32;
+        self.last_fps = if avg_dt > 0.0 { 1.0 / avg_dt } else { 0.0 };
+
+        // Run GPU layout step
+        let mut state = self.shared.borrow_mut();
+        let Some(layout) = &mut state.layout else {
+            return false;
+        };
+
+        let positions = match layout.step() {
+            Ok(pos) => pos.to_vec(), // Clone positions to release borrow
+            Err(e) => {
+                self.error = Some(format!("GPU step failed: {}", e));
+                self.running = false;
+                return false;
+            }
+        };
+
+        // Update egui_graphs node positions
+        let node_to_gpu_idx = &state.node_to_gpu_idx;
+        for (gpu_idx, pos) in positions.iter().enumerate() {
+            if let Some(&node_idx) = node_to_gpu_idx.get(gpu_idx) {
+                if let Some(node) = graph.node_mut(node_idx) {
+                    node.set_location(egui::Pos2::new(pos.x, pos.y));
+                }
+            }
+        }
+
+        true
     }
 
     /// Sync positions from egui_graphs back to GPU (e.g., after user drag).
     pub fn sync_from_graph(&mut self, _graph: &Graph<(), ()>) {
         // TODO: Implement position sync from graph to GPU
-        // This would be needed if user drags nodes while GPU layout is paused
     }
 
     /// Update the layout configuration.
@@ -279,7 +466,10 @@ impl GpuLayoutManager {
 
     #[cfg(target_arch = "wasm32")]
     pub fn update_config(&mut self, config: LayoutConfig) {
-        self.config = config;
+        self.config = config.clone();
+        if let Some(layout) = &mut self.shared.borrow_mut().layout {
+            layout.set_config(config);
+        }
     }
 
     /// Get the layout state.
@@ -293,7 +483,12 @@ impl GpuLayoutManager {
 
     #[cfg(target_arch = "wasm32")]
     pub fn state(&self) -> LayoutState {
-        LayoutState::Uninitialized
+        self.shared
+            .borrow()
+            .layout
+            .as_ref()
+            .map(|l| l.state())
+            .unwrap_or(LayoutState::Uninitialized)
     }
 
     /// Get the current iteration count.
@@ -304,14 +499,41 @@ impl GpuLayoutManager {
 
     #[cfg(target_arch = "wasm32")]
     pub fn iteration(&self) -> u32 {
-        0
+        self.shared
+            .borrow()
+            .layout
+            .as_ref()
+            .map(|l| l.iteration())
+            .unwrap_or(0)
     }
 }
 
 /// UI panel for GPU layout controls.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, graph: &Graph<(), ()>) {
-    ui.heading("⚡ GPU Layout");
+    ui.heading("⚡ GPU Layout (WebGPU)");
+
+    // Show initialization state
+    let init_state = manager.init_state();
+    match &init_state {
+        GpuInitState::NotStarted => {
+            ui.label("Click 'Enable' to initialize WebGPU");
+        }
+        GpuInitState::Pending => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Initializing WebGPU...");
+            });
+            return;
+        }
+        GpuInitState::Failed(err) => {
+            ui.colored_label(egui::Color32::RED, format!("⚠ {}", err));
+            if ui.button("🔄 Retry").clicked() {
+                manager.initialize(graph);
+            }
+            return;
+        }
+        GpuInitState::Ready => {}
+    }
 
     // Error display
     if let Some(error) = manager.error() {
@@ -320,16 +542,28 @@ pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, graph: &
     }
 
     // Enable/disable toggle
-    let mut enabled = manager.is_enabled();
-    if ui.checkbox(&mut enabled, "Enable GPU Layout").changed() {
-        manager.set_enabled(enabled);
-        if enabled && manager.layout.is_none() {
+    let is_enabled = manager.is_enabled();
+    let mut should_enable = is_enabled;
+
+    if ui
+        .checkbox(&mut should_enable, "Enable GPU Layout")
+        .changed()
+    {
+        manager.set_enabled(should_enable);
+        if should_enable && !is_enabled {
             manager.initialize(graph);
         }
     }
 
     if !manager.is_enabled() {
-        ui.label("GPU layout disabled - using CPU layout");
+        if manager.is_initializing() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Initializing...");
+            });
+        } else {
+            ui.label("GPU layout disabled - using CPU layout");
+        }
         return;
     }
 
@@ -359,10 +593,8 @@ pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, graph: &
             if ui.button("⏸ Pause").clicked() {
                 manager.pause();
             }
-        } else {
-            if ui.button("▶ Run").clicked() {
-                manager.start();
-            }
+        } else if ui.button("▶ Run").clicked() {
+            manager.start();
         }
 
         if ui.button("🔄 Reset").clicked() {
@@ -418,24 +650,3 @@ pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, graph: &
         }
     });
 }
-
-/// UI panel for GPU layout controls (WASM version - shows unavailable message).
-#[cfg(target_arch = "wasm32")]
-pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, _graph: &Graph<(), ()>) {
-    ui.heading("⚡ GPU Layout");
-    ui.separator();
-
-    ui.colored_label(
-        egui::Color32::YELLOW,
-        "⚠ GPU layout requires native build",
-    );
-    ui.label("WebGPU async initialization is not yet supported.");
-    ui.label("Use the native CLI for GPU-accelerated layout:");
-    ui.code("cargo run --features native-viz,gpu-layout -- viz");
-
-    if let Some(error) = manager.error() {
-        ui.separator();
-        ui.colored_label(egui::Color32::GRAY, error);
-    }
-}
-

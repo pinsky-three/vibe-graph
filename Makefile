@@ -25,16 +25,15 @@ ui-dev: ## Run native egui app (vibe-graph-viz example runner)
 check: ## Check all crates compile
 	cargo check --workspace
 
-build-wasm: ## Build WASM visualization to CLI assets
+build-wasm: ## Build WASM visualization with WebGPU support
 	@command -v wasm-pack >/dev/null 2>&1 || { echo "Installing wasm-pack..."; cargo install wasm-pack; }
-	@echo "📦 Building WASM..."
-	cd crates/vibe-graph-viz && wasm-pack build --target web --release --out-dir pkg
+	@echo "📦 Building WASM with WebGPU support..."
+	cd crates/vibe-graph-viz && wasm-pack build --target web --release --out-dir pkg --features gpu-layout
 	@echo "📦 Copying to CLI assets..."
 	@mkdir -p crates/vibe-graph-cli/assets
 	@cp crates/vibe-graph-viz/pkg/vibe_graph_viz_bg.wasm crates/vibe-graph-cli/assets/
 	@cp crates/vibe-graph-viz/pkg/vibe_graph_viz.js crates/vibe-graph-cli/assets/
-	@echo "✅ WASM built to crates/vibe-graph-cli/assets/"
-	@echo "   Note: GPU layout is only available in native builds"
+	@echo "✅ WASM built with GPU layout support (WebGPU)"
 
 build: ## Build CLI with native viz and GPU layout
 	cargo build --release -p vibe-graph-cli --features native-viz,gpu-layout
