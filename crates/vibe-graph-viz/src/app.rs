@@ -1294,44 +1294,44 @@ impl VibeGraphApp {
 
             // Disable label controls when in performance mode
             ui.add_enabled_ui(!self.settings_style.performance_mode, |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .checkbox(
-                            &mut self.settings_style.show_node_labels,
-                            "Show node labels",
-                        )
-                        .changed()
-                    {
-                        self.apply_label_visibility();
-                    }
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(
+                        &mut self.settings_style.show_node_labels,
+                        "Show node labels",
+                    )
+                    .changed()
+                {
+                    self.apply_label_visibility();
+                }
                     Self::info_icon(
                         ui,
                         "Toggle node name visibility (expensive for large graphs)",
                     );
-                });
+            });
 
-                ui.horizontal(|ui| {
-                    if ui
-                        .checkbox(
-                            &mut self.settings_style.show_edge_labels,
-                            "Show edge labels",
-                        )
-                        .changed()
-                    {
-                        self.apply_edge_label_visibility();
-                    }
-                    Self::info_icon(ui, "Toggle edge ID labels (edge 0, edge 1, etc.)");
-                });
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(
+                        &mut self.settings_style.show_edge_labels,
+                        "Show edge labels",
+                    )
+                    .changed()
+                {
+                    self.apply_edge_label_visibility();
+                }
+                Self::info_icon(ui, "Toggle edge ID labels (edge 0, edge 1, etc.)");
+            });
 
-                ui.add_enabled_ui(
-                    self.settings_style.show_node_labels || self.settings_style.show_edge_labels,
-                    |ui| {
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
-                            Self::info_icon(ui, "Show labels always vs on hover only");
-                        });
-                    },
-                );
+            ui.add_enabled_ui(
+                self.settings_style.show_node_labels || self.settings_style.show_edge_labels,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.settings_style.labels_always, "Always visible");
+                        Self::info_icon(ui, "Show labels always vs on hover only");
+                    });
+                },
+            );
             });
 
             ui.separator();
@@ -1339,20 +1339,20 @@ impl VibeGraphApp {
 
             // Disable indicator controls when in performance mode
             ui.add_enabled_ui(!self.settings_style.performance_mode, |ui| {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.settings_style.change_indicators, "Show halos");
-                    Self::info_icon(ui, "Animated circles around changed files");
-                });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.settings_style.change_indicators, "Show halos");
+                Self::info_icon(ui, "Animated circles around changed files");
+            });
 
-                ui.add_enabled_ui(self.settings_style.change_indicators, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::Slider::new(
-                                &mut self.settings_style.change_indicator_speed,
-                                0.2..=3.0,
-                            )
-                            .text("Speed"),
-                        );
+            ui.add_enabled_ui(self.settings_style.change_indicators, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.settings_style.change_indicator_speed,
+                            0.2..=3.0,
+                        )
+                        .text("Speed"),
+                    );
                     });
                 });
             });

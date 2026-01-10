@@ -115,7 +115,7 @@ impl LayoutBuffers {
 
         let staging_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Staging Buffer"),
-            size: (positions.len() * std::mem::size_of::<Position>()) as u64,
+            size: std::mem::size_of_val(positions) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

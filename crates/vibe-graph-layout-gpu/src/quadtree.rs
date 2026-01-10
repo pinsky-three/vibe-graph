@@ -78,6 +78,15 @@ impl QuadTree {
         }
     }
 
+    /// Create a QuadTree from pre-built nodes (for GPU tree initialization).
+    pub fn from_nodes(nodes: Vec<QuadTreeNode>) -> Self {
+        Self {
+            nodes,
+            bounds_min: Position::default(),
+            bounds_max: Position::default(),
+        }
+    }
+
     /// Get the flattened tree nodes for GPU upload.
     pub fn nodes(&self) -> &[QuadTreeNode] {
         &self.nodes

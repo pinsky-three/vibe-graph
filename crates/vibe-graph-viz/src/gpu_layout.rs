@@ -620,14 +620,14 @@ pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, graph: &
         ui.horizontal(|ui| {
             ui.label("Repulsion:");
             changed |= ui
-                .add(egui::Slider::new(&mut config.repulsion, 100.0..=5000.0).logarithmic(true))
+                .add(egui::Slider::new(&mut config.repulsion, 500.0..=50000.0).logarithmic(true))
                 .changed();
         });
 
         ui.horizontal(|ui| {
             ui.label("Attraction:");
             changed |= ui
-                .add(egui::Slider::new(&mut config.attraction, 0.001..=0.1).logarithmic(true))
+                .add(egui::Slider::new(&mut config.attraction, 0.001..=0.5).logarithmic(true))
                 .changed();
         });
 
@@ -641,7 +641,14 @@ pub fn gpu_layout_ui(ui: &mut egui::Ui, manager: &mut GpuLayoutManager, graph: &
         ui.horizontal(|ui| {
             ui.label("Gravity:");
             changed |= ui
-                .add(egui::Slider::new(&mut config.gravity, 0.0..=1.0).step_by(0.01))
+                .add(egui::Slider::new(&mut config.gravity, 0.0..=2.0).step_by(0.05))
+                .changed();
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Edge Length:");
+            changed |= ui
+                .add(egui::Slider::new(&mut config.ideal_length, 20.0..=300.0).step_by(5.0))
                 .changed();
         });
 

@@ -43,10 +43,12 @@
 //! - GPU Barnes-Hut: ~100K operations, parallelized → 60+ FPS
 
 mod error;
-mod quadtree;
-mod layout;
 mod gpu;
+mod gpu_tree;
+mod layout;
+mod quadtree;
 mod shaders;
+mod tree_shaders;
 
 pub use error::LayoutError;
 pub use layout::{GpuLayout, LayoutConfig, LayoutState};

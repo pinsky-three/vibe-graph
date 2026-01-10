@@ -4,11 +4,16 @@ use crate::gpu::{GpuContext, LayoutBuffers, LayoutPipeline};
 use crate::quadtree::QuadTree;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::shaders::FORCE_SHADER;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::shaders::SIMPLE_FORCE_SHADER;
 use crate::{Edge, LayoutError, LayoutParams, Position, Result};
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, Mutex};
+// GPU tree imports for WASM Barnes-Hut
+#[cfg(target_arch = "wasm32")]
+use crate::gpu_tree::{GpuTreeBuilder, TreeBuffers};
+
+// Note: Arc and Mutex were previously used for async position updates on native
+// but are now unused. Keeping the cfg block for potential future use.
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
@@ -42,12 +47,12 @@ impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
             dt: 0.016,
-            damping: 0.9,
-            repulsion: 1000.0,
-            attraction: 0.01,
+            damping: 0.85,       // Slightly lower for smoother convergence
+            repulsion: 5000.0,   // Higher to push unconnected nodes apart
+            attraction: 0.05,    // Stronger to pull connected nodes together (creates clusters)
             theta: 0.8,
-            gravity: 0.1,
-            ideal_length: 50.0,
+            gravity: 0.3,        // Non-zero to keep graph centered and prevent drift
+            ideal_length: 100.0, // Larger ideal edge length for clearer separation
             use_barnes_hut: true,
             max_tree_depth: 12,
         }
@@ -67,13 +72,8 @@ pub enum LayoutState {
     Converged,
 }
 
-/// Shared state for async position updates (native uses Mutex, WASM uses RefCell)
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
-struct AsyncPositions {
-    data: Vec<Position>,
-    pending_update: bool,
-}
+// Note: AsyncPositions was previously used for native async updates
+// but native now uses blocking readback. Keeping comment for reference.
 
 /// Shared state for async position updates (WASM)
 #[cfg(target_arch = "wasm32")]
@@ -81,6 +81,16 @@ struct AsyncPositions {
 struct AsyncPositionsWasm {
     data: Vec<Position>,
     pending_update: bool,
+}
+
+/// Bind groups for tree construction passes (WASM only).
+#[cfg(target_arch = "wasm32")]
+struct TreeBindGroups {
+    bounds: wgpu::BindGroup,
+    morton: wgpu::BindGroup,
+    tree_build: wgpu::BindGroup,
+    tree_finalize: wgpu::BindGroup,
+    force: wgpu::BindGroup,
 }
 
 /// GPU-accelerated force-directed graph layout.
@@ -94,9 +104,11 @@ pub struct GpuLayout {
     positions: Vec<Position>,
     edges: Vec<Edge>,
     iteration: u32,
-    /// Frame counter for periodic readback
+    /// Frame counter for periodic readback (WASM only)
+    #[cfg(target_arch = "wasm32")]
     frame_counter: u32,
-    /// How often to read back positions (every N frames)
+    /// How often to read back positions (every N frames) (WASM only)
+    #[cfg(target_arch = "wasm32")]
     readback_interval: u32,
     /// Shared state for async updates (WASM) - uses RefCell since WASM is single-threaded
     #[cfg(target_arch = "wasm32")]
@@ -104,6 +116,15 @@ pub struct GpuLayout {
     /// Whether a readback is currently in progress (WASM)
     #[cfg(target_arch = "wasm32")]
     readback_pending: bool,
+    /// GPU tree builder for WASM Barnes-Hut
+    #[cfg(target_arch = "wasm32")]
+    tree_builder: Option<GpuTreeBuilder>,
+    /// GPU tree buffers for WASM Barnes-Hut
+    #[cfg(target_arch = "wasm32")]
+    tree_buffers: Option<TreeBuffers>,
+    /// Bind groups for tree construction passes (WASM)
+    #[cfg(target_arch = "wasm32")]
+    tree_bind_groups: Option<TreeBindGroups>,
 }
 
 impl GpuLayout {
@@ -111,10 +132,9 @@ impl GpuLayout {
     pub async fn new(config: LayoutConfig) -> Result<Self> {
         let ctx = GpuContext::new().await?;
 
-        // For WASM, always use simple shader (no CPU quadtree dependency)
-        #[cfg(target_arch = "wasm32")]
-        let shader = SIMPLE_FORCE_SHADER;
-
+        // For native: use CPU-built tree with FORCE_SHADER or SIMPLE_FORCE_SHADER
+        // For WASM with Barnes-Hut: GPU tree builder creates its own force pipeline
+        // For WASM without Barnes-Hut: use SIMPLE_FORCE_SHADER (fallback)
         #[cfg(not(target_arch = "wasm32"))]
         let shader = if config.use_barnes_hut {
             FORCE_SHADER
@@ -122,7 +142,17 @@ impl GpuLayout {
             SIMPLE_FORCE_SHADER
         };
 
+        // For WASM, we'll use the GPU tree builder's force pipeline when Barnes-Hut is enabled
+        // This pipeline is just a placeholder that will be replaced
+        #[cfg(target_arch = "wasm32")]
+        let shader = crate::shaders::SIMPLE_FORCE_SHADER;
+
         let pipeline = LayoutPipeline::new(&ctx, shader)?;
+
+        // Create GPU tree builder for WASM Barnes-Hut
+        // Note: tree_builder is created later in init() when we know the node count
+        #[cfg(target_arch = "wasm32")]
+        let tree_builder: Option<GpuTreeBuilder> = None;
 
         Ok(Self {
             ctx,
@@ -134,12 +164,20 @@ impl GpuLayout {
             positions: Vec::new(),
             edges: Vec::new(),
             iteration: 0,
+            #[cfg(target_arch = "wasm32")]
             frame_counter: 0,
-            readback_interval: 1, // Read back every 30 frames (~0.5s at 60fps)
+            #[cfg(target_arch = "wasm32")]
+            readback_interval: 1,
             #[cfg(target_arch = "wasm32")]
             async_positions: Rc::new(RefCell::new(AsyncPositionsWasm::default())),
             #[cfg(target_arch = "wasm32")]
             readback_pending: false,
+            #[cfg(target_arch = "wasm32")]
+            tree_builder,
+            #[cfg(target_arch = "wasm32")]
+            tree_buffers: None,
+            #[cfg(target_arch = "wasm32")]
+            tree_bind_groups: None,
         })
     }
 
@@ -160,27 +198,103 @@ impl GpuLayout {
             QuadTree::build(&[], 1)
         };
 
+        // For WASM, create GPU tree builder with adaptive depth based on node count
         #[cfg(target_arch = "wasm32")]
-        let tree = QuadTree::build(&[], 1); // Empty tree for WASM
+        {
+            if self.config.use_barnes_hut {
+                // Adaptive depth: larger graphs need deeper trees
+                // depth 6 = 5461 nodes, depth 7 = 21845 nodes, depth 8 = 87381 nodes
+                let node_count = self.positions.len();
+                let adaptive_depth = if node_count < 500 {
+                    5  // ~341 tree nodes
+                } else if node_count < 2000 {
+                    6  // ~1365 tree nodes  
+                } else if node_count < 5000 {
+                    7  // ~5461 tree nodes
+                } else {
+                    8  // ~21845 tree nodes (good for up to 20K graph nodes)
+                };
+                
+                let max_depth = (self.config.max_tree_depth as u32).min(adaptive_depth);
+                
+                match GpuTreeBuilder::new(&self.ctx, max_depth) {
+                    Ok(builder) => {
+                        tracing::info!(
+                            "GPU tree builder created: depth={}, tree_size={}, for {} nodes",
+                            max_depth,
+                            builder.tree_size(),
+                            node_count
+                        );
+                        self.tree_builder = Some(builder);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to create GPU tree builder: {}, falling back to O(n²)", e);
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        let tree = if self.tree_builder.is_some() {
+            let tree_size = self.tree_builder.as_ref().unwrap().tree_size();
+            // Create a dummy tree with correct size for buffer allocation
+            let nodes = vec![crate::QuadTreeNode::default(); tree_size as usize];
+            // The actual tree will be built on GPU each frame
+            QuadTree::from_nodes(nodes)
+        } else {
+            QuadTree::build(&[], 1) // Empty tree for O(n²) fallback
+        };
 
         // Create GPU buffers
         let buffers = LayoutBuffers::new(&self.ctx, &self.positions, &self.edges, tree.nodes())?;
 
         // Update params
-        let params = self.create_params(tree.nodes().len() as u32);
+        #[cfg(not(target_arch = "wasm32"))]
+        let tree_size = tree.nodes().len() as u32;
+        #[cfg(target_arch = "wasm32")]
+        let tree_size = if let Some(ref builder) = self.tree_builder {
+            builder.tree_size()
+        } else {
+            1
+        };
+
+        let params = self.create_params(tree_size);
         buffers.update_params(&self.ctx, &params);
 
-        // Create bind group
+        // Create bind group (for simple shader or native Barnes-Hut)
         let bind_group = self.pipeline.create_bind_group(&self.ctx, &buffers);
+
+        // Initialize WASM tree buffers and bind groups
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref builder) = self.tree_builder {
+            let node_count = self.positions.len() as u32;
+            let tree_size = builder.tree_size();
+            let max_depth = builder.max_depth();
+
+            // Create tree buffers
+            let tree_bufs = TreeBuffers::new(&self.ctx, node_count, tree_size, max_depth);
+
+            // Create bind groups for each pass
+            let tree_bind_groups = self.create_tree_bind_groups(builder, &buffers, &tree_bufs);
+
+            self.tree_buffers = Some(tree_bufs);
+            self.tree_bind_groups = Some(tree_bind_groups);
+
+            tracing::info!(
+                "WASM GPU tree initialized: tree_size={}, max_depth={}",
+                tree_size,
+                max_depth
+            );
+        }
 
         self.buffers = Some(buffers);
         self.bind_group = Some(bind_group);
         self.state = LayoutState::Paused;
         self.iteration = 0;
-        self.frame_counter = 0;
 
         #[cfg(target_arch = "wasm32")]
         {
+            self.frame_counter = 0;
             self.readback_pending = false;
             let mut async_pos = self.async_positions.borrow_mut();
             async_pos.data = self.positions.clone();
@@ -209,6 +323,147 @@ impl GpuLayout {
             theta: self.config.theta,
             gravity: self.config.gravity,
             ideal_length: self.config.ideal_length,
+        }
+    }
+
+    /// Create bind groups for tree construction passes (WASM only).
+    #[cfg(target_arch = "wasm32")]
+    fn create_tree_bind_groups(
+        &self,
+        builder: &GpuTreeBuilder,
+        buffers: &LayoutBuffers,
+        tree_bufs: &TreeBuffers,
+    ) -> TreeBindGroups {
+        // Bounds pass bind group
+        let bounds = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bounds Bind Group"),
+            layout: builder.bounds_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.positions.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: tree_bufs.bounds_atomic.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: tree_bufs.tree_params.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Morton pass bind group
+        let morton = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Morton Bind Group"),
+            layout: builder.morton_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.positions.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: tree_bufs.bounds_f32.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: tree_bufs.particle_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tree_bufs.tree_params.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Tree build pass bind group
+        let tree_build = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Tree Build Bind Group"),
+            layout: builder.tree_build_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.positions.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: tree_bufs.bounds_f32.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: tree_bufs.particle_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tree_bufs.tree_build.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: tree_bufs.tree_params.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Tree finalize pass bind group
+        let tree_finalize = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Tree Finalize Bind Group"),
+            layout: builder.tree_finalize_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: tree_bufs.bounds_f32.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: tree_bufs.tree_build.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: tree_bufs.tree_final.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tree_bufs.finalize_params.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Force pass bind group (uses GPU-built tree)
+        let force = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Force Bind Group (GPU Tree)"),
+            layout: builder.force_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.positions.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.velocities.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.edges.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tree_bufs.tree_final.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.params.as_entire_binding(),
+                },
+            ],
+        });
+
+        TreeBindGroups {
+            bounds,
+            morton,
+            tree_build,
+            tree_finalize,
+            force,
         }
     }
 
@@ -296,8 +551,15 @@ impl GpuLayout {
             }
         }
 
-        // Run compute shader (non-blocking on WASM)
-        self.dispatch_compute();
+        // Choose between GPU tree Barnes-Hut or simple O(n²) shader
+        if self.tree_builder.is_some() && self.tree_bind_groups.is_some() && self.tree_buffers.is_some() {
+            // Use GPU-built tree for Barnes-Hut (O(n log n))
+            self.dispatch_tree_compute();
+        } else {
+            // Fallback to simple O(n²) shader
+            self.dispatch_compute();
+        }
+
         self.iteration += 1;
         self.frame_counter += 1;
 
@@ -311,6 +573,98 @@ impl GpuLayout {
         }
 
         Ok(&self.positions)
+    }
+
+    /// Dispatch tree construction and force calculation (WASM Barnes-Hut).
+    #[cfg(target_arch = "wasm32")]
+    fn dispatch_tree_compute(&mut self) {
+        let builder = self.tree_builder.as_ref().unwrap();
+        let tree_bufs = self.tree_buffers.as_ref().unwrap();
+        let bind_groups = self.tree_bind_groups.as_ref().unwrap();
+        let buffers = self.buffers.as_ref().unwrap();
+
+        let node_count = buffers.node_count;
+        let tree_size = builder.tree_size();
+
+        // Only rebuild tree every N frames (tree structure changes slowly during convergence)
+        // This is the main performance optimization - tree passes are expensive
+        let should_rebuild_tree = self.iteration % 4 == 0;
+
+        let mut encoder = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Tree Layout Encoder"),
+        });
+
+        if should_rebuild_tree {
+            // Reset buffers for new tree build
+            tree_bufs.reset_bounds(&self.ctx);
+            tree_bufs.reset_tree_counts(&self.ctx, tree_size);
+
+            // === Pass 1: Compute bounds ===
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Bounds Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(builder.bounds_pipeline());
+                pass.set_bind_group(0, &bind_groups.bounds, &[]);
+                pass.dispatch_workgroups(node_count.div_ceil(256), 1, 1);
+            }
+
+            // Copy bounds from atomic to f32 format (needed between passes)
+            encoder.copy_buffer_to_buffer(
+                &tree_bufs.bounds_atomic,
+                0,
+                &tree_bufs.bounds_f32,
+                0,
+                std::mem::size_of::<crate::gpu_tree::BoundsF32>() as u64,
+            );
+
+            // === Pass 2: Assign Morton codes ===
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Morton Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(builder.morton_pipeline());
+                pass.set_bind_group(0, &bind_groups.morton, &[]);
+                pass.dispatch_workgroups(node_count.div_ceil(256), 1, 1);
+            }
+
+            // === Pass 3: Build tree (insert particles) ===
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Tree Build Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(builder.tree_build_pipeline());
+                pass.set_bind_group(0, &bind_groups.tree_build, &[]);
+                pass.dispatch_workgroups(node_count.div_ceil(256), 1, 1);
+            }
+
+            // === Pass 4: Finalize tree (compute centers of mass) ===
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Tree Finalize Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(builder.tree_finalize_pipeline());
+                pass.set_bind_group(0, &bind_groups.tree_finalize, &[]);
+                pass.dispatch_workgroups(tree_size.div_ceil(256), 1, 1);
+            }
+        } // end if should_rebuild_tree
+
+        // === Pass 5: Force calculation using GPU tree (always runs) ===
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Force Pass (GPU Tree)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(builder.force_pipeline());
+            pass.set_bind_group(0, &bind_groups.force, &[]);
+            pass.dispatch_workgroups(node_count.div_ceil(256), 1, 1);
+        }
+
+        self.ctx.queue.submit(Some(encoder.finish()));
     }
 
     /// Dispatch the compute shader.
@@ -334,7 +688,7 @@ impl GpuLayout {
             compute_pass.set_bind_group(0, bind_group, &[]);
 
             // Dispatch enough workgroups to cover all nodes
-            let workgroup_count = (buffers.node_count as u32).div_ceil(256);
+            let workgroup_count = buffers.node_count.div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -456,8 +810,13 @@ impl GpuLayout {
                 1
             };
 
+            // For WASM with GPU tree builder, use the builder's tree size
             #[cfg(target_arch = "wasm32")]
-            let tree_size = 1u32;
+            let tree_size = if let Some(ref builder) = self.tree_builder {
+                builder.tree_size()
+            } else {
+                1
+            };
 
             let params = self.create_params(tree_size);
             buffers.update_params(&self.ctx, &params);
@@ -471,6 +830,7 @@ pub mod sync {
     use super::*;
 
     /// Create a new GPU layout synchronously.
+    #[allow(dead_code)]
     pub fn new_layout(config: LayoutConfig) -> Result<GpuLayout> {
         pollster::block_on(GpuLayout::new(config))
     }
