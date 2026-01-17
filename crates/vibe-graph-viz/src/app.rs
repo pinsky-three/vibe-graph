@@ -15,13 +15,17 @@ use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 use vibe_graph_core::{ChangeIndicatorState, GitChangeKind, GitChangeSnapshot, SourceCodeGraph};
 
 use crate::git_panel::GitPanelState;
+use crate::render::{
+    resolve_edge_visuals, resolve_node_visuals, EdgeRenderContext, NodeRenderContext,
+};
 use crate::sample::{create_sample_git_changes, create_sample_graph, rand_simple};
 use crate::selection::{
     apply_neighborhood_depth, select_nodes_in_lasso, sync_selection_from_graph, LassoState,
     SelectionState,
 };
 use crate::settings::{
-    SelectionPanelState, SettingsInteraction, SettingsNavigation, SettingsStyle,
+    NodeColorMode, NodeSizeMode, SelectionPanelState, SettingsInteraction, SettingsNavigation,
+    SettingsStyle,
 };
 use crate::top_bar::TopBarState;
 use crate::ui::{draw_change_halo, draw_lasso, draw_mode_indicator, draw_sidebar_toggle};
@@ -327,17 +331,17 @@ impl VibeGraphApp {
         let dark_mode = cc.egui_ctx.style().visuals.dark_mode;
 
         // Build mapping from node ID (u64) to egui NodeIndex
-        let mut node_id_to_egui = HashMap::new();
+        let mut _node_id_to_egui = HashMap::new();
         for (node_id, petgraph_idx) in &id_to_idx {
             if let Some(&egui_idx) = petgraph_to_egui.get(petgraph_idx) {
-                node_id_to_egui.insert(node_id.0, egui_idx);
+                _node_id_to_egui.insert(node_id.0, egui_idx);
             }
         }
 
         #[cfg(feature = "automaton")]
         let automaton_mode = {
             let mut mode = AutomatonMode::default();
-            mode.set_node_mapping(node_id_to_egui.clone());
+            mode.set_node_mapping(_node_id_to_egui.clone());
             mode
         };
 
@@ -391,7 +395,7 @@ impl VibeGraphApp {
             layout_initialized: false,
             top_bar: TopBarState::new(),
             git_panel: GitPanelState::new(),
-            _node_id_to_egui: node_id_to_egui,
+            _node_id_to_egui: _node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
 
@@ -565,7 +569,7 @@ impl VibeGraphApp {
         let store_path = path.join(".self");
         self.automaton_mode = AutomatonMode::with_path(store_path);
         self.automaton_mode
-            .set_node_mapping(self.node_id_to_egui.clone());
+            .set_node_mapping(self._node_id_to_egui.clone());
     }
 
     /// Enable automaton mode and load snapshots.
@@ -648,6 +652,25 @@ impl VibeGraphApp {
                 }
             }
         }
+    }
+
+    fn node_degree_stats(&self) -> (HashMap<NodeIndex, usize>, usize) {
+        let mut degrees: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut max_degree = 0;
+
+        for (edge_idx, _) in self.g.edges_iter() {
+            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
+                let source_degree = degrees.entry(source).or_insert(0);
+                *source_degree += 1;
+                max_degree = max_degree.max(*source_degree);
+
+                let target_degree = degrees.entry(target).or_insert(0);
+                *target_degree += 1;
+                max_degree = max_degree.max(*target_degree);
+            }
+        }
+
+        (degrees, max_degree)
     }
 
     /// Initialize layout with custom default parameters.
@@ -740,18 +763,12 @@ impl VibeGraphApp {
         let zoom = self.viewport_zoom;
         let pan = self.viewport_pan;
 
-        // Colors
-        let node_color = if self.dark_mode {
-            egui::Color32::from_rgb(100, 140, 180)
+        let (degree_map, max_degree) = if self.settings_style.node_size_mode == NodeSizeMode::Degree
+        {
+            self.node_degree_stats()
         } else {
-            egui::Color32::from_rgb(60, 100, 140)
+            (HashMap::new(), 0)
         };
-        let edge_color = if self.dark_mode {
-            egui::Color32::from_rgba_unmultiplied(80, 80, 100, 60)
-        } else {
-            egui::Color32::from_rgba_unmultiplied(100, 100, 120, 80)
-        };
-        let selected_color = egui::Color32::from_rgb(0, 212, 255);
 
         // Calculate viewport bounds in canvas space
         let half_size = rect.size() / (2.0 * zoom);
@@ -797,10 +814,18 @@ impl VibeGraphApp {
 
                         // Only draw if the line would be visible
                         if rect.intersects(egui::Rect::from_two_pos(screen_source, screen_target)) {
-                            painter.line_segment(
-                                [screen_source, screen_target],
-                                egui::Stroke::new(0.5, edge_color),
-                            );
+                            let edge_selected = self
+                                .g
+                                .edge(edge_idx)
+                                .map(|edge| edge.selected())
+                                .unwrap_or(false);
+                            let edge_visuals = resolve_edge_visuals(EdgeRenderContext {
+                                dark_mode: self.dark_mode,
+                                selected: edge_selected,
+                                selection_emphasis: self.settings_style.edge_selection_emphasis,
+                            });
+                            painter
+                                .line_segment([screen_source, screen_target], edge_visuals.stroke);
                             visible_edges += 1;
                         }
                     }
@@ -809,8 +834,6 @@ impl VibeGraphApp {
         }
 
         // Second pass: draw nodes
-        let node_radius = (3.0 * zoom).clamp(1.5, 8.0);
-
         for (node_idx, _) in self.g.nodes_iter() {
             if let Some(node) = self.g.node(node_idx) {
                 let pos = node.location();
@@ -829,16 +852,37 @@ impl VibeGraphApp {
 
                 visible_nodes += 1;
 
-                // Determine color based on selection/change state
-                let color = if node.selected() {
-                    selected_color
-                } else if let Some(change_kind) = self.changed_nodes.get(&node_idx) {
-                    crate::ui::change_kind_color(*change_kind, self.dark_mode)
-                } else {
-                    node_color
-                };
+                let degree = degree_map.get(&node_idx).copied().unwrap_or(0);
+                let kind = self.node_kinds.get(&node_idx).map(|value| value.as_str());
+                let change_kind = self.changed_nodes.get(&node_idx).copied();
+                let visuals = resolve_node_visuals(NodeRenderContext {
+                    dark_mode: self.dark_mode,
+                    zoom,
+                    selected: node.selected(),
+                    change_kind,
+                    kind,
+                    degree,
+                    max_degree,
+                    show_change_halo: self.settings_style.change_indicators,
+                    node_color_mode: self.settings_style.node_color_mode,
+                    node_size_mode: self.settings_style.node_size_mode,
+                });
 
-                painter.circle_filled(screen_pos, node_radius, color);
+                painter.circle_filled(screen_pos, visuals.radius, visuals.fill);
+                if visuals.stroke.width > 0.0 {
+                    painter.circle_stroke(screen_pos, visuals.radius, visuals.stroke);
+                }
+
+                if let Some(halo) = visuals.change_halo {
+                    draw_change_halo(
+                        &painter,
+                        screen_pos,
+                        halo.base_radius,
+                        halo.kind,
+                        &self.change_anim,
+                        self.dark_mode,
+                    );
+                }
             }
         }
 
@@ -1287,6 +1331,59 @@ impl VibeGraphApp {
                     }
                     self.dark_mode = dark;
                 }
+            });
+
+            ui.separator();
+            ui.label(egui::RichText::new("Node Visuals").strong());
+
+            // Disable node visual layers when in performance mode
+            ui.add_enabled_ui(!self.settings_style.performance_mode, |ui| {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_label("Color")
+                        .selected_text(self.settings_style.node_color_mode.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.settings_style.node_color_mode,
+                                NodeColorMode::Default,
+                                NodeColorMode::Default.label(),
+                            );
+                            ui.selectable_value(
+                                &mut self.settings_style.node_color_mode,
+                                NodeColorMode::Kind,
+                                NodeColorMode::Kind.label(),
+                            );
+                        });
+                    Self::info_icon(ui, "Color by node kind (file/directory/module)");
+                });
+
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_label("Size")
+                        .selected_text(self.settings_style.node_size_mode.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.settings_style.node_size_mode,
+                                NodeSizeMode::Fixed,
+                                NodeSizeMode::Fixed.label(),
+                            );
+                            ui.selectable_value(
+                                &mut self.settings_style.node_size_mode,
+                                NodeSizeMode::Degree,
+                                NodeSizeMode::Degree.label(),
+                            );
+                        });
+                    Self::info_icon(ui, "Size by node degree (number of edges)");
+                });
+            });
+
+            ui.separator();
+            ui.label(egui::RichText::new("Edge Visuals").strong());
+
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.settings_style.edge_selection_emphasis,
+                    "Emphasize selected edges",
+                );
+                Self::info_icon(ui, "Thicker magenta edges when selected");
             });
 
             ui.separator();
@@ -1932,6 +2029,62 @@ impl App for VibeGraphApp {
                     .with_styles(&settings_style),
             );
 
+            let overlay_enabled = !self.settings_style.performance_mode
+                && (self.settings_style.node_color_mode != NodeColorMode::Default
+                    || self.settings_style.node_size_mode != NodeSizeMode::Fixed);
+            let use_degree = self.settings_style.node_size_mode == NodeSizeMode::Degree;
+            let (degree_map, max_degree) = if use_degree
+                && (overlay_enabled || self.settings_style.change_indicators)
+            {
+                self.node_degree_stats()
+            } else {
+                (HashMap::new(), 0)
+            };
+
+            if overlay_enabled {
+                let painter = ui.painter();
+                let meta = MetadataFrame::new(None).load(ui);
+                let graph_rect = graph_response.rect;
+
+                for (node_idx, _) in self.g.nodes_iter() {
+                    if let Some(node) = self.g.node(node_idx) {
+                        let canvas_pos = node.location();
+                        let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
+                        let screen_pos = egui::pos2(
+                            widget_relative.x + graph_rect.min.x,
+                            widget_relative.y + graph_rect.min.y,
+                        );
+
+                        if graph_rect.contains(screen_pos) {
+                            let degree = degree_map.get(&node_idx).copied().unwrap_or(0);
+                            let kind = self.node_kinds.get(&node_idx).map(|value| value.as_str());
+                            let change_kind = self.changed_nodes.get(&node_idx).copied();
+                            let visuals = resolve_node_visuals(NodeRenderContext {
+                                dark_mode: self.dark_mode,
+                                zoom: 1.0,
+                                selected: node.selected(),
+                                change_kind,
+                                kind,
+                                degree,
+                                max_degree,
+                                show_change_halo: self.settings_style.change_indicators,
+                                node_color_mode: self.settings_style.node_color_mode,
+                                node_size_mode: self.settings_style.node_size_mode,
+                            });
+
+                            painter.circle_filled(screen_pos, visuals.radius, visuals.fill);
+                            if visuals.stroke.width > 0.0 {
+                                painter.circle_stroke(
+                                    screen_pos,
+                                    visuals.radius,
+                                    visuals.stroke,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // ==========================================================================
             // Layout Throttling & Auto-Pause for Large Graphs
             // ==========================================================================
@@ -2016,15 +2169,31 @@ impl App for VibeGraphApp {
 
                         // Only draw if visible in viewport
                         if graph_rect.contains(screen_pos) {
-                            let base_radius = 8.0; // Default node radius
-                            draw_change_halo(
-                                painter,
-                                screen_pos,
-                                base_radius,
-                                *change_kind,
-                                &self.change_anim,
-                                self.dark_mode,
-                            );
+                            let degree = degree_map.get(node_idx).copied().unwrap_or(0);
+                            let kind = self.node_kinds.get(node_idx).map(|value| value.as_str());
+                            let visuals = resolve_node_visuals(NodeRenderContext {
+                                dark_mode: self.dark_mode,
+                                zoom: 1.0,
+                                selected: node.selected(),
+                                change_kind: Some(*change_kind),
+                                kind,
+                                degree,
+                                max_degree,
+                                show_change_halo: true,
+                                node_color_mode: self.settings_style.node_color_mode,
+                                node_size_mode: self.settings_style.node_size_mode,
+                            });
+
+                            if let Some(halo) = visuals.change_halo {
+                                draw_change_halo(
+                                    painter,
+                                    screen_pos,
+                                    halo.base_radius,
+                                    halo.kind,
+                                    &self.change_anim,
+                                    self.dark_mode,
+                                );
+                            }
                         }
                     }
                 }
@@ -2038,7 +2207,7 @@ impl App for VibeGraphApp {
                 let graph_rect = graph_response.rect;
 
                 for (&node_id, &activation) in &self.automaton_mode.activations {
-                    if let Some(&egui_idx) = self.node_id_to_egui.get(&node_id) {
+                    if let Some(&egui_idx) = self._node_id_to_egui.get(&node_id) {
                         if let Some(node) = self.g.node(egui_idx) {
                             let canvas_pos = node.location();
                             let widget_relative = meta.canvas_to_screen_pos(canvas_pos);

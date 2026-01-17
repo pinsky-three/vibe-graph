@@ -29,6 +29,36 @@ impl Default for SettingsInteraction {
 }
 
 /// Visual style toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeColorMode {
+    Default,
+    Kind,
+}
+
+impl NodeColorMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeColorMode::Default => "default",
+            NodeColorMode::Kind => "by kind",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeSizeMode {
+    Fixed,
+    Degree,
+}
+
+impl NodeSizeMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeSizeMode::Fixed => "fixed",
+            NodeSizeMode::Degree => "by degree",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SettingsStyle {
     /// Always show node labels (vs hover-only).
@@ -43,6 +73,12 @@ pub struct SettingsStyle {
     pub change_indicator_speed: f32,
     #[allow(dead_code)]
     pub edge_deemphasis: bool,
+    /// Node color mapping mode for additional info layers.
+    pub node_color_mode: NodeColorMode,
+    /// Node size mapping mode for additional info layers.
+    pub node_size_mode: NodeSizeMode,
+    /// Emphasize selected edges in static rendering.
+    pub edge_selection_emphasis: bool,
     /// Performance mode - reduces visual fidelity for better FPS on large graphs.
     pub performance_mode: bool,
     /// Static render mode - uses custom viewport-culled rendering instead of egui_graphs.
@@ -59,6 +95,9 @@ impl Default for SettingsStyle {
             change_indicators: true,
             change_indicator_speed: 1.0,
             edge_deemphasis: false,
+            node_color_mode: NodeColorMode::Default,
+            node_size_mode: NodeSizeMode::Fixed,
+            edge_selection_emphasis: true,
             performance_mode: false,
             static_render: false,
         }
@@ -74,6 +113,8 @@ impl SettingsStyle {
         self.labels_always = false; // Only show labels on hover
         self.show_node_labels = false; // Disable labels entirely
         self.change_indicators = false; // Disable animated halos
+        self.node_color_mode = NodeColorMode::Default;
+        self.node_size_mode = NodeSizeMode::Fixed;
                                         // Don't auto-enable static_render - layout needs to run first!
                                         // self.static_render = true;
     }
@@ -81,7 +122,11 @@ impl SettingsStyle {
     /// Check if any performance-heavy features are enabled.
     #[allow(dead_code)]
     pub fn has_heavy_features(&self) -> bool {
-        self.show_node_labels || self.labels_always || self.change_indicators
+        self.show_node_labels
+            || self.labels_always
+            || self.change_indicators
+            || self.node_color_mode != NodeColorMode::Default
+            || self.node_size_mode != NodeSizeMode::Fixed
     }
 }
 
