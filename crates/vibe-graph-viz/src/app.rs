@@ -115,7 +115,7 @@ pub struct VibeGraphApp {
     /// Git tools panel state
     git_panel: GitPanelState,
     /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
-    node_id_to_egui: HashMap<u64, NodeIndex>,
+    _node_id_to_egui: HashMap<u64, NodeIndex>,
     /// Automaton mode state (temporal evolution visualization)
     #[cfg(feature = "automaton")]
     automaton_mode: AutomatonMode,
@@ -391,7 +391,7 @@ impl VibeGraphApp {
             layout_initialized: false,
             top_bar: TopBarState::new(),
             git_panel: GitPanelState::new(),
-            node_id_to_egui,
+            _node_id_to_egui: node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
 
@@ -809,7 +809,7 @@ impl VibeGraphApp {
         }
 
         // Second pass: draw nodes
-        let node_radius = (3.0 * zoom).max(1.5).min(8.0);
+        let node_radius = (3.0 * zoom).clamp(1.5, 8.0);
 
         for (node_idx, _) in self.g.nodes_iter() {
             if let Some(node) = self.g.node(node_idx) {
