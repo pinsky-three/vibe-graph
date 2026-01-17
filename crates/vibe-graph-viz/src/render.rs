@@ -29,6 +29,8 @@ pub struct NodeRenderContext<'a> {
     pub kind: Option<&'a str>,
     pub degree: usize,
     pub max_degree: usize,
+    pub page_rank: f32,
+    pub max_page_rank: f32,
     pub show_change_halo: bool,
     pub node_color_mode: NodeColorMode,
     pub node_size_mode: NodeSizeMode,
@@ -61,6 +63,15 @@ pub fn resolve_node_visuals(ctx: NodeRenderContext<'_>) -> NodeVisuals {
                 let t = (ctx.degree as f32 / ctx.max_degree as f32).clamp(0.0, 1.0);
                 let scaled = base_radius * (1.0 + t * 1.4);
                 scaled.clamp(base_radius * 0.75, base_radius * 2.5)
+            }
+        }
+        NodeSizeMode::PageRank => {
+            if ctx.max_page_rank <= 0.0 {
+                base_radius
+            } else {
+                let t = (ctx.page_rank / ctx.max_page_rank).clamp(0.0, 1.0);
+                let scaled = base_radius * (1.0 + t * 1.6);
+                scaled.clamp(base_radius * 0.75, base_radius * 2.8)
             }
         }
     };

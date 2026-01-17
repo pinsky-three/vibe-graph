@@ -48,6 +48,7 @@ impl NodeColorMode {
 pub enum NodeSizeMode {
     Fixed,
     Degree,
+    PageRank,
 }
 
 impl NodeSizeMode {
@@ -55,6 +56,7 @@ impl NodeSizeMode {
         match self {
             NodeSizeMode::Fixed => "fixed",
             NodeSizeMode::Degree => "by degree",
+            NodeSizeMode::PageRank => "by page rank",
         }
     }
 }
@@ -77,6 +79,10 @@ pub struct SettingsStyle {
     pub node_color_mode: NodeColorMode,
     /// Node size mapping mode for additional info layers.
     pub node_size_mode: NodeSizeMode,
+    /// PageRank damping factor (0.0..=1.0).
+    pub page_rank_damping: f32,
+    /// PageRank iteration count.
+    pub page_rank_iterations: usize,
     /// Emphasize selected edges in static rendering.
     pub edge_selection_emphasis: bool,
     /// Performance mode - reduces visual fidelity for better FPS on large graphs.
@@ -97,6 +103,8 @@ impl Default for SettingsStyle {
             edge_deemphasis: false,
             node_color_mode: NodeColorMode::Default,
             node_size_mode: NodeSizeMode::Fixed,
+            page_rank_damping: 0.85,
+            page_rank_iterations: 20,
             edge_selection_emphasis: true,
             performance_mode: false,
             static_render: false,
@@ -115,8 +123,10 @@ impl SettingsStyle {
         self.change_indicators = false; // Disable animated halos
         self.node_color_mode = NodeColorMode::Default;
         self.node_size_mode = NodeSizeMode::Fixed;
-                                        // Don't auto-enable static_render - layout needs to run first!
-                                        // self.static_render = true;
+        self.page_rank_damping = 0.85;
+        self.page_rank_iterations = 20;
+        // Don't auto-enable static_render - layout needs to run first!
+        // self.static_render = true;
     }
 
     /// Check if any performance-heavy features are enabled.

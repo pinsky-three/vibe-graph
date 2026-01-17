@@ -10,6 +10,8 @@ use egui_graphs::{
     FruchtermanReingoldWithCenterGravityState, Graph, GraphView, LayoutForceDirected,
     MetadataFrame,
 };
+use petgraph::algo::page_rank;
+use petgraph::graph::NodeIndex as GraphNodeIndex;
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
 use vibe_graph_core::{ChangeIndicatorState, GitChangeKind, GitChangeSnapshot, SourceCodeGraph};
@@ -673,6 +675,55 @@ impl VibeGraphApp {
         (degrees, max_degree)
     }
 
+    fn node_pagerank_stats(&self) -> (HashMap<NodeIndex, f32>, f32) {
+        let damping = self.settings_style.page_rank_damping.clamp(0.0, 1.0);
+        let iterations = self.settings_style.page_rank_iterations.max(1);
+        let mut index_map: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut ordered_nodes: Vec<NodeIndex> = Vec::new();
+        for (node_idx, _) in self.g.nodes_iter() {
+            let position = ordered_nodes.len();
+            index_map.insert(node_idx, position);
+            ordered_nodes.push(node_idx);
+        }
+
+        let mut graph = petgraph::Graph::<(), (), petgraph::Directed>::with_capacity(
+            ordered_nodes.len(),
+            self.g.edge_count(),
+        );
+        for _ in 0..ordered_nodes.len() {
+            graph.add_node(());
+        }
+
+        for (edge_idx, _) in self.g.edges_iter() {
+            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
+                if let (Some(&source_pos), Some(&target_pos)) =
+                    (index_map.get(&source), index_map.get(&target))
+                {
+                    graph.add_edge(
+                        GraphNodeIndex::new(source_pos),
+                        GraphNodeIndex::new(target_pos),
+                        (),
+                    );
+                }
+            }
+        }
+
+        let ranks = page_rank(&graph, damping, iterations);
+        let mut map: HashMap<NodeIndex, f32> = HashMap::new();
+        let mut max_rank = 0.0_f32;
+
+        for (node_idx, position) in index_map {
+            if let Some(&rank) = ranks.get(position) {
+                map.insert(node_idx, rank);
+                if rank > max_rank {
+                    max_rank = rank;
+                }
+            }
+        }
+
+        (map, max_rank)
+    }
+
     /// Initialize layout with custom default parameters.
     /// Uses graph-size-aware defaults for better performance with large graphs.
     fn initialize_layout_defaults(&self, ctx: &Context) {
@@ -763,12 +814,18 @@ impl VibeGraphApp {
         let zoom = self.viewport_zoom;
         let pan = self.viewport_pan;
 
-        let (degree_map, max_degree) = if self.settings_style.node_size_mode == NodeSizeMode::Degree
-        {
-            self.node_degree_stats()
-        } else {
-            (HashMap::new(), 0)
-        };
+        let (degree_map, max_degree, pagerank_map, max_pagerank) =
+            match self.settings_style.node_size_mode {
+                NodeSizeMode::Degree => {
+                    let (degree_map, max_degree) = self.node_degree_stats();
+                    (degree_map, max_degree, HashMap::new(), 0.0)
+                }
+                NodeSizeMode::PageRank => {
+                    let (pagerank_map, max_pagerank) = self.node_pagerank_stats();
+                    (HashMap::new(), 0, pagerank_map, max_pagerank)
+                }
+                NodeSizeMode::Fixed => (HashMap::new(), 0, HashMap::new(), 0.0),
+            };
 
         // Calculate viewport bounds in canvas space
         let half_size = rect.size() / (2.0 * zoom);
@@ -853,6 +910,7 @@ impl VibeGraphApp {
                 visible_nodes += 1;
 
                 let degree = degree_map.get(&node_idx).copied().unwrap_or(0);
+                let page_rank = pagerank_map.get(&node_idx).copied().unwrap_or(0.0);
                 let kind = self.node_kinds.get(&node_idx).map(|value| value.as_str());
                 let change_kind = self.changed_nodes.get(&node_idx).copied();
                 let visuals = resolve_node_visuals(NodeRenderContext {
@@ -863,6 +921,8 @@ impl VibeGraphApp {
                     kind,
                     degree,
                     max_degree,
+                    page_rank,
+                    max_page_rank: max_pagerank,
                     show_change_halo: self.settings_style.change_indicators,
                     node_color_mode: self.settings_style.node_color_mode,
                     node_size_mode: self.settings_style.node_size_mode,
@@ -1370,9 +1430,35 @@ impl VibeGraphApp {
                                 NodeSizeMode::Degree,
                                 NodeSizeMode::Degree.label(),
                             );
+                            ui.selectable_value(
+                                &mut self.settings_style.node_size_mode,
+                                NodeSizeMode::PageRank,
+                                NodeSizeMode::PageRank.label(),
+                            );
                         });
-                    Self::info_icon(ui, "Size by node degree (number of edges)");
+                    Self::info_icon(ui, "Size by degree or PageRank");
                 });
+
+                if self.settings_style.node_size_mode == NodeSizeMode::PageRank {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.settings_style.page_rank_damping,
+                                0.0..=1.0,
+                            )
+                            .text("damping"),
+                        );
+                        Self::info_icon(ui, "PageRank damping factor");
+                    });
+
+                    let mut iterations = self.settings_style.page_rank_iterations as u32;
+                    if ui
+                        .add(egui::Slider::new(&mut iterations, 1..=50).text("iterations"))
+                        .changed()
+                    {
+                        self.settings_style.page_rank_iterations = iterations as usize;
+                    }
+                }
             });
 
             ui.separator();
@@ -1990,6 +2076,7 @@ impl App for VibeGraphApp {
             // Note: Edge labels are disabled by not setting labels on edges (we use () for edge data)
             // Node labels are controlled by with_labels_always
             // Vibrant OLED-optimized selection colors
+            let edge_emphasis = self.settings_style.edge_selection_emphasis;
             let settings_style = egui_graphs::SettingsStyle::new()
                 .with_labels_always(self.settings_style.labels_always)
                 .with_node_stroke_hook(move |selected, dragged, _color, _stroke, _style| {
@@ -2009,7 +2096,7 @@ impl App for VibeGraphApp {
                     }
                 })
                 .with_edge_stroke_hook(move |selected, _order, stroke, _style| {
-                    if selected {
+                    if selected && edge_emphasis {
                         // Hot magenta for selected edges
                         let color = if dark_mode {
                             egui::Color32::from_rgb(255, 45, 85)
@@ -2033,12 +2120,20 @@ impl App for VibeGraphApp {
                 && (self.settings_style.node_color_mode != NodeColorMode::Default
                     || self.settings_style.node_size_mode != NodeSizeMode::Fixed);
             let use_degree = self.settings_style.node_size_mode == NodeSizeMode::Degree;
+            let use_pagerank = self.settings_style.node_size_mode == NodeSizeMode::PageRank;
             let (degree_map, max_degree) = if use_degree
                 && (overlay_enabled || self.settings_style.change_indicators)
             {
                 self.node_degree_stats()
             } else {
                 (HashMap::new(), 0)
+            };
+            let (pagerank_map, max_pagerank) = if use_pagerank
+                && (overlay_enabled || self.settings_style.change_indicators)
+            {
+                self.node_pagerank_stats()
+            } else {
+                (HashMap::new(), 0.0)
             };
 
             if overlay_enabled {
@@ -2057,6 +2152,7 @@ impl App for VibeGraphApp {
 
                         if graph_rect.contains(screen_pos) {
                             let degree = degree_map.get(&node_idx).copied().unwrap_or(0);
+                            let page_rank = pagerank_map.get(&node_idx).copied().unwrap_or(0.0);
                             let kind = self.node_kinds.get(&node_idx).map(|value| value.as_str());
                             let change_kind = self.changed_nodes.get(&node_idx).copied();
                             let visuals = resolve_node_visuals(NodeRenderContext {
@@ -2067,6 +2163,8 @@ impl App for VibeGraphApp {
                                 kind,
                                 degree,
                                 max_degree,
+                                page_rank,
+                                max_page_rank: max_pagerank,
                                 show_change_halo: self.settings_style.change_indicators,
                                 node_color_mode: self.settings_style.node_color_mode,
                                 node_size_mode: self.settings_style.node_size_mode,
@@ -2170,6 +2268,7 @@ impl App for VibeGraphApp {
                         // Only draw if visible in viewport
                         if graph_rect.contains(screen_pos) {
                             let degree = degree_map.get(node_idx).copied().unwrap_or(0);
+                            let page_rank = pagerank_map.get(node_idx).copied().unwrap_or(0.0);
                             let kind = self.node_kinds.get(node_idx).map(|value| value.as_str());
                             let visuals = resolve_node_visuals(NodeRenderContext {
                                 dark_mode: self.dark_mode,
@@ -2179,6 +2278,8 @@ impl App for VibeGraphApp {
                                 kind,
                                 degree,
                                 max_degree,
+                                page_rank,
+                                max_page_rank: max_pagerank,
                                 show_change_halo: true,
                                 node_color_mode: self.settings_style.node_color_mode,
                                 node_size_mode: self.settings_style.node_size_mode,
