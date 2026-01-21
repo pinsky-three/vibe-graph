@@ -7,9 +7,6 @@ use crate::shaders::FORCE_SHADER;
 use crate::shaders::SIMPLE_FORCE_SHADER;
 use crate::{Edge, LayoutError, LayoutParams, Position, Result};
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, Mutex};
-
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
@@ -70,7 +67,7 @@ pub enum LayoutState {
 /// Shared state for async position updates (native uses Mutex, WASM uses RefCell)
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
-struct AsyncPositions {
+struct _AsyncPositions {
     data: Vec<Position>,
     pending_update: bool,
 }

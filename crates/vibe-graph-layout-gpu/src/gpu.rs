@@ -72,23 +72,29 @@ impl LayoutBuffers {
         // Initialize velocities to zero
         let velocities: Vec<Velocity> = vec![Velocity { x: 0.0, y: 0.0 }; positions.len()];
 
-        let positions_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Positions Buffer"),
-            contents: bytemuck::cast_slice(positions),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        let positions_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Positions Buffer"),
+                contents: bytemuck::cast_slice(positions),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
 
-        let velocities_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Velocities Buffer"),
-            contents: bytemuck::cast_slice(&velocities),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let velocities_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Velocities Buffer"),
+                contents: bytemuck::cast_slice(&velocities),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
-        let edges_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Edges Buffer"),
-            contents: bytemuck::cast_slice(edges),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let edges_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Edges Buffer"),
+                contents: bytemuck::cast_slice(edges),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         // Allocate tree buffer with extra capacity.
         // Quadtree size can vary based on node distribution.
@@ -104,7 +110,8 @@ impl LayoutBuffers {
         });
 
         // Write initial tree data
-        ctx.queue.write_buffer(&tree_buffer, 0, bytemuck::cast_slice(tree));
+        ctx.queue
+            .write_buffer(&tree_buffer, 0, bytemuck::cast_slice(tree));
 
         let params_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Params Buffer"),
@@ -115,7 +122,7 @@ impl LayoutBuffers {
 
         let staging_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Staging Buffer"),
-            size: (positions.len() * std::mem::size_of::<Position>()) as u64,
+            size: std::mem::size_of_val(positions) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -289,4 +296,3 @@ impl LayoutPipeline {
         })
     }
 }
-

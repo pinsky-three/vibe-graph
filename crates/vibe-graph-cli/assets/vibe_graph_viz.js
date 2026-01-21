@@ -322,6 +322,10 @@ export function load_graph_json(json) {
     }
 }
 
+function wasm_bindgen__convert__closures_____invoke__had67db21a2959b7b(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__had67db21a2959b7b(arg0, arg1, arg2);
+}
+
 function wasm_bindgen__convert__closures_____invoke__h234d94a61712f915(arg0, arg1, arg2) {
     wasm.wasm_bindgen__convert__closures_____invoke__h234d94a61712f915(arg0, arg1, arg2);
 }
@@ -331,10 +335,6 @@ function wasm_bindgen__convert__closures_____invoke__h293fb28804ca1d5a(arg0, arg
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
-}
-
-function wasm_bindgen__convert__closures_____invoke__had67db21a2959b7b(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__had67db21a2959b7b(arg0, arg1, arg2);
 }
 
 const __wbindgen_enum_GpuBufferBindingType = ["uniform", "storage", "read-only-storage"];

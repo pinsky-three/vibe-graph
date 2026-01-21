@@ -399,3 +399,38 @@ fn absolutize_snapshot_paths(
     }
     snapshot
 }
+
+// =============================================================================
+// MCP Server Mode
+// =============================================================================
+
+/// Execute in MCP (Model Context Protocol) server mode.
+///
+/// Runs the server over stdio for integration with LLM agents.
+/// Requires workspace to be pre-synced (`vg sync`) for fast startup.
+pub async fn execute_mcp(ctx: &OpsContext, path: &Path) -> Result<()> {
+    use vibe_graph_mcp::VibeGraphMcp;
+
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let store = Store::new(&path);
+
+    // MCP mode requires pre-synced workspace for fast startup
+    if !store.exists() {
+        anyhow::bail!(
+            "Workspace not synced. Run `vg sync` first, then restart the MCP server.\n\
+             Path: {}",
+            path.display()
+        );
+    }
+
+    // Load the graph from cache (fast path)
+    let request = GraphRequest::new(&path);
+    let response = ctx.graph(request).await?;
+    let graph = response.graph;
+
+    // Create and run MCP server (no startup messages to avoid interfering with stdio)
+    let server = VibeGraphMcp::new(store, Arc::new(graph), path);
+    server.run_stdio().await?;
+
+    Ok(())
+}

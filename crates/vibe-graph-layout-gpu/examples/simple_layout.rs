@@ -3,7 +3,7 @@
 //! Run with: cargo run --example simple_layout
 
 use std::time::Instant;
-use vibe_graph_layout_gpu::{Edge, GpuLayout, LayoutConfig, LayoutState, Position};
+use vibe_graph_layout_gpu::{Edge, GpuLayout, LayoutConfig, Position};
 
 fn main() {
     // Initialize tracing
@@ -13,7 +13,10 @@ fn main() {
     let node_count = 1000;
     let edge_count = 2000;
 
-    println!("Creating random graph with {} nodes and {} edges...", node_count, edge_count);
+    println!(
+        "Creating random graph with {} nodes and {} edges...",
+        node_count, edge_count
+    );
 
     // Random initial positions
     let mut positions: Vec<Position> = Vec::with_capacity(node_count);
@@ -56,8 +59,11 @@ fn main() {
         max_tree_depth: 10,
     };
 
-    let mut layout = pollster::block_on(GpuLayout::new(config)).expect("Failed to create GPU layout");
-    layout.init(positions, edges).expect("Failed to initialize layout");
+    let mut layout =
+        pollster::block_on(GpuLayout::new(config)).expect("Failed to create GPU layout");
+    layout
+        .init(positions, edges)
+        .expect("Failed to initialize layout");
 
     println!("Running layout simulation...");
 
@@ -75,7 +81,12 @@ fn main() {
             let (min_x, max_x, min_y, max_y) = positions.iter().fold(
                 (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
                 |(min_x, max_x, min_y, max_y), p| {
-                    (min_x.min(p.x), max_x.max(p.x), min_y.min(p.y), max_y.max(p.y))
+                    (
+                        min_x.min(p.x),
+                        max_x.max(p.x),
+                        min_y.min(p.y),
+                        max_y.max(p.y),
+                    )
                 },
             );
 
@@ -90,7 +101,11 @@ fn main() {
     let fps = iterations as f64 / elapsed.as_secs_f64();
 
     println!("\nCompleted {} iterations in {:.2?}", iterations, elapsed);
-    println!("Average: {:.1} iterations/sec ({:.1} ms/iteration)", fps, 1000.0 / fps);
+    println!(
+        "Average: {:.1} iterations/sec ({:.1} ms/iteration)",
+        fps,
+        1000.0 / fps
+    );
 
     if fps >= 60.0 {
         println!("✅ Performance target met: >= 60 FPS");
@@ -107,4 +122,3 @@ fn main() {
         println!("  Node {}: ({:.2}, {:.2})", i, pos.x, pos.y);
     }
 }
-

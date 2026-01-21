@@ -153,9 +153,13 @@ enum Commands {
     /// Opens a localhost server with a web-based visualization.
     /// Supports WASM-based egui app if built, or falls back to D3.js.
     ///
+    /// With --mcp flag, runs as an MCP (Model Context Protocol) server
+    /// over stdio for integration with LLM agents like Claude Desktop.
+    ///
     /// Examples:
-    ///   vg serve                         # current directory
+    ///   vg serve                         # current directory, web UI
     ///   vg serve ./my-project            # specific project
+    ///   vg serve --mcp                   # MCP server mode (stdio)
     ///   vg serve --frontend-dir ./vibe-graph/frontend/dist  # explicit frontend
     Serve {
         /// Path to workspace (defaults to current directory).
@@ -165,6 +169,11 @@ enum Commands {
         /// Port to serve on.
         #[arg(short, long, default_value = "3000")]
         port: u16,
+
+        /// Run as MCP (Model Context Protocol) server over stdio.
+        /// Use this for integration with LLM agents like Claude Desktop.
+        #[arg(long)]
+        mcp: bool,
 
         /// Path to WASM build artifacts (from wasm-pack).
         #[arg(long)]
@@ -382,10 +391,12 @@ async fn main() -> Result<()> {
         .and_then(|s| s.parse::<EnvFilter>().ok())
         .unwrap_or_else(|| EnvFilter::default().add_directive(level.into()));
 
+    // Write to stderr to avoid interfering with MCP stdio protocol
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_span_events(FmtSpan::CLOSE)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 
     // Load CLI configuration (for legacy commands)
@@ -585,11 +596,17 @@ async fn main() -> Result<()> {
         Commands::Serve {
             path,
             port,
+            mcp,
             wasm_dir,
             frontend_dir,
         } => {
-            // Serve still uses the internal implementation for now
-            commands::serve::execute(&cli_config, &path, port, wasm_dir, frontend_dir).await?;
+            if mcp {
+                // Run MCP server mode
+                commands::serve::execute_mcp(&ctx, &path).await?;
+            } else {
+                // Run web UI server
+                commands::serve::execute(&cli_config, &path, port, wasm_dir, frontend_dir).await?;
+            }
         }
 
         #[cfg(feature = "native-viz")]

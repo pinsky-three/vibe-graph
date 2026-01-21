@@ -16,6 +16,7 @@ members = [
   "crates/vibe-graph-viz",
   "crates/vibe-graph-api",
   "crates/vibe-graph-layout-gpu",
+  "crates/vibe-graph-mcp",
 ]
 resolver = "2"
 
@@ -46,3 +47,4 @@ egui_graphs = "0.29.0"
 axum = "0.8.8"
 tower = "0.5.2"
 tower-http = { version = "0.6.8", features = ["fs", "cors", "trace"] }
+schemars = "0.8"
