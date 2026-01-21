@@ -7,8 +7,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, Content, ErrorData, Implementation, ListToolsResult,
-    PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool, ToolsCapability,
+    AnnotateAble, CallToolRequestParam, CallToolResult, Content, ErrorData, Implementation,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParam, RawResource,
+    ReadResourceRequestParam, ReadResourceResult, Resource, ResourceContents, ResourcesCapability,
+    ServerCapabilities, ServerInfo, SubscribeRequestParam, Tool, ToolsCapability,
+    UnsubscribeRequestParam,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ServerHandler, ServiceExt};
@@ -74,9 +77,11 @@ impl VibeGraphMcp {
 
         let ct = CancellationToken::new();
         let config = StreamableHttpServerConfig {
-            sse_keep_alive: Some(std::time::Duration::from_secs(15)),
-            sse_retry: Some(std::time::Duration::from_secs(3)),
-            stateful_mode: true,
+            sse_keep_alive: Some(std::time::Duration::from_secs(30)),
+            sse_retry: Some(std::time::Duration::from_secs(5)),
+            // Stateless mode: each request creates new session.
+            // Works better with Cursor's multiple connection pattern.
+            stateful_mode: false,
             cancellation_token: ct.clone(),
         };
 
@@ -209,6 +214,71 @@ impl VibeGraphMcp {
         ]
     }
 
+    /// Get the list of available resources.
+    fn resources() -> Vec<Resource> {
+        vec![
+            {
+                let mut r = RawResource::new("vibe://graph", "graph");
+                r.title = Some("Full Code Graph".into());
+                r.description = Some(
+                    "Complete codebase graph with all nodes and edges in JSON format.".into(),
+                );
+                r.mime_type = Some("application/json".into());
+                r.no_annotation()
+            },
+            {
+                let mut r = RawResource::new("vibe://graph/nodes", "nodes");
+                r.title = Some("Graph Nodes".into());
+                r.description = Some("All nodes in the graph (files, modules, directories).".into());
+                r.mime_type = Some("application/json".into());
+                r.no_annotation()
+            },
+            {
+                let mut r = RawResource::new("vibe://graph/edges", "edges");
+                r.title = Some("Graph Edges".into());
+                r.description =
+                    Some("All edges in the graph (dependencies, contains relationships).".into());
+                r.mime_type = Some("application/json".into());
+                r.no_annotation()
+            },
+            {
+                let mut r = RawResource::new("vibe://git/changes", "git-changes");
+                r.title = Some("Git Changes".into());
+                r.description = Some("Current uncommitted git changes in the workspace.".into());
+                r.mime_type = Some("application/json".into());
+                r.no_annotation()
+            },
+        ]
+    }
+
+    /// Handle a resource read request.
+    fn handle_resource(&self, uri: &str) -> Result<Vec<ResourceContents>, ErrorData> {
+        match uri {
+            "vibe://graph" => {
+                let json = serde_json::to_string_pretty(&*self.executor.graph)
+                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                Ok(vec![ResourceContents::text(json, uri)])
+            }
+            "vibe://graph/nodes" => {
+                let json = serde_json::to_string_pretty(&self.executor.graph.nodes)
+                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                Ok(vec![ResourceContents::text(json, uri)])
+            }
+            "vibe://graph/edges" => {
+                let json = serde_json::to_string_pretty(&self.executor.graph.edges)
+                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                Ok(vec![ResourceContents::text(json, uri)])
+            }
+            "vibe://git/changes" => {
+                let changes = self.executor.get_git_changes();
+                let json = serde_json::to_string_pretty(&changes)
+                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                Ok(vec![ResourceContents::text(json, uri)])
+            }
+            _ => Err(ErrorData::invalid_params(format!("Unknown resource: {}", uri), None)),
+        }
+    }
+
     /// Handle a tool call.
     fn handle_tool(&self, name: &str, args: Option<Map<String, Value>>) -> CallToolResult {
         let args = args.map(Value::Object).unwrap_or(serde_json::json!({}));
@@ -284,6 +354,10 @@ impl ServerHandler for VibeGraphMcp {
             protocol_version: Default::default(),
             capabilities: ServerCapabilities {
                 tools: Some(ToolsCapability { list_changed: None }),
+                resources: Some(ResourcesCapability {
+                    subscribe: Some(false),
+                    list_changed: Some(false),
+                }),
                 ..Default::default()
             },
             server_info: Implementation {
@@ -294,10 +368,10 @@ impl ServerHandler for VibeGraphMcp {
                 website_url: None,
             },
             instructions: Some(
-                "Vibe-Graph MCP server provides tools for analyzing codebase structure, \
-                 dependencies, and change impact. Use search_nodes to find files, \
-                 get_dependencies to understand relationships, impact_analysis to \
-                 assess change scope, and get_git_changes for current modifications."
+                "Vibe-Graph MCP server provides tools and resources for analyzing codebase structure, \
+                 dependencies, and change impact. Tools: search_nodes, get_dependencies, impact_analysis, \
+                 get_git_changes, get_node_context, list_files. Resources: vibe://graph, vibe://graph/nodes, \
+                 vibe://graph/edges, vibe://git/changes."
                     .into(),
             ),
         }
@@ -321,5 +395,44 @@ impl ServerHandler for VibeGraphMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         Ok(self.handle_tool(&request.name, request.arguments))
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult {
+            resources: Self::resources(),
+            next_cursor: None,
+            meta: None,
+        })
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, ErrorData> {
+        let contents = self.handle_resource(&request.uri)?;
+        Ok(ReadResourceResult { contents })
+    }
+
+    // Resource subscriptions not supported, but we return Ok to avoid Cursor warnings.
+    // We advertise subscribe: false in capabilities.
+    async fn subscribe(
+        &self,
+        _request: SubscribeRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        Ok(())
+    }
+
+    async fn unsubscribe(
+        &self,
+        _request: UnsubscribeRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        Ok(())
     }
 }
