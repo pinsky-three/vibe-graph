@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-viz"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 description = "WASM-compatible egui visualization for Vibe-Graph"
 license = "MIT"
