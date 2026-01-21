@@ -601,8 +601,8 @@ async fn main() -> Result<()> {
             frontend_dir,
         } => {
             if mcp {
-                // Run MCP server mode
-                commands::serve::execute_mcp(&ctx, &path).await?;
+                // Run MCP server mode (HTTP/SSE transport)
+                commands::serve::execute_mcp(&ctx, &path, port).await?;
             } else {
                 // Run web UI server
                 commands::serve::execute(&cli_config, &path, port, wasm_dir, frontend_dir).await?;

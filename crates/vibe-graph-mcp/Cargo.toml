@@ -7,13 +7,22 @@ license = "MIT"
 repository = "https://github.com/pinsky-three/vibe-graph"
 homepage = "https://github.com/pinsky-three/vibe-graph"
 
+[features]
+default = ["http-server"]
+http-server = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-http", "dep:tokio-util"]
+
 [dependencies]
 vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.1", path = "../vibe-graph-ops" }
 vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
 
 # MCP SDK
-rmcp = { version = "0.13", features = ["server", "server-side-http"] }
+rmcp = { version = "0.13", features = ["server"] }
+
+# HTTP server (optional, for HTTP transport)
+axum = { workspace = true, optional = true }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
+tokio-util = { version = "0.7", optional = true }
 
 # Async runtime
 tokio = { workspace = true }

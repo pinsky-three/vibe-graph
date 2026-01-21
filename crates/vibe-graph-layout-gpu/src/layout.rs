@@ -94,7 +94,7 @@ pub struct GpuLayout {
     /// Frame counter for periodic readback
     frame_counter: u32,
     /// How often to read back positions (every N frames)
-    readback_interval: u32,
+    _readback_interval: u32,
     /// Shared state for async updates (WASM) - uses RefCell since WASM is single-threaded
     #[cfg(target_arch = "wasm32")]
     async_positions: Rc<RefCell<AsyncPositionsWasm>>,
@@ -132,7 +132,7 @@ impl GpuLayout {
             edges: Vec::new(),
             iteration: 0,
             frame_counter: 0,
-            readback_interval: 1, // Read back every 30 frames (~0.5s at 60fps)
+            _readback_interval: 1, // Read back every 30 frames (~0.5s at 60fps)
             #[cfg(target_arch = "wasm32")]
             async_positions: Rc::new(RefCell::new(AsyncPositionsWasm::default())),
             #[cfg(target_arch = "wasm32")]
@@ -302,7 +302,7 @@ impl GpuLayout {
         self.ctx.device.poll(wgpu::Maintain::Poll);
 
         // Periodically request position readback
-        if self.frame_counter >= self.readback_interval && !self.readback_pending {
+        if self.frame_counter >= self._readback_interval && !self.readback_pending {
             self.frame_counter = 0;
             self.request_positions_async();
         }
@@ -331,7 +331,7 @@ impl GpuLayout {
             compute_pass.set_bind_group(0, bind_group, &[]);
 
             // Dispatch enough workgroups to cover all nodes
-            let workgroup_count = (buffers.node_count as u32).div_ceil(256);
+            let workgroup_count = buffers.node_count.div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -468,7 +468,7 @@ pub mod sync {
     use super::*;
 
     /// Create a new GPU layout synchronously.
-    pub fn new_layout(config: LayoutConfig) -> Result<GpuLayout> {
+    pub fn _new_layout(config: LayoutConfig) -> Result<GpuLayout> {
         pollster::block_on(GpuLayout::new(config))
     }
 }

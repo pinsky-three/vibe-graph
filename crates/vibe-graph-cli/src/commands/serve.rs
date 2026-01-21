@@ -406,31 +406,38 @@ fn absolutize_snapshot_paths(
 
 /// Execute in MCP (Model Context Protocol) server mode.
 ///
-/// Runs the server over stdio for integration with LLM agents.
+/// Runs the server over HTTP/SSE for integration with LLM agents.
 /// Requires workspace to be pre-synced (`vg sync`) for fast startup.
-pub async fn execute_mcp(ctx: &OpsContext, path: &Path) -> Result<()> {
+pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()> {
     use vibe_graph_mcp::VibeGraphMcp;
 
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
-    // MCP mode requires pre-synced workspace for fast startup
+    // Auto-sync if .self doesn't exist
     if !store.exists() {
-        anyhow::bail!(
-            "Workspace not synced. Run `vg sync` first, then restart the MCP server.\n\
-             Path: {}",
-            path.display()
-        );
+        println!("🔄 First run detected, syncing workspace...");
+        let request = SyncRequest::local(&path);
+        let _response = ctx.sync(request).await?;
+        println!("💾 Saved to {}", store.self_dir().display());
+        println!();
     }
 
-    // Load the graph from cache (fast path)
+    // Load the graph
+    println!("📊 Loading graph...");
     let request = GraphRequest::new(&path);
     let response = ctx.graph(request).await?;
     let graph = response.graph;
+    println!(
+        "✅ Graph: {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
+    println!();
 
-    // Create and run MCP server (no startup messages to avoid interfering with stdio)
+    // Create and run MCP server over HTTP
     let server = VibeGraphMcp::new(store, Arc::new(graph), path);
-    server.run_stdio().await?;
+    server.run_http(port).await?;
 
     Ok(())
 }

@@ -5749,12 +5749,15 @@ name = "vibe-graph-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
+ "tower-http",
  "tracing",
  "vibe-graph-core",
  "vibe-graph-git",

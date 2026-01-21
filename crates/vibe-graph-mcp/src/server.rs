@@ -1,6 +1,6 @@
 //! MCP server implementation using rmcp.
 //!
-//! This is a manual implementation without using rmcp macros for maximum compatibility.
+//! Supports both stdio and HTTP/SSE transports.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,6 +60,68 @@ impl VibeGraphMcp {
         let transport = (stdin(), stdout());
         let server = self.serve(transport).await?;
         server.waiting().await?;
+        Ok(())
+    }
+
+    /// Run the server over HTTP/SSE transport.
+    #[cfg(feature = "http-server")]
+    pub async fn run_http(self, port: u16) -> Result<()> {
+        use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
+        use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+        use std::net::SocketAddr;
+        use tokio::net::TcpListener;
+        use tokio_util::sync::CancellationToken;
+
+        let ct = CancellationToken::new();
+        let config = StreamableHttpServerConfig {
+            sse_keep_alive: Some(std::time::Duration::from_secs(15)),
+            sse_retry: Some(std::time::Duration::from_secs(3)),
+            stateful_mode: true,
+            cancellation_token: ct.clone(),
+        };
+
+        let session_manager = Arc::new(LocalSessionManager::default());
+        
+        // Create service factory that clones our server
+        let server = self.clone();
+        let service = StreamableHttpService::new(
+            move || Ok(server.clone()),
+            session_manager,
+            config,
+        );
+
+        // Create axum router
+        let app = axum::Router::new()
+            .fallback(axum::routing::any_service(service))
+            .layer(
+                tower_http::cors::CorsLayer::new()
+                    .allow_origin(tower_http::cors::Any)
+                    .allow_methods(tower_http::cors::Any)
+                    .allow_headers(tower_http::cors::Any),
+            );
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        eprintln!("🚀 MCP HTTP server listening on http://localhost:{}", port);
+        eprintln!("   SSE endpoint: http://localhost:{}/", port);
+        eprintln!();
+        eprintln!("   Configure in Cursor with:");
+        eprintln!("   {{");
+        eprintln!("     \"mcpServers\": {{");
+        eprintln!("       \"vibe-graph\": {{");
+        eprintln!("         \"url\": \"http://localhost:{}/\"", port);
+        eprintln!("       }}");
+        eprintln!("     }}");
+        eprintln!("   }}");
+        eprintln!();
+
+        let listener = TcpListener::bind(addr).await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                tokio::signal::ctrl_c().await.ok();
+                ct.cancel();
+            })
+            .await?;
+
         Ok(())
     }
 
