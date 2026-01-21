@@ -368,10 +368,14 @@ impl ServerHandler for VibeGraphMcp {
                 website_url: None,
             },
             instructions: Some(
-                "Vibe-Graph MCP server provides tools and resources for analyzing codebase structure, \
-                 dependencies, and change impact. Tools: search_nodes, get_dependencies, impact_analysis, \
-                 get_git_changes, get_node_context, list_files. Resources: vibe://graph, vibe://graph/nodes, \
-                 vibe://graph/edges, vibe://git/changes."
+                "Vibe-Graph provides semantic code intelligence. PREFER these tools over manual file exploration:\n\
+                 \n\
+                 BEFORE MODIFYING FILES: Run impact_analysis to see what depends on the file.\n\
+                 TO FIND CODE: Use search_nodes instead of grep/glob for semantic matches.\n\
+                 TO UNDERSTAND IMPORTS: Use get_dependencies for incoming/outgoing relationships.\n\
+                 TO BROWSE STRUCTURE: Use list_files with filters instead of ls.\n\
+                 \n\
+                 The graph captures semantic relationships (uses, contains) beyond text patterns."
                     .into(),
             ),
         }

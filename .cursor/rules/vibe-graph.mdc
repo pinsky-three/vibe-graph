@@ -1,0 +1,98 @@
+---
+description: Vibe-Graph MCP tools for code navigation and impact analysis
+globs:
+alwaysApply: true
+---
+
+# Vibe-Graph Code Intelligence
+
+This project has an MCP server (`vg serve --mcp`) that provides semantic code
+analysis tools. Use these tools instead of manual file exploration when
+possible.
+
+## Available Tools
+
+| Tool               | Use When                                                   |
+| ------------------ | ---------------------------------------------------------- |
+| `search_nodes`     | Finding files/modules by name or path pattern              |
+| `get_dependencies` | Understanding imports and dependents of a file             |
+| `impact_analysis`  | Before modifying files, to see what might break            |
+| `get_node_context` | Getting detailed info about a specific file with neighbors |
+| `list_files`       | Browsing directory contents with filtering                 |
+| `get_git_changes`  | Checking current uncommitted changes                       |
+
+## Available Resources
+
+| Resource             | Contents                                |
+| -------------------- | --------------------------------------- |
+| `vibe://graph`       | Full codebase graph (nodes + edges)     |
+| `vibe://graph/nodes` | All nodes (files, modules, directories) |
+| `vibe://graph/edges` | All edges (dependencies, containment)   |
+| `vibe://git/changes` | Current git working tree status         |
+
+## When to Use These Tools
+
+### Exploring the Codebase
+
+Instead of reading multiple files to understand structure:
+
+```
+1. search_nodes with query to find relevant files
+2. get_dependencies to understand relationships
+3. get_node_context for detailed view with neighbors
+```
+
+### Before Making Changes
+
+ALWAYS run `impact_analysis` before modifying any source file:
+
+```
+impact_analysis(paths: ["crates/vibe-graph-core/src/lib.rs"], depth: 2)
+```
+
+This reveals:
+
+- Files that depend on what you're changing
+- Test files that might need updates
+- Transitive impact through the dependency graph
+
+### Finding Related Code
+
+Use `get_dependencies` with both incoming and outgoing:
+
+```
+get_dependencies(node_path: "src/lib.rs", incoming: true, outgoing: true)
+```
+
+### Understanding Module Structure
+
+Use `list_files` with filters:
+
+```
+list_files(path: "crates/", extension: "rs", kind: "file")
+```
+
+## Project-Specific Context
+
+This is a Rust workspace with multiple crates:
+
+- `vibe-graph-core` - Core graph types (SourceCodeGraph, GraphNode, GraphEdge)
+- `vibe-graph-ops` - Operations and scanning logic
+- `vibe-graph-mcp` - MCP server implementation (this is the tool provider)
+- `vibe-graph-cli` - CLI (`vg` command)
+- `vibe-graph-viz` - Visualization (WASM + native)
+- `vibe-graph-automaton` - Cellular automaton framework
+
+The graph represents the codebase as nodes (files, directories, modules)
+connected by edges (contains, uses/imports).
+
+## Best Practices
+
+1. **Start broad, then narrow**: Use `search_nodes` first, then
+   `get_node_context` on specific results
+2. **Check impact before edit**: Run `impact_analysis` to avoid breaking
+   dependents
+3. **Use graph over grep**: The graph captures semantic relationships, not just
+   text patterns
+4. **Refresh awareness**: After significant edits, the graph may be stale until
+   `vg sync` or server restart
