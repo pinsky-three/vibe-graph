@@ -407,25 +407,55 @@ fn absolutize_snapshot_paths(
 /// Execute in MCP (Model Context Protocol) server mode.
 ///
 /// Runs the server over HTTP/SSE for integration with LLM agents.
-/// Requires workspace to be pre-synced (`vg sync`) for fast startup.
+/// Auto-syncs on startup to ensure fresh data.
 pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()> {
     use vibe_graph_mcp::VibeGraphMcp;
 
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
-    // Auto-sync if .self doesn't exist
-    if !store.exists() {
+    // Determine if we need a fresh sync
+    let needs_sync = if !store.exists() {
         println!("🔄 First run detected, syncing workspace...");
-        let request = SyncRequest::local(&path);
+        true
+    } else {
+        // Check for git changes (uncommitted files)
+        let has_git_changes = get_git_changes(&path)
+            .map(|s| !s.changes.is_empty())
+            .unwrap_or(false);
+
+        // Check if cached graph exists and has reasonable data
+        let cached_graph_ok = store
+            .load_graph()
+            .ok()
+            .flatten()
+            .map(|g| g.node_count() > 10)
+            .unwrap_or(false);
+
+        if has_git_changes {
+            println!("🔄 Git changes detected, refreshing graph...");
+            true
+        } else if !cached_graph_ok {
+            println!("🔄 Cached graph is stale, rebuilding...");
+            true
+        } else {
+            false
+        }
+    };
+
+    // Sync if needed
+    if needs_sync {
+        let mut request = SyncRequest::local(&path);
+        request.force = true; // Force rebuild to pick up changes
         let _response = ctx.sync(request).await?;
         println!("💾 Saved to {}", store.self_dir().display());
         println!();
     }
 
-    // Load the graph
+    // Load the graph (force rebuild if we just synced to ensure consistency)
     println!("📊 Loading graph...");
-    let request = GraphRequest::new(&path);
+    let mut request = GraphRequest::new(&path);
+    request.force = needs_sync;
     let response = ctx.graph(request).await?;
     let graph = response.graph;
     println!(
