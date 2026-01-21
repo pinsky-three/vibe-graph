@@ -397,7 +397,7 @@ impl VibeGraphApp {
             layout_initialized: false,
             top_bar: TopBarState::new(),
             git_panel: GitPanelState::new(),
-            _node_id_to_egui: _node_id_to_egui,
+            _node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
 
