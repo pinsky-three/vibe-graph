@@ -519,6 +519,32 @@ pub fn detect_rust_references(content: &str, source_path: &Path) -> Vec<SourceRe
     for line in content.lines() {
         let trimmed = line.trim();
 
+        // Handle 'mod' declarations
+        if trimmed.starts_with("pub mod ") || trimmed.starts_with("mod ") {
+            let mod_part = trimmed
+                .strip_prefix("pub mod ")
+                .or_else(|| trimmed.strip_prefix("mod "))
+                .unwrap_or("")
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim();
+            
+            if !mod_part.is_empty() && !mod_part.contains('{') {
+                refs.push(SourceReference {
+                    source_path: source_path.to_path_buf(),
+                    kind: ReferenceKind::Contains, // Treating modules as containment for graph connectivity
+                    target_route: PathBuf::from(format!("{}.rs", mod_part)),
+                });
+                // Also try module directory structure
+                refs.push(SourceReference {
+                    source_path: source_path.to_path_buf(),
+                    kind: ReferenceKind::Contains,
+                    target_route: PathBuf::from(format!("{}/mod.rs", mod_part)),
+                });
+            }
+        }
+
         if !trimmed.starts_with("use ") {
             continue;
         }
@@ -539,15 +565,8 @@ pub fn detect_rust_references(content: &str, source_path: &Path) -> Vec<SourceRe
             continue;
         }
 
-        // Only track local imports
-        let is_local = use_part.starts_with("crate::")
-            || use_part.starts_with("self::")
-            || use_part.starts_with("super::");
-
-        if !is_local {
-            continue;
-        }
-
+        // Propose everything that looks like a path.
+        // The graph builder will filter out references that don't resolve to actual nodes.
         let module_path = use_part
             .strip_prefix("crate::")
             .or_else(|| use_part.strip_prefix("self::"))

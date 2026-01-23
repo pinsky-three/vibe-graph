@@ -192,6 +192,14 @@ impl ToolExecutor {
             }
         }
 
+        // Calculate In-Degrees for ranking (Smart Ordering)
+        let mut in_degrees: HashMap<u64, usize> = HashMap::new();
+        for edge in &self.graph.edges {
+            if edge.relationship != "contains" {
+                *in_degrees.entry(edge.to.0).or_default() += 1;
+            }
+        }
+
         // Collect impacted nodes
         let mut impacted_nodes = Vec::new();
         let mut impacted_tests = Vec::new();
@@ -205,6 +213,13 @@ impl ToolExecutor {
                 impacted_nodes.push(info);
             }
         }
+
+        // Sort by in-degree descending (most dependent-upon nodes first)
+        impacted_nodes.sort_by(|a, b| {
+            let score_a = in_degrees.get(&a.id).unwrap_or(&0);
+            let score_b = in_degrees.get(&b.id).unwrap_or(&0);
+            score_b.cmp(score_a)
+        });
 
         ImpactAnalysisOutput {
             analyzed_paths: input.paths,
