@@ -60,7 +60,10 @@ impl ProjectRegistry {
     }
 
     /// Get a project by name.
-    pub fn get(&self, name: &str) -> Option<dashmap::mapref::one::Ref<'_, String, RegisteredProject>> {
+    pub fn get(
+        &self,
+        name: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, RegisteredProject>> {
         self.projects.get(name)
     }
 

@@ -59,8 +59,11 @@ fn main() {
         max_tree_depth: 12,
     };
 
-    let mut layout = pollster::block_on(GpuLayout::new(config)).expect("Failed to create GPU layout");
-    layout.init(positions, edges).expect("Failed to initialize layout");
+    let mut layout =
+        pollster::block_on(GpuLayout::new(config)).expect("Failed to create GPU layout");
+    layout
+        .init(positions, edges)
+        .expect("Failed to initialize layout");
 
     println!("Running 100 iterations...");
     println!();
@@ -84,7 +87,12 @@ fn main() {
             let (min_x, max_x, min_y, max_y) = positions.iter().fold(
                 (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
                 |(min_x, max_x, min_y, max_y), p| {
-                    (min_x.min(p.x), max_x.max(p.x), min_y.min(p.y), max_y.max(p.y))
+                    (
+                        min_x.min(p.x),
+                        max_x.max(p.x),
+                        min_y.min(p.y),
+                        max_y.max(p.y),
+                    )
                 },
             );
 
@@ -127,4 +135,3 @@ fn main() {
     println!("  O(n log n) operations: {:.2e}", n_log_n);
     println!("  Speedup factor:       {:.0}x", n_squared / n_log_n);
 }
-

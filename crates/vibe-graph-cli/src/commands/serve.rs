@@ -414,8 +414,8 @@ fn absolutize_snapshot_paths(
 pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()> {
     use tokio_util::sync::CancellationToken;
     use vibe_graph_mcp::gateway::{
-        check_gateway_health, maintain_heartbeat, register_with_gateway, run_gateway,
-        GatewayState, DEFAULT_GATEWAY_PORT,
+        check_gateway_health, maintain_heartbeat, register_with_gateway, run_gateway, GatewayState,
+        DEFAULT_GATEWAY_PORT,
     };
 
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -438,7 +438,10 @@ pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()>
     // Check if gateway is already running
     if let Some(health) = check_gateway_health(port).await {
         // Gateway exists - register with it
-        println!("🔗 Found existing gateway on port {} ({} projects)", port, health.project_count);
+        println!(
+            "🔗 Found existing gateway on port {} ({} projects)",
+            port, health.project_count
+        );
 
         // Ensure our graph is up to date
         let graph = ensure_graph_loaded(ctx, &store, &path).await?;
@@ -463,7 +466,10 @@ pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()>
         }
 
         println!();
-        println!("🚀 Project '{}' is now available via the gateway", project_name);
+        println!(
+            "🚀 Project '{}' is now available via the gateway",
+            project_name
+        );
         println!("   URL: http://localhost:{}/", port);
         println!();
         println!("   Press Ctrl+C to unregister and exit");

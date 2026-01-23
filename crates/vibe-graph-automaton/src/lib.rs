@@ -76,7 +76,9 @@ pub use config::{
 };
 
 // Description generation and inference
-pub use description::{DescriptionGenerator, GeneratorConfig, NodeClassification, StabilityCalculator};
+pub use description::{
+    DescriptionGenerator, GeneratorConfig, NodeClassification, StabilityCalculator,
+};
 
 #[cfg(feature = "llm")]
 pub use description::{DescriptionInferencer, InferencerConfig, StructuralFeatures};
@@ -95,6 +97,6 @@ pub use temporal::SourceCodeTemporalGraph;
 #[cfg(feature = "llm")]
 pub use llm_runner::{
     create_agent_from_resolver, create_openai_client, run_async_distributed,
-    tick_async_distributed, AsyncAutomaton, AsyncTickResult, LlmResolver, LlmRule,
-    NextStateOutput, ResolverPool,
+    tick_async_distributed, AsyncAutomaton, AsyncTickResult, LlmResolver, LlmRule, NextStateOutput,
+    ResolverPool,
 };

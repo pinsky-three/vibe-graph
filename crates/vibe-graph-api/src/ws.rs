@@ -15,10 +15,7 @@ use tracing::{debug, error, warn};
 use crate::types::{ApiState, WsClientMessage, WsServerMessage};
 
 /// Handler for WebSocket upgrade at GET /api/ws
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<ApiState>>,
-) -> Response {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<ApiState>>) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 

@@ -428,4 +428,3 @@ mod tests {
         assert!(!NodeKind::File.is_container());
     }
 }
-

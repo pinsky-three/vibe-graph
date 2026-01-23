@@ -8,7 +8,10 @@ use std::path::PathBuf;
 
 use eframe::{App, CreationContext};
 use egui::{CollapsingHeader, Color32, Context, RichText, ScrollArea, Slider, Stroke};
-use egui_graphs::{Graph, GraphView, LayoutForceDirected, FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, MetadataFrame};
+use egui_graphs::{
+    FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, Graph,
+    GraphView, LayoutForceDirected, MetadataFrame,
+};
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
 use vibe_graph_automaton::{AutomatonStore, PersistedState, SnapshotInfo, TemporalGraph};
@@ -124,7 +127,9 @@ impl AutomatonVizApp {
         match self.store.load_snapshot(path) {
             Ok(state) => {
                 // Check if graph structure is the same (same node count)
-                let same_structure = self.current_state.as_ref()
+                let same_structure = self
+                    .current_state
+                    .as_ref()
                     .map(|s| s.metadata.node_count == state.metadata.node_count)
                     .unwrap_or(false);
 
@@ -179,8 +184,16 @@ impl AutomatonVizApp {
 
                 // Extract grid position from metadata
                 if let (Some(x), Some(y)) = (
-                    temporal_node.node.metadata.get("x").and_then(|s| s.parse().ok()),
-                    temporal_node.node.metadata.get("y").and_then(|s| s.parse().ok()),
+                    temporal_node
+                        .node
+                        .metadata
+                        .get("x")
+                        .and_then(|s| s.parse().ok()),
+                    temporal_node
+                        .node
+                        .metadata
+                        .get("y")
+                        .and_then(|s| s.parse().ok()),
                 ) {
                     grid_positions.insert(idx, (x, y));
                 }
@@ -193,10 +206,9 @@ impl AutomatonVizApp {
 
         // Add edges from source graph
         for edge in &graph.source_graph.edges {
-            if let (Some(&from_idx), Some(&to_idx)) = (
-                id_to_idx.get(&edge.from.0),
-                id_to_idx.get(&edge.to.0),
-            ) {
+            if let (Some(&from_idx), Some(&to_idx)) =
+                (id_to_idx.get(&edge.from.0), id_to_idx.get(&edge.to.0))
+            {
                 petgraph.add_edge(from_idx, to_idx, ());
             }
         }
@@ -275,7 +287,10 @@ impl AutomatonVizApp {
 
                 // Slider for snapshot selection
                 let mut idx = self.current_snapshot_idx;
-                if ui.add(Slider::new(&mut idx, 0..=(total - 1)).text("Frame")).changed() {
+                if ui
+                    .add(Slider::new(&mut idx, 0..=(total - 1)).text("Frame"))
+                    .changed()
+                {
                     self.load_snapshot(idx);
                 }
 
@@ -317,7 +332,10 @@ impl AutomatonVizApp {
                 ui.checkbox(&mut self.use_grid_layout, "Grid layout");
 
                 if self.use_grid_layout {
-                    if ui.add(Slider::new(&mut self.grid_cell_size, 20.0..=100.0).text("Cell size")).changed() {
+                    if ui
+                        .add(Slider::new(&mut self.grid_cell_size, 20.0..=100.0).text("Cell size"))
+                        .changed()
+                    {
                         // Re-apply grid positions
                         for (&idx, &(x, y)) in &self.grid_positions {
                             if let Some(node) = self.g.node_mut(idx) {
@@ -361,12 +379,16 @@ impl AutomatonVizApp {
                         // Find node by index
                         for (id, &idx) in &self.id_to_idx {
                             if idx == node_idx {
-                                if let Some(temporal_node) = state.graph.get_node(&vibe_graph_core::NodeId(*id)) {
+                                if let Some(temporal_node) =
+                                    state.graph.get_node(&vibe_graph_core::NodeId(*id))
+                                {
                                     ui.separator();
                                     ui.label(RichText::new("History").small());
 
                                     ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                                        for (i, transition) in temporal_node.evolution.history().iter().enumerate() {
+                                        for (i, transition) in
+                                            temporal_node.evolution.history().iter().enumerate()
+                                        {
                                             let act = transition.state.activation;
                                             let color = self.activation_color(act as f64);
                                             ui.label(
@@ -395,11 +417,15 @@ impl AutomatonVizApp {
                 let dead_count = total_nodes - alive_count;
 
                 ui.label(format!("Total: {}", total_nodes));
-                ui.label(RichText::new(format!("Alive: {}", alive_count)).color(Color32::from_rgb(0, 255, 100)));
+                ui.label(
+                    RichText::new(format!("Alive: {}", alive_count))
+                        .color(Color32::from_rgb(0, 255, 100)),
+                );
                 ui.label(RichText::new(format!("Dead: {}", dead_count)).color(Color32::GRAY));
 
                 if !self.activations.is_empty() {
-                    let avg_activation: f64 = self.activations.values().sum::<f64>() / total_nodes as f64;
+                    let avg_activation: f64 =
+                        self.activations.values().sum::<f64>() / total_nodes as f64;
                     ui.label(format!("Avg activation: {:.3}", avg_activation));
                 }
             });
@@ -502,7 +528,12 @@ impl App for AutomatonVizApp {
                             if activation < 0.1 {
                                 Color32::from_rgba_unmultiplied(20, 20, 30, 200)
                             } else {
-                                Color32::from_rgba_unmultiplied(0, intensity, (intensity as f32 * 0.4) as u8, 220)
+                                Color32::from_rgba_unmultiplied(
+                                    0,
+                                    intensity,
+                                    (intensity as f32 * 0.4) as u8,
+                                    220,
+                                )
                             }
                         } else {
                             let inv = ((1.0 - activation) * 200.0) as u8;
@@ -514,7 +545,7 @@ impl App for AutomatonVizApp {
                     }
                 }
             }
-            
+
             let rect = ui.max_rect();
 
             // Toggle sidebar button
@@ -544,4 +575,3 @@ fn rand_simple() -> f32 {
         (x.wrapping_mul(0x2545F4914F6CDD1D) as f32) / (u64::MAX as f32)
     })
 }
-

@@ -410,13 +410,20 @@ pub fn git_commit(repo_path: &Path, message: &str) -> Result<GitCommitResult> {
         .signature()
         .or_else(|_| {
             // Fallback signature if not configured
-            Signature::new("Vibe Graph", "vibe-graph@local", &Time::new(chrono_timestamp(), 0))
+            Signature::new(
+                "Vibe Graph",
+                "vibe-graph@local",
+                &Time::new(chrono_timestamp(), 0),
+            )
         })
         .context("Failed to get signature")?;
 
     // Get parent commit (if any)
     let parent_commit = match repo.head() {
-        Ok(head) => Some(head.peel_to_commit().context("Failed to get parent commit")?),
+        Ok(head) => Some(
+            head.peel_to_commit()
+                .context("Failed to get parent commit")?,
+        ),
         Err(_) => None, // Initial commit
     };
 
@@ -610,10 +617,7 @@ pub fn git_diff(repo_path: &Path, staged: bool) -> Result<GitDiffResult> {
 
     let diff = if staged {
         // Diff between HEAD and index (staged changes)
-        let head_tree = repo
-            .head()
-            .ok()
-            .and_then(|h| h.peel_to_tree().ok());
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
         repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))
             .context("Failed to get staged diff")?
     } else {

@@ -43,9 +43,9 @@
 //! - GPU Barnes-Hut: ~100K operations, parallelized → 60+ FPS
 
 mod error;
-mod quadtree;
-mod layout;
 mod gpu;
+mod layout;
+mod quadtree;
 mod shaders;
 
 pub use error::LayoutError;
@@ -143,11 +143,11 @@ impl Default for LayoutParams {
             node_count: 0,
             edge_count: 0,
             tree_size: 0,
-            dt: 0.016,        // ~60 FPS
+            dt: 0.016, // ~60 FPS
             damping: 0.9,
             repulsion: 1000.0,
             attraction: 0.01,
-            theta: 0.8,       // Good balance of speed/accuracy
+            theta: 0.8, // Good balance of speed/accuracy
             gravity: 0.1,
             ideal_length: 50.0,
         }
@@ -157,4 +157,3 @@ impl Default for LayoutParams {
 // Ensure LayoutParams is Pod-compatible by implementing manually
 unsafe impl bytemuck::Pod for LayoutParams {}
 unsafe impl bytemuck::Zeroable for LayoutParams {}
-

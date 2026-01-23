@@ -407,7 +407,11 @@ mod tests {
         for node in &graph.nodes {
             let in_count = graph.edges.iter().filter(|e| e.to == node.id).count();
             let out_count = graph.edges.iter().filter(|e| e.from == node.id).count();
-            assert_eq!(in_count, 1, "Node {} should have 1 incoming edge", node.name);
+            assert_eq!(
+                in_count, 1,
+                "Node {} should have 1 incoming edge",
+                node.name
+            );
             assert_eq!(
                 out_count, 1,
                 "Node {} should have 1 outgoing edge",
@@ -453,4 +457,3 @@ mod tests {
         assert_eq!(node.metadata.get("custom"), Some(&"value".to_string()));
     }
 }
-

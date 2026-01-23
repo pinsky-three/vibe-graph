@@ -106,11 +106,9 @@ impl StatusResponse {
 
     /// Get time since last sync.
     pub fn time_since_sync(&self) -> Option<std::time::Duration> {
-        self.manifest.as_ref().and_then(|m| {
-            m.last_sync
-                .elapsed()
-                .ok()
-        })
+        self.manifest
+            .as_ref()
+            .and_then(|m| m.last_sync.elapsed().ok())
     }
 }
 
@@ -210,4 +208,3 @@ impl OperationSummary {
         self
     }
 }
-

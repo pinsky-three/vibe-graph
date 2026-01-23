@@ -232,8 +232,10 @@ impl DescriptionGenerator {
         // Generate node configs
         for node in &graph.nodes {
             let classification = self.classify_node(node, graph, &stability_calc);
-            let stability = stability_calc.calculate_stability(node.id, classification, &self.config);
-            let node_config = self.create_node_config(node, classification, stability, &stability_calc);
+            let stability =
+                stability_calc.calculate_stability(node.id, classification, &self.config);
+            let node_config =
+                self.create_node_config(node, classification, stability, &stability_calc);
             description.add_node(node_config);
         }
 
@@ -688,4 +690,3 @@ mod tests {
         assert!(entry_rule.system_prompt.is_some());
     }
 }
-

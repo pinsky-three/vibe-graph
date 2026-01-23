@@ -336,4 +336,3 @@ impl GitChangesRequest {
         Self { path: path.into() }
     }
 }
-

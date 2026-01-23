@@ -69,8 +69,8 @@ impl VibeGraphMcp {
     /// Run the server over HTTP/SSE transport.
     #[cfg(feature = "http-server")]
     pub async fn run_http(self, port: u16) -> Result<()> {
-        use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
         use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+        use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
         use std::net::SocketAddr;
         use tokio::net::TcpListener;
         use tokio_util::sync::CancellationToken;
@@ -86,14 +86,11 @@ impl VibeGraphMcp {
         };
 
         let session_manager = Arc::new(LocalSessionManager::default());
-        
+
         // Create service factory that clones our server
         let server = self.clone();
-        let service = StreamableHttpService::new(
-            move || Ok(server.clone()),
-            session_manager,
-            config,
-        );
+        let service =
+            StreamableHttpService::new(move || Ok(server.clone()), session_manager, config);
 
         // Create axum router
         let app = axum::Router::new()
@@ -220,16 +217,16 @@ impl VibeGraphMcp {
             {
                 let mut r = RawResource::new("vibe://graph", "graph");
                 r.title = Some("Full Code Graph".into());
-                r.description = Some(
-                    "Complete codebase graph with all nodes and edges in JSON format.".into(),
-                );
+                r.description =
+                    Some("Complete codebase graph with all nodes and edges in JSON format.".into());
                 r.mime_type = Some("application/json".into());
                 r.no_annotation()
             },
             {
                 let mut r = RawResource::new("vibe://graph/nodes", "nodes");
                 r.title = Some("Graph Nodes".into());
-                r.description = Some("All nodes in the graph (files, modules, directories).".into());
+                r.description =
+                    Some("All nodes in the graph (files, modules, directories).".into());
                 r.mime_type = Some("application/json".into());
                 r.no_annotation()
             },
@@ -255,27 +252,36 @@ impl VibeGraphMcp {
     fn handle_resource(&self, uri: &str) -> Result<Vec<ResourceContents>, ErrorData> {
         match uri {
             "vibe://graph" => {
-                let json = serde_json::to_string_pretty(&*self.executor.graph)
-                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                let json = serde_json::to_string_pretty(&*self.executor.graph).map_err(|e| {
+                    ErrorData::internal_error(format!("Serialization error: {}", e), None)
+                })?;
                 Ok(vec![ResourceContents::text(json, uri)])
             }
             "vibe://graph/nodes" => {
-                let json = serde_json::to_string_pretty(&self.executor.graph.nodes)
-                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                let json =
+                    serde_json::to_string_pretty(&self.executor.graph.nodes).map_err(|e| {
+                        ErrorData::internal_error(format!("Serialization error: {}", e), None)
+                    })?;
                 Ok(vec![ResourceContents::text(json, uri)])
             }
             "vibe://graph/edges" => {
-                let json = serde_json::to_string_pretty(&self.executor.graph.edges)
-                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                let json =
+                    serde_json::to_string_pretty(&self.executor.graph.edges).map_err(|e| {
+                        ErrorData::internal_error(format!("Serialization error: {}", e), None)
+                    })?;
                 Ok(vec![ResourceContents::text(json, uri)])
             }
             "vibe://git/changes" => {
                 let changes = self.executor.get_git_changes();
-                let json = serde_json::to_string_pretty(&changes)
-                    .map_err(|e| ErrorData::internal_error(format!("Serialization error: {}", e), None))?;
+                let json = serde_json::to_string_pretty(&changes).map_err(|e| {
+                    ErrorData::internal_error(format!("Serialization error: {}", e), None)
+                })?;
                 Ok(vec![ResourceContents::text(json, uri)])
             }
-            _ => Err(ErrorData::invalid_params(format!("Unknown resource: {}", uri), None)),
+            _ => Err(ErrorData::invalid_params(
+                format!("Unknown resource: {}", uri),
+                None,
+            )),
         }
     }
 

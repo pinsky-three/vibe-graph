@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 // Use web-time for WASM (std::time::Instant panics in WASM)
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 // =============================================================================
 // Git Change Tracking Types
@@ -529,7 +529,7 @@ pub fn detect_rust_references(content: &str, source_path: &Path) -> Vec<SourceRe
                 .next()
                 .unwrap_or("")
                 .trim();
-            
+
             if !mod_part.is_empty() && !mod_part.contains('{') {
                 refs.push(SourceReference {
                     source_path: source_path.to_path_buf(),

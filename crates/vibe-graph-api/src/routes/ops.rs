@@ -314,4 +314,3 @@ pub async fn git_changes_handler(
             .into_response(),
     }
 }
-

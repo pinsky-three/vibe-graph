@@ -465,4 +465,3 @@ mod tests {
         assert_eq!(b_transitions.len(), 1);
     }
 }
-

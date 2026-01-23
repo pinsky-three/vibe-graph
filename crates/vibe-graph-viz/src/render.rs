@@ -128,7 +128,9 @@ pub fn resolve_edge_visuals(ctx: EdgeRenderContext) -> EdgeVisuals {
         };
     }
 
-    EdgeVisuals { stroke: base_stroke }
+    EdgeVisuals {
+        stroke: base_stroke,
+    }
 }
 
 fn node_base_color(dark_mode: bool) -> Color32 {

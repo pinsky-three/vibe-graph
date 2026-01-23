@@ -1,7 +1,7 @@
 //! Error types for the automaton system.
 
-use thiserror::Error;
 use crate::rule::RuleId;
+use thiserror::Error;
 use vibe_graph_core::NodeId;
 
 /// Result type alias for automaton operations.
@@ -50,4 +50,3 @@ pub enum AutomatonError {
     #[error("llm error: {0}")]
     LlmError(String),
 }
-

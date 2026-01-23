@@ -96,14 +96,7 @@ struct TreeBuilder<'a> {
 }
 
 impl<'a> TreeBuilder<'a> {
-    fn build_node(
-        &mut self,
-        indices: &[usize],
-        x: f32,
-        y: f32,
-        width: f32,
-        depth: usize,
-    ) -> i32 {
+    fn build_node(&mut self, indices: &[usize], x: f32, y: f32, width: f32, depth: usize) -> i32 {
         if indices.is_empty() {
             return -1;
         }
@@ -216,4 +209,3 @@ mod tests {
         assert!(tree.nodes().len() > 1);
     }
 }
-

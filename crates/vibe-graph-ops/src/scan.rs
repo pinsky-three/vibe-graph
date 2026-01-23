@@ -163,4 +163,3 @@ pub fn scan_directory_with_options(
     }
     Ok(())
 }
-
