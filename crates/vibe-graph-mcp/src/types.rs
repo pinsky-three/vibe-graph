@@ -3,6 +3,161 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
+use dashmap::DashMap;
+use vibe_graph_core::SourceCodeGraph;
+use vibe_graph_ops::Store;
+
+// =============================================================================
+// Gateway Registry Types
+// =============================================================================
+
+/// A registered project in the MCP gateway.
+#[derive(Clone)]
+pub struct RegisteredProject {
+    /// Project name (derived from workspace directory name).
+    pub name: String,
+
+    /// Absolute path to the workspace root.
+    pub workspace_path: PathBuf,
+
+    /// The source code graph for this project.
+    pub graph: Arc<SourceCodeGraph>,
+
+    /// Store for accessing .self metadata.
+    pub store: Store,
+
+    /// When this project was registered.
+    pub registered_at: Instant,
+}
+
+/// Thread-safe registry of all projects served by the gateway.
+#[derive(Default)]
+pub struct ProjectRegistry {
+    /// Map from project name to project data.
+    pub projects: DashMap<String, RegisteredProject>,
+}
+
+impl ProjectRegistry {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self {
+            projects: DashMap::new(),
+        }
+    }
+
+    /// Register a new project.
+    pub fn register(&self, project: RegisteredProject) {
+        self.projects.insert(project.name.clone(), project);
+    }
+
+    /// Unregister a project by name.
+    pub fn unregister(&self, name: &str) -> Option<RegisteredProject> {
+        self.projects.remove(name).map(|(_, v)| v)
+    }
+
+    /// Get a project by name.
+    pub fn get(&self, name: &str) -> Option<dashmap::mapref::one::Ref<'_, String, RegisteredProject>> {
+        self.projects.get(name)
+    }
+
+    /// List all project names.
+    pub fn list_names(&self) -> Vec<String> {
+        self.projects.iter().map(|r| r.key().clone()).collect()
+    }
+
+    /// Get count of registered projects.
+    pub fn len(&self) -> usize {
+        self.projects.len()
+    }
+
+    /// Check if registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.projects.is_empty()
+    }
+
+    /// Get the single project if only one is registered.
+    pub fn get_single(&self) -> Option<dashmap::mapref::one::Ref<'_, String, RegisteredProject>> {
+        if self.projects.len() == 1 {
+            self.projects.iter().next().map(|r| {
+                // Get a proper Ref by looking up the key
+                let key = r.key().clone();
+                drop(r);
+                self.projects.get(&key).unwrap()
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Request to register a project with the gateway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterProjectRequest {
+    /// Project name.
+    pub name: String,
+
+    /// Absolute path to the workspace.
+    pub workspace_path: PathBuf,
+}
+
+/// Response from project registration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterProjectResponse {
+    /// Whether registration succeeded.
+    pub success: bool,
+
+    /// Message describing the result.
+    pub message: String,
+
+    /// Total number of projects now registered.
+    pub project_count: usize,
+}
+
+/// Health check response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    /// Server status.
+    pub status: String,
+
+    /// Server version.
+    pub version: String,
+
+    /// Number of registered projects.
+    pub project_count: usize,
+
+    /// List of registered project names.
+    pub projects: Vec<String>,
+}
+
+/// Project info for list_projects tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ProjectInfo {
+    /// Project name.
+    pub name: String,
+
+    /// Workspace path.
+    pub workspace_path: String,
+
+    /// Number of nodes in the graph.
+    pub node_count: usize,
+
+    /// Number of edges in the graph.
+    pub edge_count: usize,
+}
+
+/// Output for the `list_projects` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ListProjectsOutput {
+    /// All registered projects.
+    pub projects: Vec<ProjectInfo>,
+
+    /// Total count.
+    pub count: usize,
+}
 
 // =============================================================================
 // Tool Input Types
@@ -11,6 +166,11 @@ use std::collections::HashMap;
 /// Input for the `search_nodes` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SearchNodesInput {
+    /// Project name to search in. Required if multiple projects are registered.
+    /// If only one project is registered, this is optional.
+    #[serde(default)]
+    pub project: Option<String>,
+
     /// Search query (matches against node name and path).
     pub query: String,
 
@@ -34,6 +194,10 @@ fn default_limit() -> usize {
 /// Input for the `get_dependencies` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct GetDependenciesInput {
+    /// Project name to query. Required if multiple projects are registered.
+    #[serde(default)]
+    pub project: Option<String>,
+
     /// Path or name of the node to query.
     pub node_path: String,
 
@@ -53,6 +217,10 @@ fn default_true() -> bool {
 /// Input for the `impact_analysis` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ImpactAnalysisInput {
+    /// Project name to analyze. Required if multiple projects are registered.
+    #[serde(default)]
+    pub project: Option<String>,
+
     /// Paths to analyze for impact.
     pub paths: Vec<String>,
 
@@ -72,6 +240,10 @@ fn default_depth() -> usize {
 /// Input for the `get_node_context` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct GetNodeContextInput {
+    /// Project name to query. Required if multiple projects are registered.
+    #[serde(default)]
+    pub project: Option<String>,
+
     /// Path or name of the node to get context for.
     pub node_path: String,
 
@@ -91,6 +263,10 @@ fn default_context_depth() -> usize {
 /// Input for the `list_files` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ListFilesInput {
+    /// Project name to list files from. Required if multiple projects are registered.
+    #[serde(default)]
+    pub project: Option<String>,
+
     /// Directory path to list (empty for root).
     #[serde(default)]
     pub path: Option<String>,
@@ -106,6 +282,14 @@ pub struct ListFilesInput {
     /// Maximum number of results.
     #[serde(default = "default_limit")]
     pub limit: usize,
+}
+
+/// Input for the `get_git_changes` tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct GetGitChangesInput {
+    /// Project name to get git changes for. Required if multiple projects are registered.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 // =============================================================================

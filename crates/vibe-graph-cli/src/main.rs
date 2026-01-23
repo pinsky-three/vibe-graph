@@ -153,25 +153,31 @@ enum Commands {
     /// Opens a localhost server with a web-based visualization.
     /// Supports WASM-based egui app if built, or falls back to D3.js.
     ///
-    /// With --mcp flag, runs as an MCP (Model Context Protocol) server
-    /// over stdio for integration with LLM agents like Claude Desktop.
+    /// With --mcp flag, runs as an MCP (Model Context Protocol) gateway server.
+    /// Multiple projects can register with a single gateway for unified access.
     ///
     /// Examples:
-    ///   vg serve                         # current directory, web UI
+    ///   vg serve                         # current directory, web UI on :3000
     ///   vg serve ./my-project            # specific project
-    ///   vg serve --mcp                   # MCP server mode (stdio)
+    ///   vg serve --mcp                   # MCP gateway mode on :4200
+    ///   vg serve --mcp --port 5000       # MCP gateway on custom port
     ///   vg serve --frontend-dir ./vibe-graph/frontend/dist  # explicit frontend
+    ///
+    /// MCP Gateway Mode:
+    ///   - First `vg serve --mcp` starts the gateway
+    ///   - Subsequent calls from other projects register with it
+    ///   - All projects accessible via single Cursor MCP config
     Serve {
         /// Path to workspace (defaults to current directory).
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// Port to serve on.
+        /// Port to serve on (default: 3000 for web UI, 4200 for MCP gateway).
         #[arg(short, long, default_value = "3000")]
         port: u16,
 
-        /// Run as MCP (Model Context Protocol) server over stdio.
-        /// Use this for integration with LLM agents like Claude Desktop.
+        /// Run as MCP (Model Context Protocol) gateway server.
+        /// Use this for integration with LLM agents like Cursor.
         #[arg(long)]
         mcp: bool,
 

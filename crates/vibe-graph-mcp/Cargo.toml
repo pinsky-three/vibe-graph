@@ -20,7 +20,7 @@ vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
 rmcp = { version = "0.13", features = ["server"] }
 
 # HTTP server (optional, for HTTP transport)
-axum = { workspace = true, optional = true }
+axum = { workspace = true, optional = true, features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors"], optional = true }
 tokio-util = { version = "0.7", optional = true }
 
@@ -31,6 +31,16 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = "0.8"
+
+# Thread-safe collections
+dashmap = "6"
+
+# HTTP client for gateway registration
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# WebSocket client for heartbeat
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
 
 # Logging
 tracing = { workspace = true }

@@ -32,7 +32,7 @@ pub struct VibeGraphMcp {
 }
 
 /// Convert a schemars schema to the Arc<Map<String, Value>> format required by rmcp.
-fn schema_to_input_schema<T: schemars::JsonSchema>() -> Arc<Map<String, Value>> {
+pub fn schema_to_input_schema<T: schemars::JsonSchema>() -> Arc<Map<String, Value>> {
     let schema = schemars::schema_for!(T);
     let value = serde_json::to_value(&schema).unwrap_or(Value::Object(Map::new()));
     match value {
@@ -42,7 +42,7 @@ fn schema_to_input_schema<T: schemars::JsonSchema>() -> Arc<Map<String, Value>> 
 }
 
 /// Create a simple empty object schema for tools with no parameters.
-fn empty_schema() -> Arc<Map<String, Value>> {
+pub fn empty_schema() -> Arc<Map<String, Value>> {
     let mut map = Map::new();
     map.insert("type".into(), Value::String("object".into()));
     map.insert("properties".into(), Value::Object(Map::new()));

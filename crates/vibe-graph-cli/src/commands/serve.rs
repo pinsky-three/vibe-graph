@@ -401,26 +401,123 @@ fn absolutize_snapshot_paths(
 }
 
 // =============================================================================
-// MCP Server Mode
+// MCP Server Mode (Gateway)
 // =============================================================================
 
 /// Execute in MCP (Model Context Protocol) server mode.
 ///
-/// Runs the server over HTTP/SSE for integration with LLM agents.
-/// Auto-syncs on startup to ensure fresh data.
+/// Uses a gateway architecture:
+/// - If no gateway is running on the port, starts one and registers this project
+/// - If a gateway is already running, registers this project with it
+///
+/// This allows multiple projects to be served through a single MCP endpoint.
 pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()> {
-    use vibe_graph_mcp::VibeGraphMcp;
+    use tokio_util::sync::CancellationToken;
+    use vibe_graph_mcp::gateway::{
+        check_gateway_health, maintain_heartbeat, register_with_gateway, run_gateway,
+        GatewayState, DEFAULT_GATEWAY_PORT,
+    };
 
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = Store::new(&path);
 
+    // Use default gateway port if not specified
+    let port = if port == 3000 {
+        DEFAULT_GATEWAY_PORT
+    } else {
+        port
+    };
+
+    // Derive project name from directory
+    let project_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project")
+        .to_string();
+
+    // Check if gateway is already running
+    if let Some(health) = check_gateway_health(port).await {
+        // Gateway exists - register with it
+        println!("🔗 Found existing gateway on port {} ({} projects)", port, health.project_count);
+
+        // Ensure our graph is up to date
+        let graph = ensure_graph_loaded(ctx, &store, &path).await?;
+
+        // Register with gateway
+        println!("📝 Registering project '{}'...", project_name);
+        let response = register_with_gateway(port, project_name.clone(), path.clone()).await?;
+
+        if !response.success {
+            // Project might already be registered - that's ok
+            if response.message.contains("already registered") {
+                println!("✅ Project '{}' was already registered", project_name);
+            } else {
+                anyhow::bail!("Failed to register: {}", response.message);
+            }
+        } else {
+            println!(
+                "✅ Registered with gateway ({} nodes, {} edges)",
+                graph.node_count(),
+                graph.edge_count()
+            );
+        }
+
+        println!();
+        println!("🚀 Project '{}' is now available via the gateway", project_name);
+        println!("   URL: http://localhost:{}/", port);
+        println!();
+        println!("   Press Ctrl+C to unregister and exit");
+        println!();
+
+        // Maintain heartbeat - this keeps the project registered
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        // Handle Ctrl+C
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            cancel_clone.cancel();
+        });
+
+        // Run heartbeat until cancelled
+        maintain_heartbeat(port, project_name, cancel).await?;
+
+        println!();
+        println!("👋 Project unregistered from gateway");
+
+        return Ok(());
+    }
+
+    // No gateway running - start one
+    println!("🚀 Starting MCP Gateway on port {}...", port);
+
+    // Ensure graph is loaded
+    let graph = ensure_graph_loaded(ctx, &store, &path).await?;
+
+    // Create gateway state and register our project
+    let cancel = CancellationToken::new();
+    let state = GatewayState::new(cancel);
+    state.register_local_project(project_name, path, Arc::new(graph), store);
+
+    // Run the gateway
+    run_gateway(state, port).await?;
+
+    Ok(())
+}
+
+/// Ensure the graph is loaded, syncing if necessary.
+async fn ensure_graph_loaded(
+    ctx: &OpsContext,
+    store: &Store,
+    path: &Path,
+) -> Result<vibe_graph_core::SourceCodeGraph> {
     // Determine if we need a fresh sync
     let needs_sync = if !store.exists() {
         println!("🔄 First run detected, syncing workspace...");
         true
     } else {
         // Check for git changes (uncommitted files)
-        let has_git_changes = get_git_changes(&path)
+        let has_git_changes = get_git_changes(path)
             .map(|s| !s.changes.is_empty())
             .unwrap_or(false);
 
@@ -445,29 +542,24 @@ pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()>
 
     // Sync if needed
     if needs_sync {
-        let mut request = SyncRequest::local(&path);
-        request.force = true; // Force rebuild to pick up changes
+        let mut request = SyncRequest::local(path);
+        request.force = true;
         let _response = ctx.sync(request).await?;
         println!("💾 Saved to {}", store.self_dir().display());
         println!();
     }
 
-    // Load the graph (force rebuild if we just synced to ensure consistency)
+    // Load the graph
     println!("📊 Loading graph...");
-    let mut request = GraphRequest::new(&path);
+    let mut request = GraphRequest::new(path);
     request.force = needs_sync;
     let response = ctx.graph(request).await?;
-    let graph = response.graph;
     println!(
         "✅ Graph: {} nodes, {} edges",
-        graph.node_count(),
-        graph.edge_count()
+        response.graph.node_count(),
+        response.graph.edge_count()
     );
     println!();
 
-    // Create and run MCP server over HTTP
-    let server = VibeGraphMcp::new(store, Arc::new(graph), path);
-    server.run_http(port).await?;
-
-    Ok(())
+    Ok(response.graph)
 }
