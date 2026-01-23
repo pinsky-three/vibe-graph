@@ -28,10 +28,15 @@ vg graph
 # Launch interactive visualization
 vg serve
 # Open http://localhost:3000
+
+# Start MCP Server for AI Agents
+vg serve --mcp
 ```
 
 ## Features
 
+- **🤖 Model Context Protocol (MCP)** — Native MCP server for AI agents to semantically explore code
+- **⚡ GPU Acceleration** — WebGPU-powered Barnes-Hut layout for large graphs (>10k nodes)
 - **🔍 Auto-detection** — Recognizes single repos, multi-repo workspaces, or plain directories
 - **📊 SourceCodeGraph** — Builds a graph of files, directories, and cross-file references
 - **🌐 Interactive Visualization** — D3.js or embedded egui/WASM graph explorer
@@ -65,6 +70,7 @@ make build
 | `vg sync <owner/repo>` | Clone and analyze single GitHub repo |
 | `vg graph` | Build SourceCodeGraph with reference detection |
 | `vg serve` | Interactive visualization at localhost:3000 |
+| `vg serve --mcp` | Start Model Context Protocol server for AI agents |
 | `vg compose` | Generate markdown documentation |
 | `vg status` | Show workspace and cache status |
 | `vg clean` | Remove `.self/` folder |
@@ -81,6 +87,16 @@ make build
 
 Run `vg --help` for full command reference.
 
+## 🤖 Model Context Protocol (MCP)
+
+Vibe-Graph acts as a **Semantic Intelligence Layer** for your AI agents (Claude, Cursor, etc.). By running the MCP server, you give your agents "eyes" to see the codebase structure.
+
+**Capabilities:**
+*   **Gateway Mode**: Serve multiple local projects from a single endpoint.
+*   **Impact Analysis**: Ask "what breaks if I touch `User.rs`?" -> Returns sorted list of dependents (ranked by centrality).
+*   **Semantic Search**: Find files by concept/module rather than just regex.
+*   **Context Awareness**: Get the "neighborhood" of a file (imports + usage) in one shot.
+
 ## Graph Visualization
 
 The `serve` command provides an interactive force-directed graph with REST + WebSocket API:
@@ -91,7 +107,9 @@ vg sync && vg serve
 
 **Features:**
 - 🎨 **egui WASM visualization** — Interactive graph explorer with pan/zoom
+- ⚡ **GPU Layout** — High-performance WebGPU compute for massive graphs
 - 📡 **Live git status** — Change indicators on modified files (auto-refresh via WebSocket)
+- 📊 **PageRank Sizing** — Nodes sized by structural importance
 - 🔌 **REST API** — Programmatic access to graph data
 
 ### API Endpoints
@@ -121,6 +139,7 @@ vibe-graph/
 │   ├── vibe-graph-automaton   # Temporal state evolution & rule-driven automaton
 │   ├── vibe-graph-cli         # CLI entry point (vg command)
 │   ├── vibe-graph-api         # REST + WebSocket API (Axum-based)
+│   ├── vibe-graph-mcp         # Model Context Protocol server implementation
 │   ├── vibe-graph-viz         # egui/WASM visualization
 │   ├── vibe-graph-git         # Git status and fossilization
 │   └── ...                    # Additional crates (ssot, semantic, llmca, etc.)
