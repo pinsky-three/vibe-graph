@@ -29,6 +29,7 @@
 //! }
 //! ```
 
+mod architect;
 mod config;
 mod context;
 mod error;
@@ -40,6 +41,7 @@ mod store;
 mod workspace;
 
 // Re-export public API
+pub use architect::{ArchitectFactory, FlatArchitect, GraphArchitect, LatticeArchitect};
 pub use config::Config;
 pub use context::OpsContext;
 pub use error::{OpsError, OpsResult};

@@ -241,6 +241,40 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+
+    /// Architect a file system from a graph.
+    ///
+    /// Transforms a logical graph (JSON) into a physical file structure
+    /// using various strategies (e.g., lattice, modular).
+    Architect {
+        /// Path to the input graph JSON file.
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Root directory for the output (defaults to current directory).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Create a temporary directory for output.
+        #[arg(long, conflicts_with = "output")]
+        temp: bool,
+
+        /// Strategy to use.
+        #[arg(long, default_value = "flat")]
+        strategy: String,
+
+        /// Width for lattice strategy.
+        #[arg(long)]
+        width: Option<usize>,
+
+        /// Group by row for lattice strategy.
+        #[arg(long)]
+        group_by_row: bool,
+        
+        /// Dry run (print structure without writing).
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Automaton description commands.
@@ -777,6 +811,18 @@ async fn main() -> Result<()> {
                     .unwrap_or_default()
             );
             println!("📂 Cache:      {}", cli_config.cache_dir.display());
+        }
+
+        Commands::Architect {
+            input,
+            output,
+            temp,
+            strategy,
+            width,
+            group_by_row,
+            dry_run,
+        } => {
+            commands::architect::execute(&input, &output, temp, &strategy, width, group_by_row, dry_run)?;
         }
     }
 

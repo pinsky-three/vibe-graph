@@ -1,5 +1,6 @@
 //! CLI command implementations.
 
+pub mod architect;
 pub mod automaton;
 pub mod compose;
 pub mod config;

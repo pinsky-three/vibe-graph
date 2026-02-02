@@ -782,3 +782,22 @@ pub struct Snapshot {
     /// Timestamp for when the snapshot was recorded.
     pub created_at: SystemTime,
 }
+
+/// Strategies for mapping a logical graph to a filesystem hierarchy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum LayoutStrategy {
+    /// Everything in one directory (flat).
+    #[default]
+    Flat,
+    /// Spatial organization for lattice-like graphs (rows/cols).
+    Lattice { 
+        width: usize, 
+        group_by_row: bool 
+    },
+    /// Direct mapping (trusts existing paths or uses heuristics).
+    Direct,
+    /// Preserves existing directory structure (Identity).
+    Preserve,
+    /// Modular clustering (auto-detected modules).
+    Modular,
+}
