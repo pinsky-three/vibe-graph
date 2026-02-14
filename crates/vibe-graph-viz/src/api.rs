@@ -235,6 +235,21 @@ pub struct GitDiffResponse {
     pub deletions: usize,
 }
 
+/// Response from the file content endpoint (GET /api/file?path=...).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileContentResponse {
+    /// File content as UTF-8.
+    pub content: String,
+    /// Detected language for syntax highlighting.
+    pub language: String,
+    /// Resolved path on the server.
+    pub path: String,
+    /// Total number of lines.
+    pub total_lines: usize,
+    /// File size in bytes.
+    pub size_bytes: u64,
+}
+
 /// Operation state for UI feedback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OperationState {
@@ -867,6 +882,28 @@ mod wasm_impl {
 
         Ok(body.data)
     }
+
+    /// Fetch file content via GET /api/file?path=...
+    pub async fn fetch_file_content(path: &str) -> Result<FileContentResponse, String> {
+        let url = format!("/api/file?path={}", urlencoding(path));
+
+        let resp = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("File fetch failed (HTTP {}): {}", resp.status(), text));
+        }
+
+        let body: ApiResponse<FileContentResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -954,4 +991,82 @@ pub async fn git_log(_repo: Option<&str>, _limit: usize) -> Result<GitLogRespons
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn git_diff(_repo: Option<&str>, _staged: bool) -> Result<GitDiffResponse, String> {
     Err("Not implemented for native".to_string())
+}
+
+/// Fetch file content — native implementation reads directly from filesystem.
+///
+/// On native, this is synchronous (no API server needed). The path is resolved
+/// relative to the working directory or used as-is if absolute.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_file_content_native(
+    path: &std::path::Path,
+    root_path: Option<&std::path::Path>,
+) -> Result<FileContentResponse, String> {
+    // Resolve path
+    let resolved = if path.is_absolute() && path.exists() {
+        path.to_path_buf()
+    } else if let Some(root) = root_path {
+        let joined = root.join(path);
+        if joined.exists() {
+            joined
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
+    };
+
+    let content =
+        std::fs::read_to_string(&resolved).map_err(|e| format!("Read error: {}", e))?;
+
+    let total_lines = content.lines().count();
+    let size_bytes = content.len() as u64;
+    let language = detect_language_native(&resolved);
+
+    Ok(FileContentResponse {
+        content,
+        language: language.to_string(),
+        path: resolved.display().to_string(),
+        total_lines,
+        size_bytes,
+    })
+}
+
+/// Simple language detection for native (mirrors the API-side logic).
+#[cfg(not(target_arch = "wasm32"))]
+fn detect_language_native(path: &std::path::Path) -> &'static str {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        let lower = name.to_lowercase();
+        match lower.as_str() {
+            "dockerfile" => return "dockerfile",
+            "makefile" | "gnumakefile" => return "sh",
+            "cargo.toml" | "cargo.lock" => return "toml",
+            ".gitignore" | ".dockerignore" => return "txt",
+            _ => {}
+        }
+    }
+
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| match ext.to_lowercase().as_str() {
+            "rs" => "rs",
+            "py" | "pyi" => "py",
+            "md" | "markdown" => "md",
+            "toml" => "toml",
+            "ts" | "tsx" => "ts",
+            "js" | "jsx" | "mjs" | "cjs" => "js",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "html" | "htm" => "html",
+            "css" | "scss" | "sass" => "css",
+            "sh" | "bash" | "zsh" => "sh",
+            "sql" => "sql",
+            "c" | "h" => "c",
+            "cpp" | "cxx" | "cc" | "hpp" => "cpp",
+            "go" => "go",
+            "java" => "java",
+            "xml" | "svg" => "xml",
+            _ => "txt",
+        })
+        .unwrap_or("txt")
 }

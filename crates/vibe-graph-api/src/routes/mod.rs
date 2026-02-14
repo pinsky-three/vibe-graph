@@ -1,5 +1,6 @@
 //! API route handlers.
 
+pub mod file;
 pub mod git;
 mod graph;
 mod health;
@@ -19,6 +20,7 @@ use vibe_graph_ops::OpsContext;
 
 use crate::types::ApiState;
 use crate::ws::ws_handler;
+use file::FileState;
 use git::GitOpsState;
 use ops::OpsState;
 
@@ -126,6 +128,19 @@ pub fn create_git_commands_router_multi(
     build_git_commands_router(state)
 }
 
+/// Create a file content router for serving workspace files.
+///
+/// Mount at `/file` for the syntax-highlighted viewer.
+pub fn create_file_router(workspace_path: PathBuf) -> Router {
+    let state = Arc::new(FileState {
+        workspace_root: workspace_path,
+    });
+
+    Router::new()
+        .route("/", get(file::file_handler))
+        .with_state(state)
+}
+
 /// Internal helper to build git commands router with given state.
 fn build_git_commands_router(state: Arc<GitOpsState>) -> Router {
     let cors = CorsLayer::new()
@@ -215,8 +230,9 @@ pub fn create_full_api_router_with_git(
     ops_ctx: OpsContext,
     workspace_path: PathBuf,
 ) -> Router {
-    let git_cmd_router = create_git_commands_router(workspace_path);
-    build_full_api_router_with_git_router(api_state, ops_ctx, git_cmd_router)
+    let git_cmd_router = create_git_commands_router(workspace_path.clone());
+    let file_router = create_file_router(workspace_path);
+    build_full_api_router_with_git_router(api_state, ops_ctx, git_cmd_router, file_router)
 }
 
 /// Create a complete API router including git commands (multi-repo).
@@ -224,6 +240,7 @@ pub fn create_full_api_router_with_git(
 /// This creates a router that serves:
 /// - `/ops/*` - Operations API (sync, graph build, status, etc.)
 /// - `/git/cmd/*` - Git command API with multi-repo support
+/// - `/file` - File content endpoint for syntax-highlighted viewer
 /// - `/health`, `/graph/*`, `/git/changes`, `/ws` - Graph visualization API
 pub fn create_full_api_router_with_git_multi(
     api_state: Arc<ApiState>,
@@ -231,15 +248,17 @@ pub fn create_full_api_router_with_git_multi(
     workspace_path: PathBuf,
     repos: Vec<(String, PathBuf)>,
 ) -> Router {
-    let git_cmd_router = create_git_commands_router_multi(workspace_path, repos);
-    build_full_api_router_with_git_router(api_state, ops_ctx, git_cmd_router)
+    let git_cmd_router = create_git_commands_router_multi(workspace_path.clone(), repos);
+    let file_router = create_file_router(workspace_path);
+    build_full_api_router_with_git_router(api_state, ops_ctx, git_cmd_router, file_router)
 }
 
-/// Internal helper to build full router with git commands.
+/// Internal helper to build full router with git commands and file endpoint.
 fn build_full_api_router_with_git_router(
     api_state: Arc<ApiState>,
     ops_ctx: OpsContext,
     git_cmd_router: Router,
+    file_router: Router,
 ) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -264,6 +283,7 @@ fn build_full_api_router_with_git_router(
     Router::new()
         .nest("/ops", ops_router)
         .nest("/git/cmd", git_cmd_router)
+        .nest("/file", file_router)
         .merge(viz_router)
         .layer(
             TraceLayer::new_for_http()

@@ -58,9 +58,9 @@ mod types;
 mod ws;
 
 pub use routes::{
-    create_api_router, create_full_api_router, create_full_api_router_with_git,
-    create_full_api_router_with_git_multi, create_git_commands_router,
-    create_git_commands_router_multi, create_ops_router,
+    create_api_router, create_file_router, create_full_api_router,
+    create_full_api_router_with_git, create_full_api_router_with_git_multi,
+    create_git_commands_router, create_git_commands_router_multi, create_ops_router,
 };
 pub use types::{ApiResponse, ApiState, WsClientMessage, WsServerMessage};
 
