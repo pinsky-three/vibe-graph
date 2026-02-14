@@ -1,7 +1,7 @@
 //! Main application state and rendering logic.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::{App, CreationContext};
 use egui::{CollapsingHeader, Context, ScrollArea};
@@ -16,6 +16,7 @@ use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
 use vibe_graph_core::{ChangeIndicatorState, GitChangeKind, GitChangeSnapshot, SourceCodeGraph};
 
+use crate::file_viewer::FileViewerState;
 use crate::git_panel::GitPanelState;
 use crate::render::{
     resolve_edge_visuals, resolve_node_visuals, EdgeRenderContext, NodeRenderContext,
@@ -120,6 +121,8 @@ pub struct VibeGraphApp {
     top_bar: TopBarState,
     /// Git tools panel state
     git_panel: GitPanelState,
+    /// File viewer windows (syntax-highlighted code display)
+    file_viewer: FileViewerState,
     /// Mapping from node ID (u64) to egui NodeIndex for automaton mode
     _node_id_to_egui: HashMap<u64, NodeIndex>,
     /// Automaton mode state (temporal evolution visualization)
@@ -397,6 +400,7 @@ impl VibeGraphApp {
             layout_initialized: false,
             top_bar: TopBarState::new(),
             git_panel: GitPanelState::new(),
+            file_viewer: FileViewerState::new(),
             _node_id_to_egui,
             #[cfg(feature = "automaton")]
             automaton_mode,
@@ -572,6 +576,16 @@ impl VibeGraphApp {
         self.automaton_mode = AutomatonMode::with_path(store_path);
         self.automaton_mode
             .set_node_mapping(self._node_id_to_egui.clone());
+    }
+
+    /// Set the project root path for file viewer (resolves relative paths).
+    pub fn set_project_root(&mut self, path: PathBuf) {
+        self.file_viewer.set_root_path(path);
+    }
+
+    /// Open a file in the syntax-highlighted viewer.
+    pub fn open_file_viewer(&mut self, path: &Path) {
+        self.file_viewer.open_file(path);
     }
 
     /// Enable automaton mode and load snapshots.
@@ -1823,18 +1837,59 @@ impl VibeGraphApp {
                 let edge_count = self.g.selected_edges().len();
                 ui.label(format!("Nodes: {} | Edges: {}", selected_count, edge_count));
 
-                ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                    for &node_idx in self.g.selected_nodes() {
-                        if let Some(node) = self.g.node(node_idx) {
-                            let label = node.label();
-                            if !label.is_empty() {
-                                ui.label(format!("• {}", label));
+                // Collect selected nodes + paths before mutable borrow
+                let selected_entries: Vec<_> = self
+                    .g
+                    .selected_nodes()
+                    .iter()
+                    .filter_map(|&idx| {
+                        let node = self.g.node(idx)?;
+                        let label = node.label().to_string();
+                        let path = self.node_paths.get(&idx).cloned();
+                        let kind = self.node_kinds.get(&idx).cloned();
+                        Some((label, path, kind))
+                    })
+                    .collect();
+
+                let mut files_to_open: Vec<PathBuf> = Vec::new();
+
+                ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                    for (label, path, kind) in &selected_entries {
+                        let is_file = kind.as_deref() == Some("File")
+                            || kind.as_deref() == Some("Module")
+                            || path.is_some();
+
+                        ui.horizontal(|ui| {
+                            let display = if !label.is_empty() {
+                                format!("• {}", label)
                             } else {
-                                ui.label(format!("• {:?}", node_idx));
+                                "• (unnamed)".to_string()
+                            };
+                            ui.label(&display);
+
+                            // Show "View" button for file-like nodes
+                            if is_file {
+                                if let Some(p) = path {
+                                    if ui
+                                        .small_button("📄")
+                                        .on_hover_text(format!(
+                                            "Open in viewer: {}",
+                                            p.display()
+                                        ))
+                                        .clicked()
+                                    {
+                                        files_to_open.push(p.clone());
+                                    }
+                                }
                             }
-                        }
+                        });
                     }
                 });
+
+                // Open requested files (deferred to avoid borrow conflicts)
+                for path in files_to_open {
+                    self.file_viewer.open_file(&path);
+                }
             });
     }
 }
@@ -1852,6 +1907,9 @@ impl App for VibeGraphApp {
 
         // Render Git tools floating panel
         self.git_panel.show(ctx);
+
+        // Render open file viewer windows (syntax-highlighted code)
+        self.file_viewer.show(ctx);
 
         // Check for git changes from TypeScript layer (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -1965,6 +2023,20 @@ impl App for VibeGraphApp {
 
         if needs_neighborhood_update {
             apply_neighborhood_depth(&mut self.g, &self.selection);
+        }
+
+        // F key: open selected file nodes in the syntax-highlighted viewer
+        let f_pressed = ctx.input(|i| i.key_pressed(egui::Key::F) && !i.modifiers.any());
+        if f_pressed {
+            let paths_to_open: Vec<PathBuf> = self
+                .g
+                .selected_nodes()
+                .iter()
+                .filter_map(|idx| self.node_paths.get(idx).cloned())
+                .collect();
+            for path in paths_to_open {
+                self.file_viewer.open_file(&path);
+            }
         }
 
         // Right sidebar with controls

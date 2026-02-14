@@ -69,6 +69,9 @@ pub fn execute(path: &Path, automaton: bool) -> Result<()> {
         Box::new(move |cc| {
             let mut app = VibeGraphApp::from_source_graph(cc, source_graph);
 
+            // Set project root for file viewer (resolves relative paths)
+            app.set_project_root(path_clone.clone());
+
             if automaton_enabled {
                 app.set_automaton_path(path_clone.clone());
                 app.enable_automaton_mode();

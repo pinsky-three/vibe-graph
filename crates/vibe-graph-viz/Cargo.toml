@@ -24,6 +24,7 @@ vibe-graph-automaton = { version = "0.2.0", path = "../vibe-graph-automaton", op
 vibe-graph-layout-gpu = { version = "0.1.0", path = "../vibe-graph-layout-gpu", optional = true }
 eframe = { workspace = true, features = ["glow"] }
 egui = { workspace = true }
+egui_extras = { version = "0.33.3", features = ["syntect"] }
 egui_graphs = { workspace = true }
 petgraph = { workspace = true }
 serde = { workspace = true }

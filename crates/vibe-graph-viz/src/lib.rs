@@ -18,6 +18,7 @@
 
 mod api;
 mod app;
+pub mod file_viewer;
 mod git_panel;
 mod render;
 mod sample;
