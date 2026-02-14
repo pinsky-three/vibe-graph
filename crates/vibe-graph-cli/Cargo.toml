@@ -49,7 +49,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.3", path = "../vibe-graph-ops" }
-vibe-graph-api = { version = "0.3.1", path = "../vibe-graph-api" }
+vibe-graph-api = { version = "0.3.2", path = "../vibe-graph-api" }
 vibe-graph-git = { version = "0.3.1", path = "../vibe-graph-git" }
 vibe-graph-automaton = { version = "0.2.0", path = "../vibe-graph-automaton" }
 vibe-graph-mcp = { version = "0.2.1", path = "../vibe-graph-mcp" }
