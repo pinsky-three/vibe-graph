@@ -1,6 +1,6 @@
 //! Main application state and rendering logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::{App, CreationContext};
@@ -1892,6 +1892,340 @@ impl VibeGraphApp {
                 }
             });
     }
+
+    // =========================================================================
+    // Graph Operations (programmatic selection helpers)
+    // =========================================================================
+
+    /// Apply a programmatic selection: set nodes as selected, update base_selection,
+    /// reset depth, and sync edges.
+    fn apply_programmatic_selection(&mut self, nodes: Vec<NodeIndex>) {
+        // Deselect everything first
+        let all_node_indices: Vec<_> = self.g.nodes_iter().map(|(idx, _)| idx).collect();
+        let all_edge_indices: Vec<_> = self.g.edges_iter().map(|(idx, _)| idx).collect();
+        for idx in &all_node_indices {
+            if let Some(node) = self.g.node_mut(*idx) {
+                node.set_selected(false);
+            }
+        }
+        for idx in &all_edge_indices {
+            if let Some(edge) = self.g.edge_mut(*idx) {
+                edge.set_selected(false);
+            }
+        }
+
+        // Select the target nodes
+        let selected_set: HashSet<NodeIndex> = nodes.iter().copied().collect();
+        for idx in &nodes {
+            if let Some(node) = self.g.node_mut(*idx) {
+                node.set_selected(true);
+            }
+        }
+
+        // Select connected edges if include_edges is on
+        if self.selection.include_edges {
+            for idx in &all_edge_indices {
+                if let Some((source, target)) = self.g.edge_endpoints(*idx) {
+                    if selected_set.contains(&source) || selected_set.contains(&target) {
+                        if let Some(edge) = self.g.edge_mut(*idx) {
+                            edge.set_selected(true);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update selection state
+        self.selection.base_selection = nodes;
+        self.selection.neighborhood_depth = 0;
+    }
+
+    /// Compute in-degree and out-degree for every node.
+    fn compute_degrees(&self) -> (HashMap<NodeIndex, usize>, HashMap<NodeIndex, usize>) {
+        let mut in_degree: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut out_degree: HashMap<NodeIndex, usize> = HashMap::new();
+
+        // Initialize all nodes with 0
+        for (idx, _) in self.g.nodes_iter() {
+            in_degree.insert(idx, 0);
+            out_degree.insert(idx, 0);
+        }
+
+        for (edge_idx, _) in self.g.edges_iter() {
+            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
+                *out_degree.entry(source).or_default() += 1;
+                *in_degree.entry(target).or_default() += 1;
+            }
+        }
+
+        (in_degree, out_degree)
+    }
+
+    /// Return nodes with out-degree 0 (they don't reference/contain anything).
+    fn find_leaves(&self) -> Vec<NodeIndex> {
+        let (_, out_degree) = self.compute_degrees();
+        out_degree
+            .into_iter()
+            .filter(|(_, deg)| *deg == 0)
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Return nodes with in-degree 0 (nothing references/contains them).
+    fn find_roots(&self) -> Vec<NodeIndex> {
+        let (in_degree, _) = self.compute_degrees();
+        in_degree
+            .into_iter()
+            .filter(|(_, deg)| *deg == 0)
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Return isolated nodes (degree 0 — no edges at all).
+    fn find_orphans(&self) -> Vec<NodeIndex> {
+        let (in_degree, out_degree) = self.compute_degrees();
+        in_degree
+            .into_iter()
+            .filter(|(idx, in_d)| *in_d == 0 && out_degree.get(idx).copied().unwrap_or(0) == 0)
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Return top N nodes by total degree (most connected).
+    fn find_hubs(&self, top_n: usize) -> Vec<NodeIndex> {
+        let (in_degree, out_degree) = self.compute_degrees();
+        let mut by_degree: Vec<_> = in_degree
+            .iter()
+            .map(|(idx, in_d)| {
+                let out_d = out_degree.get(idx).copied().unwrap_or(0);
+                (*idx, in_d + out_d)
+            })
+            .collect();
+        by_degree.sort_by(|a, b| b.1.cmp(&a.1));
+        by_degree.into_iter().take(top_n).map(|(idx, _)| idx).collect()
+    }
+
+    /// Return nodes matching a specific kind string (e.g. "File", "Directory").
+    fn find_by_kind(&self, kind: &str) -> Vec<NodeIndex> {
+        self.node_kinds
+            .iter()
+            .filter(|(_, k)| k.as_str() == kind)
+            .map(|(idx, _)| *idx)
+            .collect()
+    }
+
+    /// Return all node indices.
+    fn all_nodes(&self) -> Vec<NodeIndex> {
+        self.g.nodes_iter().map(|(idx, _)| idx).collect()
+    }
+
+    /// Return the complement of the current selection.
+    fn invert_selection(&self) -> Vec<NodeIndex> {
+        let current: HashSet<_> = self.selection.base_selection.iter().copied().collect();
+        self.g
+            .nodes_iter()
+            .filter_map(|(idx, _)| {
+                if current.contains(&idx) {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect()
+    }
+
+    /// Graph Operations panel — quick-select buttons for common queries.
+    fn ui_graph_operations(&mut self, ui: &mut egui::Ui) {
+        CollapsingHeader::new("Operations")
+            .default_open(false)
+            .show(ui, |ui| {
+                let node_count = self.g.node_count();
+                let has_selection = self.selection.has_selection();
+
+                // ── Topology-based selection ─────────────────────────
+                ui.label(
+                    egui::RichText::new("Topology")
+                        .small()
+                        .strong()
+                        .color(egui::Color32::LIGHT_GRAY),
+                );
+
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .small_button("🍂 Leaves")
+                        .on_hover_text("Select leaf nodes (out-degree 0 — they don't reference anything)")
+                        .clicked()
+                    {
+                        let nodes = self.find_leaves();
+                        self.apply_programmatic_selection(nodes);
+                    }
+                    if ui
+                        .small_button("🌳 Roots")
+                        .on_hover_text("Select root nodes (in-degree 0 — nothing references them)")
+                        .clicked()
+                    {
+                        let nodes = self.find_roots();
+                        self.apply_programmatic_selection(nodes);
+                    }
+                    if ui
+                        .small_button("🔗 Hubs")
+                        .on_hover_text("Select top 10 most-connected nodes")
+                        .clicked()
+                    {
+                        let nodes = self.find_hubs(10);
+                        self.apply_programmatic_selection(nodes);
+                    }
+                    if ui
+                        .small_button("🏝 Orphans")
+                        .on_hover_text("Select isolated nodes (no connections at all)")
+                        .clicked()
+                    {
+                        let nodes = self.find_orphans();
+                        self.apply_programmatic_selection(nodes);
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // ── Kind-based selection ─────────────────────────────
+                ui.label(
+                    egui::RichText::new("By Kind")
+                        .small()
+                        .strong()
+                        .color(egui::Color32::LIGHT_GRAY),
+                );
+
+                // Collect available kinds and their counts (owned to avoid borrow issues)
+                let mut kind_counts: HashMap<String, usize> = HashMap::new();
+                for kind in self.node_kinds.values() {
+                    *kind_counts.entry(kind.clone()).or_default() += 1;
+                }
+                // Sort by count desc, then name asc for fully deterministic ordering.
+                // Without the tie-breaker, HashMap's random iteration order causes
+                // equal-count kinds to swap positions every frame → UI flicker.
+                let mut kinds_sorted: Vec<_> = kind_counts.into_iter().collect();
+                kinds_sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+                ui.horizontal_wrapped(|ui| {
+                    for (kind, count) in &kinds_sorted {
+                        let icon = match kind.as_str() {
+                            "File" => "📄",
+                            "Directory" => "📁",
+                            "Module" => "📦",
+                            "Service" => "⚙",
+                            "Test" => "🧪",
+                            _ => "◉",
+                        };
+                        if ui
+                            .small_button(format!("{} {} ({})", icon, kind, count))
+                            .on_hover_text(format!("Select all {} nodes", kind))
+                            .clicked()
+                        {
+                            let nodes = self.find_by_kind(kind);
+                            self.apply_programmatic_selection(nodes);
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // ── Git change-based selection ───────────────────────
+                let changed_count = self.changed_nodes.len();
+                if changed_count > 0 {
+                    ui.label(
+                        egui::RichText::new("Git Changes")
+                            .small()
+                            .strong()
+                            .color(egui::Color32::LIGHT_GRAY),
+                    );
+
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .small_button(format!("🔥 Changed ({})", changed_count))
+                            .on_hover_text("Select all nodes with uncommitted git changes")
+                            .clicked()
+                        {
+                            let nodes: Vec<_> = self.changed_nodes.keys().copied().collect();
+                            self.apply_programmatic_selection(nodes);
+                        }
+
+                        // Per-change-kind buttons — collect into a Vec sorted by
+                        // label so the order is deterministic across frames
+                        // (HashMap iteration is random → flicker).
+                        let mut change_kind_counts: HashMap<GitChangeKind, Vec<NodeIndex>> =
+                            HashMap::new();
+                        for (&idx, &kind) in &self.changed_nodes {
+                            change_kind_counts.entry(kind).or_default().push(idx);
+                        }
+
+                        let change_kind_label = |k: &GitChangeKind| -> (&'static str, &'static str) {
+                            match k {
+                                GitChangeKind::Modified => ("✏", "Modified"),
+                                GitChangeKind::Added => ("➕", "Added"),
+                                GitChangeKind::Deleted => ("🗑", "Deleted"),
+                                GitChangeKind::Untracked => ("❓", "Untracked"),
+                                GitChangeKind::RenamedFrom => ("↩", "Renamed From"),
+                                GitChangeKind::RenamedTo => ("↪", "Renamed To"),
+                            }
+                        };
+
+                        let mut sorted_changes: Vec<_> = change_kind_counts.into_iter().collect();
+                        sorted_changes.sort_by_key(|(k, _)| change_kind_label(k).1);
+
+                        for (kind, indices) in &sorted_changes {
+                            let (icon, label) = change_kind_label(kind);
+                            if !indices.is_empty()
+                                && ui
+                                    .small_button(format!(
+                                        "{} {} ({})",
+                                        icon,
+                                        label,
+                                        indices.len()
+                                    ))
+                                    .on_hover_text(format!("Select {} files", label.to_lowercase()))
+                                    .clicked()
+                            {
+                                self.apply_programmatic_selection(indices.clone());
+                            }
+                        }
+                    });
+
+                    ui.add_space(4.0);
+                }
+
+                // ── Bulk operations ──────────────────────────────────
+                ui.separator();
+
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .small_button(format!("✦ All ({})", node_count))
+                        .on_hover_text("Select every node in the graph")
+                        .clicked()
+                    {
+                        let nodes = self.all_nodes();
+                        self.apply_programmatic_selection(nodes);
+                    }
+                    if ui
+                        .add_enabled(has_selection, egui::Button::new("⊘ Clear").small())
+                        .on_hover_text("Deselect everything")
+                        .clicked()
+                    {
+                        self.apply_programmatic_selection(vec![]);
+                    }
+                    if ui
+                        .add_enabled(
+                            has_selection,
+                            egui::Button::new("◑ Invert").small(),
+                        )
+                        .on_hover_text("Invert current selection")
+                        .clicked()
+                    {
+                        let nodes = self.invert_selection();
+                        self.apply_programmatic_selection(nodes);
+                    }
+                });
+            });
+    }
 }
 
 // =============================================================================
@@ -2064,6 +2398,9 @@ impl App for VibeGraphApp {
                         ui.separator();
 
                         self.ui_style(ui);
+                        ui.separator();
+
+                        self.ui_graph_operations(ui);
                         ui.separator();
 
                         self.ui_selected(ui);
