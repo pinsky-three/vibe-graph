@@ -47,7 +47,7 @@ dotenvy = { workspace = true }
 directories = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-vibe-graph-core = { version = "0.2.2", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.2", path = "../vibe-graph-ops" }
 vibe-graph-api = { version = "0.3.1", path = "../vibe-graph-api" }
 vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }

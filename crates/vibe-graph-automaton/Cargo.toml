@@ -19,7 +19,7 @@ default = []
 llm = ["rig-core", "tokio", "async-trait", "toml", "futures", "rand"]
 
 [dependencies]
-vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
