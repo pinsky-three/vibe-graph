@@ -79,7 +79,7 @@ serve: ## Serve with production build
 # Release
 # =============================================================================
 
-PUBLISH_CRATES ?= vibe-graph-core vibe-graph-git vibe-graph-ops vibe-graph-mcp vibe-graph-api vibe-graph-cli
+PUBLISH_CRATES ?= vibe-graph-core vibe-graph-git vibe-graph-layout-gpu vibe-graph-automaton vibe-graph-ops vibe-graph-viz vibe-graph-mcp vibe-graph-api vibe-graph-cli
 
 bump-auto: ## Bump patch versions for crates changed since last tag
 	@set -eu; \
@@ -106,18 +106,11 @@ bump-auto: ## Bump patch versions for crates changed since last tag
 
 release: ## Publish crates to crates.io (dependency order)
 	@echo "Publishing workspace crates (dependency order)..."
-	@echo "1/6: vibe-graph-core"
-	cargo publish -p vibe-graph-core
-	@echo "2/6: vibe-graph-git"
-	cargo publish -p vibe-graph-git
-	@echo "3/6: vibe-graph-ops"
-	cargo publish -p vibe-graph-ops
-	@echo "4/6: vibe-graph-mcp"
-	cargo publish -p vibe-graph-mcp
-	@echo "5/6: vibe-graph-api"
-	cargo publish -p vibe-graph-api
-	@echo "6/6: vibe-graph-cli"
-	cargo publish -p vibe-graph-cli
+	@n=1; for crate in $(PUBLISH_CRATES); do \
+		echo "$$n/$$(echo $(PUBLISH_CRATES) | wc -w | tr -d ' '): $$crate"; \
+		cargo publish -p "$$crate"; \
+		n=$$((n + 1)); \
+	done
 	@echo "✅ All crates published!"
 
 release-auto: bump-auto release ## Auto-bump (changed crates) then publish
