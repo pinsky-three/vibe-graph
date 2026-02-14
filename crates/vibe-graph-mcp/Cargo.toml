@@ -14,7 +14,7 @@ http-server = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-h
 [dependencies]
 vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.2", path = "../vibe-graph-ops" }
-vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
+vibe-graph-git = { version = "0.3.1", path = "../vibe-graph-git" }
 
 # MCP SDK
 rmcp = { version = "0.13", features = ["server"] }

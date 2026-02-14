@@ -26,7 +26,7 @@ directories.workspace = true
 
 # Local crates
 vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
-vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
+vibe-graph-git = { version = "0.3.1", path = "../vibe-graph-git" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
