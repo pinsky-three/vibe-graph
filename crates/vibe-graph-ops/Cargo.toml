@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-ops"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 description = "Operations layer for Vibe-Graph - provides typed APIs for sync, scan, graph building"
 license = "MIT"
