@@ -12,8 +12,8 @@ default = ["http-server"]
 http-server = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-http", "dep:tokio-util"]
 
 [dependencies]
-vibe-graph-core = { version = "0.2.1", path = "../vibe-graph-core" }
-vibe-graph-ops = { version = "0.2.1", path = "../vibe-graph-ops" }
+vibe-graph-core = { version = "0.2.2", path = "../vibe-graph-core" }
+vibe-graph-ops = { version = "0.2.2", path = "../vibe-graph-ops" }
 vibe-graph-git = { version = "0.3.0", path = "../vibe-graph-git" }
 
 # MCP SDK

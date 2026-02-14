@@ -5815,7 +5815,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vibe-graph-api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "http-body-util",
@@ -5855,7 +5855,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-graph-cli"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "anyhow",
  "askama",
@@ -5896,7 +5896,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-graph-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "petgraph",
  "serde",
@@ -5993,7 +5993,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-graph-ops"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "directories",
@@ -6046,7 +6046,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-graph-viz"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
