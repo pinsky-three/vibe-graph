@@ -337,6 +337,9 @@ async fn run(
     let graph = load_or_build_graph(ctx, &path).await?;
 
     // 3. Collect changed files
+    // Use OpsContext.git_changes() which handles multi-repo projects correctly:
+    // it loads the Project from .self/project.json, iterates all repositories,
+    // and aggregates git changes with absolute paths.
     let changed_files: Vec<PathBuf> = if !explicit_files.is_empty() {
         println!(
             "🎯 Seeding from {} explicit file(s)...",
@@ -344,14 +347,21 @@ async fn run(
         );
         explicit_files
     } else if from_git || explicit_files.is_empty() {
-        // Default: use git changes
-        match vibe_graph_git::get_git_changes(&path) {
-            Ok(snapshot) if !snapshot.changes.is_empty() => {
+        let request = vibe_graph_ops::GitChangesRequest::new(&path);
+        match ctx.git_changes(request).await {
+            Ok(response) if !response.changes.changes.is_empty() => {
                 let files: Vec<PathBuf> =
-                    snapshot.changes.iter().map(|c| c.path.clone()).collect();
-                println!("🔍 Found {} git change(s) to seed:", files.len());
-                for f in &files {
+                    response.changes.changes.iter().map(|c| c.path.clone()).collect();
+                println!(
+                    "🔍 Found {} git change(s) across {} repo(s) to seed:",
+                    files.len(),
+                    count_unique_repos(&files),
+                );
+                for f in files.iter().take(20) {
                     println!("   {}", f.display());
+                }
+                if files.len() > 20 {
+                    println!("   ... and {} more", files.len() - 20);
                 }
                 files
             }
@@ -528,4 +538,20 @@ async fn load_or_build_graph(ctx: &OpsContext, path: &Path) -> Result<vibe_graph
         );
         Ok(response.graph)
     }
+}
+
+/// Count how many distinct git repos the changed files come from.
+/// Uses a heuristic: walks up from each file to find the nearest `.git/` directory.
+fn count_unique_repos(files: &[PathBuf]) -> usize {
+    let mut repo_roots: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for file in files {
+        let mut dir = file.clone();
+        while dir.pop() {
+            if dir.join(".git").exists() {
+                repo_roots.insert(dir);
+                break;
+            }
+        }
+    }
+    repo_roots.len().max(1) // At least 1 if we have files
 }
