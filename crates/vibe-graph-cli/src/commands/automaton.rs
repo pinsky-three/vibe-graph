@@ -695,3 +695,268 @@ fn count_unique_repos(files: &[PathBuf]) -> usize {
     }
     repo_roots.len().max(1) // At least 1 if we have files
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use vibe_graph_automaton::{
+        AutomatonDescription, AutomatonStore, ConfigDefaults, ConfigMeta, ConfigSource,
+        InheritanceMode, NodeConfig, NodeKind, RuleConfig, RuleType,
+    };
+
+    // ── Test helpers ─────────────────────────────────────────────────────
+
+    /// Create a minimal but valid AutomatonDescription for testing.
+    fn sample_description(name: &str) -> AutomatonDescription {
+        AutomatonDescription {
+            meta: ConfigMeta {
+                name: name.to_string(),
+                generated_at: Some("2025-01-01T00:00:00Z".to_string()),
+                source: ConfigSource::Generation,
+                version: "1.0".to_string(),
+            },
+            defaults: ConfigDefaults {
+                initial_activation: 0.0,
+                default_rule: "identity".to_string(),
+                damping_coefficient: 0.5,
+                inheritance_mode: InheritanceMode::Compose,
+            },
+            nodes: vec![
+                NodeConfig {
+                    id: 1,
+                    path: "src/main.rs".to_string(),
+                    kind: NodeKind::File,
+                    stability: Some(1.0),
+                    rule: Some("entry_point".to_string()),
+                    payload: None,
+                    inheritance_mode: None,
+                    local_rules: None,
+                },
+                NodeConfig {
+                    id: 2,
+                    path: "src/lib.rs".to_string(),
+                    kind: NodeKind::File,
+                    stability: Some(0.8),
+                    rule: Some("entry_point".to_string()),
+                    payload: None,
+                    inheritance_mode: None,
+                    local_rules: None,
+                },
+                NodeConfig {
+                    id: 3,
+                    path: "src/utils.rs".to_string(),
+                    kind: NodeKind::File,
+                    stability: Some(0.3),
+                    rule: Some("identity".to_string()),
+                    payload: None,
+                    inheritance_mode: None,
+                    local_rules: None,
+                },
+            ],
+            rules: vec![
+                RuleConfig {
+                    name: "identity".to_string(),
+                    rule_type: RuleType::Builtin,
+                    system_prompt: None,
+                    params: None,
+                },
+                RuleConfig {
+                    name: "entry_point".to_string(),
+                    rule_type: RuleType::Builtin,
+                    system_prompt: None,
+                    params: None,
+                },
+            ],
+        }
+    }
+
+    /// Set up a temp dir with a saved AutomatonDescription in .self/automaton/.
+    fn setup_temp_store(name: &str) -> (TempDir, AutomatonDescription) {
+        let tmp = TempDir::new().expect("failed to create temp dir");
+        let desc = sample_description(name);
+        let store = AutomatonStore::new(tmp.path());
+        store.save_description(&desc).expect("failed to save description");
+        (tmp, desc)
+    }
+
+    // ── count_unique_repos tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_count_unique_repos_empty() {
+        let files: Vec<PathBuf> = vec![];
+        // Empty input still returns 1 (the .max(1) guard)
+        assert_eq!(count_unique_repos(&files), 1);
+    }
+
+    #[test]
+    fn test_count_unique_repos_single_repo() {
+        // Create a temp dir with a .git marker
+        let tmp = TempDir::new().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+
+        let file1 = tmp.path().join("src").join("main.rs");
+        let file2 = tmp.path().join("src").join("lib.rs");
+        std::fs::create_dir_all(file1.parent().unwrap()).unwrap();
+        std::fs::write(&file1, "").unwrap();
+        std::fs::write(&file2, "").unwrap();
+
+        assert_eq!(count_unique_repos(&[file1, file2]), 1);
+    }
+
+    #[test]
+    fn test_count_unique_repos_multiple_repos() {
+        // Create two temp dirs, each with their own .git
+        let tmp1 = TempDir::new().unwrap();
+        let tmp2 = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp1.path().join(".git")).unwrap();
+        std::fs::create_dir_all(tmp2.path().join(".git")).unwrap();
+
+        let file1 = tmp1.path().join("a.rs");
+        let file2 = tmp2.path().join("b.rs");
+        std::fs::write(&file1, "").unwrap();
+        std::fs::write(&file2, "").unwrap();
+
+        assert_eq!(count_unique_repos(&[file1, file2]), 2);
+    }
+
+    #[test]
+    fn test_count_unique_repos_no_git_dir_found() {
+        // Files with no .git ancestor — heuristic finds nothing, returns max(0,1) = 1
+        let file = PathBuf::from("/nonexistent/path/file.rs");
+        assert_eq!(count_unique_repos(&[file]), 1);
+    }
+
+    // ── show tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_show_no_description() {
+        let tmp = TempDir::new().unwrap();
+        // No .self/automaton/ directory at all
+        let result = show(tmp.path());
+        assert!(result.is_ok(), "show should return Ok even with no description");
+    }
+
+    #[test]
+    fn test_show_with_valid_description() {
+        let (tmp, _desc) = setup_temp_store("test-show");
+        let result = show(tmp.path());
+        assert!(result.is_ok(), "show should succeed with a valid description");
+    }
+
+    #[test]
+    fn test_show_with_empty_nodes() {
+        let tmp = TempDir::new().unwrap();
+        let mut desc = sample_description("empty-nodes");
+        desc.nodes.clear();
+        let store = AutomatonStore::new(tmp.path());
+        store.save_description(&desc).unwrap();
+
+        let result = show(tmp.path());
+        assert!(result.is_ok(), "show should handle empty node list gracefully");
+    }
+
+    // ── describe tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_describe_no_description() {
+        let tmp = TempDir::new().unwrap();
+        let result = describe(tmp.path(), None, false, false);
+        assert!(result.is_ok(), "describe should return Ok even with no description");
+    }
+
+    #[test]
+    fn test_describe_to_stdout() {
+        let (tmp, _desc) = setup_temp_store("test-describe");
+        let result = describe(tmp.path(), None, false, false);
+        assert!(result.is_ok(), "describe to stdout should succeed");
+    }
+
+    #[test]
+    fn test_describe_to_output_file() {
+        let (tmp, _desc) = setup_temp_store("test-describe-file");
+        let out_path = tmp.path().join("contracts.md");
+
+        let result = describe(tmp.path(), Some(out_path.clone()), false, false);
+        assert!(result.is_ok());
+        assert!(out_path.exists(), "output file should be created");
+
+        let content = std::fs::read_to_string(&out_path).unwrap();
+        assert!(!content.is_empty(), "output file should have content");
+    }
+
+    #[test]
+    fn test_describe_cursor_rule_generation() {
+        let (tmp, _desc) = setup_temp_store("test-cursor-rule");
+
+        let result = describe(tmp.path(), None, false, true);
+        assert!(result.is_ok());
+
+        let rule_path = tmp.path().join(".cursor").join("rules").join("automaton-contracts.mdc");
+        assert!(rule_path.exists(), "cursor rule file should be created");
+
+        let content = std::fs::read_to_string(&rule_path).unwrap();
+        assert!(content.starts_with("---"), "should have frontmatter");
+        assert!(content.contains("test-cursor-rule"), "should contain project name");
+        assert!(content.contains("alwaysApply: true"), "should be always-applied");
+    }
+
+    #[test]
+    fn test_describe_cursor_rule_creates_directory() {
+        let (tmp, _desc) = setup_temp_store("test-mkdir");
+        let rules_dir = tmp.path().join(".cursor").join("rules");
+        assert!(!rules_dir.exists(), "rules dir should not exist yet");
+
+        let result = describe(tmp.path(), None, false, true);
+        assert!(result.is_ok());
+        assert!(rules_dir.exists(), "rules dir should be created");
+    }
+
+    // ── description serialization round-trip via store ────────────────────
+
+    #[test]
+    fn test_store_save_load_roundtrip() {
+        let (tmp, original) = setup_temp_store("roundtrip");
+        let store = AutomatonStore::new(tmp.path());
+
+        assert!(store.has_description());
+        let loaded = store.load_description().unwrap().expect("should load");
+        assert_eq!(loaded.meta.name, original.meta.name);
+        assert_eq!(loaded.nodes.len(), original.nodes.len());
+        assert_eq!(loaded.rules.len(), original.rules.len());
+    }
+
+    // ── sample_description validity tests ────────────────────────────────
+
+    #[test]
+    fn test_sample_description_structure() {
+        let desc = sample_description("structural");
+        assert_eq!(desc.nodes.len(), 3);
+        assert_eq!(desc.rules.len(), 2);
+        assert_eq!(desc.meta.source, ConfigSource::Generation);
+
+        // All nodes should have stability
+        for node in &desc.nodes {
+            assert!(node.stability.is_some());
+        }
+
+        // Entry point nodes should have high stability
+        let entry_points: Vec<_> = desc.nodes.iter()
+            .filter(|n| n.rule.as_deref() == Some("entry_point"))
+            .collect();
+        assert_eq!(entry_points.len(), 2);
+        for ep in &entry_points {
+            assert!(ep.stability.unwrap() >= 0.8);
+        }
+    }
+
+    #[test]
+    fn test_sample_description_json_roundtrip() {
+        let desc = sample_description("json-test");
+        let json = desc.to_json().expect("serialization should work");
+        let restored = AutomatonDescription::from_json(&json).expect("deserialization should work");
+        assert_eq!(restored.meta.name, "json-test");
+        assert_eq!(restored.nodes.len(), 3);
+    }
+}
