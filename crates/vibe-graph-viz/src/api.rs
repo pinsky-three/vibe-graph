@@ -1070,3 +1070,396 @@ fn detect_language_native(path: &std::path::Path) -> &'static str {
         })
         .unwrap_or("txt")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    // ── OperationState tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_operation_state_default_is_idle() {
+        let state = OperationState::default();
+        assert_eq!(state, OperationState::Idle);
+    }
+
+    #[test]
+    fn test_operation_state_equality() {
+        assert_eq!(OperationState::Loading, OperationState::Loading);
+        assert_ne!(OperationState::Idle, OperationState::Error);
+        assert_ne!(OperationState::Success, OperationState::Loading);
+    }
+
+    // ── ApiClient tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_api_client_default() {
+        let client = ApiClient::new();
+        assert_eq!(client.path, ".");
+        assert_eq!(client.state, OperationState::Idle);
+        assert!(client.message.is_empty());
+        assert!(client.error.is_none());
+        assert!(client.status.is_none());
+        assert!(!client.is_loading());
+    }
+
+    #[test]
+    fn test_api_client_is_loading() {
+        let mut client = ApiClient::new();
+        assert!(!client.is_loading());
+
+        client.state = OperationState::Loading;
+        assert!(client.is_loading());
+
+        client.state = OperationState::Success;
+        assert!(!client.is_loading());
+    }
+
+    #[test]
+    fn test_api_client_poll_results_native_returns_false() {
+        let mut client = ApiClient::new();
+        // Native poll_results is a stub that always returns false
+        assert!(!client.poll_results());
+    }
+
+    #[test]
+    fn test_api_client_trigger_sync_native_sets_error() {
+        let mut client = ApiClient::new();
+        client.trigger_sync();
+        assert_eq!(client.state, OperationState::Error);
+        assert!(client.error.is_some());
+        assert!(client.error.as_ref().unwrap().contains("native"));
+    }
+
+    #[test]
+    fn test_api_client_trigger_graph_native_sets_error() {
+        let mut client = ApiClient::new();
+        client.trigger_graph();
+        assert_eq!(client.state, OperationState::Error);
+        assert!(client.error.is_some());
+    }
+
+    #[test]
+    fn test_api_client_trigger_status_native_sets_error() {
+        let mut client = ApiClient::new();
+        client.trigger_status();
+        assert_eq!(client.state, OperationState::Error);
+        assert!(client.error.is_some());
+    }
+
+    #[test]
+    fn test_api_client_trigger_clean_native_sets_error() {
+        let mut client = ApiClient::new();
+        client.trigger_clean();
+        assert_eq!(client.state, OperationState::Error);
+        assert!(client.error.is_some());
+    }
+
+    // ── Native stub tests (async) ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_native_stubs_return_error() {
+        assert!(fetch_graph().await.is_err());
+        assert!(fetch_git_changes().await.is_err());
+        assert!(trigger_sync(".", false).await.is_err());
+        assert!(build_graph(".", false).await.is_err());
+        assert!(get_status(".").await.is_err());
+        assert!(clean(".").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_native_git_stubs_return_error() {
+        assert!(git_repos().await.is_err());
+        assert!(git_add(None, vec![]).await.is_err());
+        assert!(git_commit(None, "msg").await.is_err());
+        assert!(git_reset(None, vec![]).await.is_err());
+        assert!(git_branches(None).await.is_err());
+        assert!(git_checkout(None, "main").await.is_err());
+        assert!(git_log(None, 10).await.is_err());
+        assert!(git_diff(None, false).await.is_err());
+    }
+
+    // ── detect_language_native tests ─────────────────────────────────────
+
+    #[test]
+    fn test_detect_language_by_extension() {
+        assert_eq!(detect_language_native(Path::new("main.rs")), "rs");
+        assert_eq!(detect_language_native(Path::new("app.py")), "py");
+        assert_eq!(detect_language_native(Path::new("stubs.pyi")), "py");
+        assert_eq!(detect_language_native(Path::new("index.ts")), "ts");
+        assert_eq!(detect_language_native(Path::new("index.tsx")), "ts");
+        assert_eq!(detect_language_native(Path::new("app.js")), "js");
+        assert_eq!(detect_language_native(Path::new("app.jsx")), "js");
+        assert_eq!(detect_language_native(Path::new("app.mjs")), "js");
+        assert_eq!(detect_language_native(Path::new("data.json")), "json");
+        assert_eq!(detect_language_native(Path::new("config.yaml")), "yaml");
+        assert_eq!(detect_language_native(Path::new("config.yml")), "yaml");
+        assert_eq!(detect_language_native(Path::new("page.html")), "html");
+        assert_eq!(detect_language_native(Path::new("page.htm")), "html");
+        assert_eq!(detect_language_native(Path::new("style.css")), "css");
+        assert_eq!(detect_language_native(Path::new("style.scss")), "css");
+        assert_eq!(detect_language_native(Path::new("run.sh")), "sh");
+        assert_eq!(detect_language_native(Path::new("query.sql")), "sql");
+        assert_eq!(detect_language_native(Path::new("main.c")), "c");
+        assert_eq!(detect_language_native(Path::new("main.h")), "c");
+        assert_eq!(detect_language_native(Path::new("main.cpp")), "cpp");
+        assert_eq!(detect_language_native(Path::new("main.go")), "go");
+        assert_eq!(detect_language_native(Path::new("Main.java")), "java");
+        assert_eq!(detect_language_native(Path::new("doc.xml")), "xml");
+        assert_eq!(detect_language_native(Path::new("icon.svg")), "xml");
+        assert_eq!(detect_language_native(Path::new("README.md")), "md");
+        assert_eq!(detect_language_native(Path::new("doc.markdown")), "md");
+        assert_eq!(detect_language_native(Path::new("pyproject.toml")), "toml");
+    }
+
+    #[test]
+    fn test_detect_language_special_filenames() {
+        assert_eq!(detect_language_native(Path::new("Dockerfile")), "dockerfile");
+        assert_eq!(detect_language_native(Path::new("Makefile")), "sh");
+        assert_eq!(detect_language_native(Path::new("GNUmakefile")), "sh");
+        assert_eq!(detect_language_native(Path::new("Cargo.toml")), "toml");
+        assert_eq!(detect_language_native(Path::new("Cargo.lock")), "toml");
+        assert_eq!(detect_language_native(Path::new(".gitignore")), "txt");
+        assert_eq!(detect_language_native(Path::new(".dockerignore")), "txt");
+    }
+
+    #[test]
+    fn test_detect_language_unknown_extension() {
+        assert_eq!(detect_language_native(Path::new("data.xyz")), "txt");
+        assert_eq!(detect_language_native(Path::new("binary.bin")), "txt");
+    }
+
+    #[test]
+    fn test_detect_language_no_extension() {
+        assert_eq!(detect_language_native(Path::new("README")), "txt");
+    }
+
+    // ── fetch_file_content_native tests ──────────────────────────────────
+
+    #[test]
+    fn test_fetch_file_content_native_happy_path() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("hello.rs");
+        std::fs::write(&file_path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+
+        let result = fetch_file_content_native(&file_path, None);
+        assert!(result.is_ok());
+
+        let resp = result.unwrap();
+        assert_eq!(resp.language, "rs");
+        assert_eq!(resp.total_lines, 3);
+        assert!(resp.content.contains("fn main()"));
+        assert!(resp.size_bytes > 0);
+        assert!(resp.path.contains("hello.rs"));
+    }
+
+    #[test]
+    fn test_fetch_file_content_native_with_root_path() {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let file_path = src_dir.join("lib.rs");
+        std::fs::write(&file_path, "pub mod api;\n").unwrap();
+
+        // Use relative path with root
+        let relative = Path::new("src/lib.rs");
+        let result = fetch_file_content_native(relative, Some(tmp.path()));
+        assert!(result.is_ok());
+
+        let resp = result.unwrap();
+        assert_eq!(resp.language, "rs");
+        assert!(resp.content.contains("pub mod api"));
+    }
+
+    #[test]
+    fn test_fetch_file_content_native_nonexistent_file() {
+        let result = fetch_file_content_native(
+            Path::new("/nonexistent/path/to/file.rs"),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Read error"));
+    }
+
+    #[test]
+    fn test_fetch_file_content_native_empty_file() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("empty.txt");
+        std::fs::write(&file_path, "").unwrap();
+
+        let result = fetch_file_content_native(&file_path, None);
+        assert!(result.is_ok());
+
+        let resp = result.unwrap();
+        assert!(resp.content.is_empty());
+        assert_eq!(resp.total_lines, 0);
+        assert_eq!(resp.size_bytes, 0);
+        assert_eq!(resp.language, "txt");
+    }
+
+    // ── Serde tests for API types ────────────────────────────────────────
+
+    #[test]
+    fn test_workspace_kind_single_repo_deserialize() {
+        let json = r#"{"type": "single_repo"}"#;
+        let kind: WorkspaceKind = serde_json::from_str(json).unwrap();
+        assert!(matches!(kind, WorkspaceKind::SingleRepo));
+    }
+
+    #[test]
+    fn test_workspace_kind_multi_repo_deserialize() {
+        let json = r#"{"type": "multi_repo", "repo_count": 3}"#;
+        let kind: WorkspaceKind = serde_json::from_str(json).unwrap();
+        assert!(matches!(kind, WorkspaceKind::MultiRepo { repo_count: 3 }));
+    }
+
+    #[test]
+    fn test_workspace_kind_directory_deserialize() {
+        let json = r#"{"type": "directory"}"#;
+        let kind: WorkspaceKind = serde_json::from_str(json).unwrap();
+        assert!(matches!(kind, WorkspaceKind::Directory));
+    }
+
+    #[test]
+    fn test_status_response_deserialize() {
+        let json = r#"{
+            "workspace": { "name": "test", "root": "/tmp", "kind": {"type": "single_repo"} },
+            "store_exists": true,
+            "manifest": null
+        }"#;
+        let resp: StatusResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.workspace.name, "test");
+        assert!(resp.store_exists);
+        assert!(resp.manifest.is_none());
+    }
+
+    #[test]
+    fn test_status_response_with_manifest() {
+        let json = r#"{
+            "workspace": { "name": "vg", "root": "/code", "kind": {"type": "single_repo"} },
+            "store_exists": true,
+            "manifest": {
+                "name": "vg",
+                "repo_count": 1,
+                "source_count": 50,
+                "total_size": 1024,
+                "remote": "https://github.com/org/repo.git"
+            }
+        }"#;
+        let resp: StatusResponse = serde_json::from_str(json).unwrap();
+        let manifest = resp.manifest.unwrap();
+        assert_eq!(manifest.name, "vg");
+        assert_eq!(manifest.repo_count, 1);
+        assert_eq!(manifest.source_count, 50);
+        assert_eq!(manifest.remote.unwrap(), "https://github.com/org/repo.git");
+    }
+
+    #[test]
+    fn test_git_add_request_serialization() {
+        let req = GitAddRequest {
+            repo: Some("my-repo".to_string()),
+            paths: vec!["src/main.rs".to_string()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("my-repo"));
+        assert!(json.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_git_add_request_skip_none_repo() {
+        let req = GitAddRequest {
+            repo: None,
+            paths: vec!["file.rs".to_string()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("repo"));
+    }
+
+    #[test]
+    fn test_git_commit_request_skip_none_repo() {
+        let req = GitCommitRequest {
+            repo: None,
+            message: "fix: stuff".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("repo"));
+        assert!(json.contains("fix: stuff"));
+    }
+
+    #[test]
+    fn test_api_response_deserialize() {
+        let json = r#"{"data": {"cleaned": true}}"#;
+        let resp: ApiResponse<CleanResponse> = serde_json::from_str(json).unwrap();
+        assert!(resp.data.cleaned);
+    }
+
+    #[test]
+    fn test_git_branch_deserialize() {
+        let json = r#"{
+            "name": "main",
+            "is_current": true,
+            "is_remote": false,
+            "commit_id": "abc123"
+        }"#;
+        let branch: GitBranch = serde_json::from_str(json).unwrap();
+        assert_eq!(branch.name, "main");
+        assert!(branch.is_current);
+        assert!(!branch.is_remote);
+        assert_eq!(branch.commit_id.unwrap(), "abc123");
+    }
+
+    #[test]
+    fn test_git_log_entry_deserialize() {
+        let json = r#"{
+            "commit_id": "abc123def456",
+            "short_id": "abc123d",
+            "message": "feat: add tests",
+            "author": "dev",
+            "author_email": "dev@example.com",
+            "timestamp": 1700000000
+        }"#;
+        let entry: GitLogEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.short_id, "abc123d");
+        assert_eq!(entry.author, "dev");
+        assert_eq!(entry.timestamp, 1700000000);
+    }
+
+    #[test]
+    fn test_file_content_response_deserialize() {
+        let json = r#"{
+            "content": "fn main() {}",
+            "language": "rs",
+            "path": "/src/main.rs",
+            "total_lines": 1,
+            "size_bytes": 12
+        }"#;
+        let resp: FileContentResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.language, "rs");
+        assert_eq!(resp.total_lines, 1);
+        assert_eq!(resp.size_bytes, 12);
+    }
+
+    #[test]
+    fn test_op_result_clone() {
+        let op = OpResult::SyncDone { repos: 1, files: 10 };
+        let cloned = op.clone();
+        if let OpResult::SyncDone { repos, files } = cloned {
+            assert_eq!(repos, 1);
+            assert_eq!(files, 10);
+        } else {
+            panic!("clone should preserve variant");
+        }
+    }
+
+    #[test]
+    fn test_op_result_error_variant() {
+        let op = OpResult::Error("something broke".to_string());
+        if let OpResult::Error(msg) = op {
+            assert_eq!(msg, "something broke");
+        } else {
+            panic!("should be Error");
+        }
+    }
+}

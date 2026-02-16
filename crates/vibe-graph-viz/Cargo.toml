@@ -49,6 +49,8 @@ gloo-timers = "0.3"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true }
 
 [[example]]
 name = "automaton_viz"

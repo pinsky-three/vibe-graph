@@ -6062,6 +6062,8 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
  "tracing-subscriber",
  "vibe-graph-automaton",
  "vibe-graph-core",
