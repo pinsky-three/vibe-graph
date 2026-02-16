@@ -5,6 +5,7 @@ pub mod automaton;
 pub mod compose;
 pub mod config;
 pub mod remote;
+pub mod run;
 pub mod serve;
 
 #[cfg(feature = "native-viz")]

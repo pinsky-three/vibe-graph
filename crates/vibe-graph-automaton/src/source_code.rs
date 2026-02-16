@@ -677,10 +677,9 @@ impl Rule for DampedPropagationRule {
             "damping_factor".to_string(),
             format!("{:.3}", damping_factor),
         );
-        new_state.annotations.insert(
-            "stability".to_string(),
-            format!("{:.2}", stability),
-        );
+        new_state
+            .annotations
+            .insert("stability".to_string(), format!("{:.2}", stability));
 
         Ok(RuleOutcome::Transition(new_state))
     }
@@ -718,7 +717,9 @@ pub fn apply_description(
     let mut automaton = GraphAutomaton::with_config(temporal, config);
 
     // Register rules
-    automaton.register_rule(Arc::new(DampedPropagationRule::from_description(description)));
+    automaton.register_rule(Arc::new(DampedPropagationRule::from_description(
+        description,
+    )));
     automaton.register_rule(Arc::new(ImportPropagationRule::default()));
     automaton.register_rule(Arc::new(ModuleActivationRule::default()));
     automaton.register_rule(Arc::new(ChangeProximityRule::default()));
@@ -819,19 +820,14 @@ pub fn run_impact_analysis(
         }
         let stabilized = ticks < mt as u64;
 
-        return build_report(
-            &automaton,
-            description,
-            changed_files,
-            ticks,
-            stabilized,
-        );
+        return build_report(&automaton, description, changed_files, ticks, stabilized);
     }
 
     // Run to stability
     let results = automaton.run()?;
     let ticks = results.len() as u64;
-    let stabilized = automaton.is_stable() || results.last().map(|r| r.transitions == 0).unwrap_or(true);
+    let stabilized =
+        automaton.is_stable() || results.last().map(|r| r.transitions == 0).unwrap_or(true);
 
     build_report(&automaton, description, changed_files, ticks, stabilized)
 }
@@ -850,11 +846,7 @@ fn build_report(
         .map(|node| {
             let node_id = node.id().0;
             let activation = node.current_state().activation;
-            let is_changed = node
-                .current_state()
-                .annotations
-                .get("git:changed")
-                .is_some();
+            let is_changed = node.current_state().annotations.contains_key("git:changed");
 
             // Look up description config for this node
             let node_config = description.get_node(node_id);
@@ -887,10 +879,22 @@ fn build_report(
 
     // Compute stats
     let total = ranking.len();
-    let high = ranking.iter().filter(|n| n.impact_level == ImpactLevel::High).count();
-    let medium = ranking.iter().filter(|n| n.impact_level == ImpactLevel::Medium).count();
-    let low = ranking.iter().filter(|n| n.impact_level == ImpactLevel::Low).count();
-    let none = ranking.iter().filter(|n| n.impact_level == ImpactLevel::None).count();
+    let high = ranking
+        .iter()
+        .filter(|n| n.impact_level == ImpactLevel::High)
+        .count();
+    let medium = ranking
+        .iter()
+        .filter(|n| n.impact_level == ImpactLevel::Medium)
+        .count();
+    let low = ranking
+        .iter()
+        .filter(|n| n.impact_level == ImpactLevel::Low)
+        .count();
+    let none = ranking
+        .iter()
+        .filter(|n| n.impact_level == ImpactLevel::None)
+        .count();
     let avg_activation = if total > 0 {
         ranking.iter().map(|n| n.activation).sum::<f32>() / total as f32
     } else {
@@ -901,7 +905,10 @@ fn build_report(
         project_name: description.meta.name.clone(),
         ticks_executed: ticks,
         stabilized,
-        changed_files: changed_files.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+        changed_files: changed_files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect(),
         impact_ranking: ranking,
         stats: ImpactStats {
             total_nodes: total,
@@ -966,7 +973,11 @@ pub fn format_impact_report(report: &ImpactReport) -> String {
         out.push_str("|--------|-----------|-----------|------|------|\n");
 
         for node in &show_nodes {
-            let changed_marker = if node.is_changed { " **(changed)**" } else { "" };
+            let changed_marker = if node.is_changed {
+                " **(changed)**"
+            } else {
+                ""
+            };
             out.push_str(&format!(
                 "| {} | {:.3} | {:.2} | {} | `{}`{} |\n",
                 node.impact_level.symbol(),
@@ -1039,8 +1050,12 @@ pub fn format_behavioral_contracts(
         "# Behavioral Contracts: {}\n\n",
         description.meta.name
     ));
-    out.push_str("Each module in this codebase has a role, stability level, and behavioral rules.\n");
-    out.push_str("AI agents and developers should respect these contracts when making changes.\n\n");
+    out.push_str(
+        "Each module in this codebase has a role, stability level, and behavioral rules.\n",
+    );
+    out.push_str(
+        "AI agents and developers should respect these contracts when making changes.\n\n",
+    );
 
     out.push_str(&format!(
         "## Defaults\n\n\
@@ -1079,11 +1094,7 @@ pub fn format_behavioral_contracts(
 
         for node in nodes {
             let impact = report
-                .and_then(|r| {
-                    r.impact_ranking
-                        .iter()
-                        .find(|n| n.node_id == node.id)
-                })
+                .and_then(|r| r.impact_ranking.iter().find(|n| n.node_id == node.id))
                 .map(|n| format!("{} {:.3}", n.impact_level.symbol(), n.activation))
                 .unwrap_or_else(|| "—".to_string());
 
@@ -1188,7 +1199,9 @@ pub fn run_evolution_plan(
 
     // Register same rules as impact analysis — the propagation mechanics are identical,
     // only the seed strategy differs.
-    automaton.register_rule(Arc::new(DampedPropagationRule::from_description(description)));
+    automaton.register_rule(Arc::new(DampedPropagationRule::from_description(
+        description,
+    )));
     automaton.register_rule(Arc::new(ImportPropagationRule::default()));
     automaton.register_rule(Arc::new(ModuleActivationRule::default()));
 
@@ -1201,8 +1214,8 @@ pub fn run_evolution_plan(
     }
 
     for node in &graph.nodes {
-        let is_test = matches!(node.kind, vibe_graph_core::GraphNodeKind::Test)
-            || node.name.contains("test");
+        let is_test =
+            matches!(node.kind, vibe_graph_core::GraphNodeKind::Test) || node.name.contains("test");
         if is_test {
             // Mark all nodes this test imports as "has test neighbor"
             for edge in &graph.edges {
@@ -1234,8 +1247,12 @@ pub fn run_evolution_plan(
         let initial_activation = gap * (1.0 + 3.0 * nd_in / max_in);
 
         let mut state = StateData::with_activation(json!(null), initial_activation);
-        state.annotations.insert("role".to_string(), role.to_string());
-        state.annotations.insert("gap".to_string(), format!("{:.3}", gap));
+        state
+            .annotations
+            .insert("role".to_string(), role.to_string());
+        state
+            .annotations
+            .insert("gap".to_string(), format!("{:.3}", gap));
         state.annotations.insert(
             "target".to_string(),
             format!("{:.2}", objective.target_for(role)),

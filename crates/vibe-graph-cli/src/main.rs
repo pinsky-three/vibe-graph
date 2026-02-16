@@ -223,6 +223,52 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Run the vibe-graph system.
+    ///
+    /// Bootstraps the full pipeline (sync → graph → description) if needed,
+    /// then starts the automaton runtime seeded from current git changes.
+    /// The process stays alive, watching for changes and re-running analysis.
+    ///
+    /// Examples:
+    ///   vg run                         # bootstrap + watch (default)
+    ///   vg run --once                  # single pass, then exit
+    ///   vg run --once --json           # CI mode
+    ///   vg run --interval 10           # poll every 10s
+    ///   vg run --force                 # rebuild all .self artifacts
+    Run {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Force full rebuild (sync + graph + description from scratch).
+        #[arg(long)]
+        force: bool,
+
+        /// Run once and exit (no watch loop).
+        #[arg(long)]
+        once: bool,
+
+        /// Poll interval in seconds for change detection.
+        #[arg(long, default_value = "5")]
+        interval: u64,
+
+        /// Output as JSON (implies --once).
+        #[arg(long)]
+        json: bool,
+
+        /// Save snapshot after each analysis pass.
+        #[arg(long)]
+        snapshot: bool,
+
+        /// Show top N impacted files.
+        #[arg(long, default_value = "20")]
+        top: usize,
+
+        /// Maximum ticks per automaton run.
+        #[arg(long)]
+        max_ticks: Option<usize>,
+    },
+
     /// Work with automaton descriptions (generate, infer, run).
     #[command(subcommand)]
     Automaton(AutomatonCommands),
@@ -549,16 +595,16 @@ async fn main() -> Result<()> {
     };
     let ctx = OpsContext::new(ops_config);
 
-    // Default to sync if no command given
-    let command = cli.command.unwrap_or(Commands::Sync {
-        source: ".".to_string(),
-        output: None,
-        format: "md".to_string(),
-        no_save: false,
+    // Default to `run` if no command given — "boot the system"
+    let command = cli.command.unwrap_or(Commands::Run {
+        path: PathBuf::from("."),
+        force: false,
+        once: false,
+        interval: 5,
+        json: false,
         snapshot: false,
-        ignore: vec![],
-        ignore_file: None,
-        cache: false,
+        top: 20,
+        max_ticks: None,
     });
 
     match command {
@@ -761,6 +807,22 @@ async fn main() -> Result<()> {
             } else {
                 println!("No .self folder found");
             }
+        }
+
+        Commands::Run {
+            path,
+            force,
+            once,
+            interval,
+            json,
+            snapshot,
+            top,
+            max_ticks,
+        } => {
+            commands::run::execute(
+                &ctx, &path, force, once, interval, json, snapshot, top, max_ticks,
+            )
+            .await?;
         }
 
         Commands::Automaton(automaton_cmd) => {
