@@ -13,10 +13,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use vibe_graph_automaton::{
-    format_evolution_plan, run_evolution_plan, run_impact_analysis, AutomatonStore,
-    DescriptionGenerator, GeneratorConfig, ImpactReport, StabilityObjective,
+    format_behavioral_contracts, format_evolution_plan, run_evolution_plan, run_impact_analysis,
+    AutomatonDescription, AutomatonStore, DescriptionGenerator, EvolutionItem, GeneratorConfig,
+    ImpactReport, StabilityObjective,
 };
-use vibe_graph_core::SourceCodeGraph;
+use vibe_graph_core::{NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
 
 // ─── Public entry point ──────────────────────────────────────────────────────
@@ -297,7 +298,9 @@ fn print_delta(report: &ImpactReport, top: usize, timestamp: &str) {
 fn print_controls() {
     eprintln!("─── Controls ───────────────────────────────────────");
     eprintln!("  [enter]  re-analyze now");
+    eprintln!("  n        next task (emit prompt for AI agent)");
     eprintln!("  p        show evolution plan");
+    eprintln!("  d        update .cursor/rules (behavioral contracts)");
     eprintln!("  s        save snapshot");
     eprintln!("  q        quit");
     eprintln!("────────────────────────────────────────────────────");
@@ -307,6 +310,7 @@ fn print_controls() {
 // ─── Watch loop ──────────────────────────────────────────────────────────────
 
 /// The main runtime loop: poll for git changes, handle keyboard input.
+#[allow(clippy::too_many_arguments)]
 async fn watch_loop(
     ctx: &OpsContext,
     path: &Path,
@@ -362,6 +366,37 @@ async fn watch_loop(
                         eprintln!();
                         print_watching();
                     }
+                    b'n' => {
+                        // Next task: compute plan and emit the top item as a task prompt
+                        eprintln!("   🎯 Computing next task...\n");
+                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default()) {
+                            Ok(plan) if !plan.items.is_empty() => {
+                                let task = &plan.items[0];
+                                let prompt = build_task_prompt(task, graph, description, &plan.project_name);
+                                // Write to file for Cursor to pick up
+                                let task_path = write_task_file(path, &prompt)?;
+                                // Also print so user can copy-paste
+                                eprintln!("{}", prompt);
+                                eprintln!("   💾 Task written to: {}", task_path.display());
+                                eprintln!("   💡 Open this file and ask Cursor Agent to execute it.\n");
+                            }
+                            Ok(_) => eprintln!("   ✅ All nodes at target stability! Nothing to do.\n"),
+                            Err(e) => eprintln!("   ❌ Plan error: {}\n", e),
+                        }
+                        print_watching();
+                    }
+                    b'd' => {
+                        // Update .cursor/rules with behavioral contracts
+                        eprintln!("   📝 Updating behavioral contracts...");
+                        match update_cursor_rules(path, description) {
+                            Ok(rule_path) => {
+                                eprintln!("   ✅ Updated: {}", rule_path.display());
+                                eprintln!("      Cursor will auto-load these contracts.\n");
+                            }
+                            Err(e) => eprintln!("   ❌ Error: {}\n", e),
+                        }
+                        print_watching();
+                    }
                     b's' => {
                         // Snapshot
                         let changed_files = detect_git_changes(ctx, path).await;
@@ -414,6 +449,179 @@ fn save_snapshot(path: &Path, report: &ImpactReport) -> Result<()> {
     std::fs::write(&snapshot_path, json)?;
     eprintln!("   💾 Snapshot: {}", snapshot_path.display());
     Ok(())
+}
+
+// ─── Task prompt generation (auto-dev loop) ──────────────────────────────────
+
+/// Build a structured task prompt from an evolution plan item.
+///
+/// The prompt contains enough context for a Cursor Agent to execute
+/// the task autonomously: file path, role, stability gap, neighbors,
+/// and specific instructions.
+fn build_task_prompt(
+    item: &EvolutionItem,
+    graph: &SourceCodeGraph,
+    _description: &AutomatonDescription,
+    project_name: &str,
+) -> String {
+    let prefix = find_path_prefix(project_name, &item.path);
+    let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path);
+
+    // Resolve neighbors from the graph
+    let node_id = NodeId(item.node_id);
+    let dependents: Vec<String> = graph
+        .edges
+        .iter()
+        .filter(|e| e.to == node_id)
+        .filter_map(|e| {
+            graph
+                .nodes
+                .iter()
+                .find(|n| n.id == e.from)
+                .map(|n| {
+                    let p = n.metadata.get("relative_path").unwrap_or(&n.name);
+                    let p = p.strip_prefix(&prefix).unwrap_or(p);
+                    format!("  - `{}` ({})", p, e.relationship)
+                })
+        })
+        .take(10)
+        .collect();
+
+    let dependencies: Vec<String> = graph
+        .edges
+        .iter()
+        .filter(|e| e.from == node_id)
+        .filter_map(|e| {
+            graph
+                .nodes
+                .iter()
+                .find(|n| n.id == e.to)
+                .map(|n| {
+                    let p = n.metadata.get("relative_path").unwrap_or(&n.name);
+                    let p = p.strip_prefix(&prefix).unwrap_or(p);
+                    format!("  - `{}` ({})", p, e.relationship)
+                })
+        })
+        .take(10)
+        .collect();
+
+    let mut prompt = String::new();
+
+    prompt.push_str(&format!("# Task: Improve `{}`\n\n", short_path));
+
+    prompt.push_str("## Context\n\n");
+    prompt.push_str(&format!("- **File**: `{}`\n", short_path));
+    prompt.push_str(&format!("- **Role**: `{}`\n", item.role));
+    prompt.push_str(&format!(
+        "- **Stability**: {:.2} → target {:.2} (gap: {:.2})\n",
+        item.current_stability, item.target_stability, item.gap
+    ));
+    prompt.push_str(&format!("- **Priority**: {:.3} (cascading impact score)\n", item.priority));
+    prompt.push_str(&format!("- **Dependents**: {} modules depend on this\n", item.in_degree));
+    prompt.push_str(&format!(
+        "- **Has tests**: {}\n",
+        if item.has_test_neighbor { "yes" } else { "no" }
+    ));
+    prompt.push('\n');
+
+    if !dependents.is_empty() {
+        prompt.push_str("## Who depends on this (incoming)\n\n");
+        for d in &dependents {
+            prompt.push_str(d);
+            prompt.push('\n');
+        }
+        prompt.push('\n');
+    }
+
+    if !dependencies.is_empty() {
+        prompt.push_str("## What this depends on (outgoing)\n\n");
+        for d in &dependencies {
+            prompt.push_str(d);
+            prompt.push('\n');
+        }
+        prompt.push('\n');
+    }
+
+    prompt.push_str("## Action\n\n");
+    prompt.push_str(&format!("**{}**\n\n", item.suggested_action));
+
+    prompt.push_str("## Instructions\n\n");
+    prompt.push_str(&format!(
+        "1. Read `{}` and understand its current implementation.\n",
+        short_path
+    ));
+
+    match item.suggested_action.as_str() {
+        action if action.contains("test") => {
+            prompt.push_str("2. Create or extend the test file for this module.\n");
+            prompt.push_str("3. Write at least: one happy-path test, one edge-case test, one failure test.\n");
+            prompt.push_str("4. Ensure tests cover the public API surface.\n");
+            prompt.push_str("5. Run `cargo test` to verify all tests pass.\n");
+        }
+        action if action.contains("documentation") || action.contains("document") => {
+            prompt.push_str("2. Add module-level doc comments explaining purpose and usage.\n");
+            prompt.push_str("3. Document public functions with examples where helpful.\n");
+            prompt.push_str("4. Add inline comments for non-obvious logic.\n");
+            prompt.push_str("5. Run `cargo doc` to verify documentation builds.\n");
+        }
+        action if action.contains("interface") || action.contains("coupling") || action.contains("extract") => {
+            prompt.push_str("2. Identify the public API surface and its consumers.\n");
+            prompt.push_str("3. Extract a trait or interface to decouple dependents.\n");
+            prompt.push_str("4. Update dependents to use the trait instead of the concrete type.\n");
+            prompt.push_str("5. Run `cargo test` to verify nothing broke.\n");
+        }
+        _ => {
+            prompt.push_str("2. Apply the suggested improvement.\n");
+            prompt.push_str("3. Verify the change doesn't break dependents.\n");
+            prompt.push_str("4. Run `cargo test` to confirm.\n");
+        }
+    }
+
+    prompt.push_str("\n## Acceptance Criteria\n\n");
+    prompt.push_str(&format!(
+        "- Module stability should increase from {:.2} toward {:.2}\n",
+        item.current_stability, item.target_stability
+    ));
+    prompt.push_str("- All existing tests continue to pass\n");
+    prompt.push_str("- `cargo clippy` reports no new warnings\n");
+    prompt.push_str(&format!(
+        "- After this change, re-run `vg run --once` to verify health improves\n"
+    ));
+
+    prompt
+}
+
+/// Write the task prompt to `.self/automaton/next-task.md`.
+fn write_task_file(path: &Path, prompt: &str) -> Result<PathBuf> {
+    let store = AutomatonStore::new(path);
+    let task_path = store.automaton_dir().join("next-task.md");
+    std::fs::create_dir_all(store.automaton_dir())?;
+    std::fs::write(&task_path, prompt)?;
+    Ok(task_path)
+}
+
+/// Update `.cursor/rules/automaton-contracts.mdc` with current behavioral contracts.
+fn update_cursor_rules(path: &Path, description: &AutomatonDescription) -> Result<PathBuf> {
+    let md = format_behavioral_contracts(description, None);
+
+    let rules_dir = path.join(".cursor").join("rules");
+    std::fs::create_dir_all(&rules_dir)?;
+    let rule_path = rules_dir.join("automaton-contracts.mdc");
+
+    let cursor_content = format!(
+        "---\n\
+         description: Automaton behavioral contracts for {name}. \
+         These define per-module stability, roles, and change impact rules.\n\
+         globs:\n\
+         alwaysApply: true\n\
+         ---\n\n\
+         {content}",
+        name = description.meta.name,
+        content = md,
+    );
+
+    std::fs::write(&rule_path, &cursor_content)?;
+    Ok(rule_path)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
