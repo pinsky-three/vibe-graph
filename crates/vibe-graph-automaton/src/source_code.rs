@@ -1100,6 +1100,358 @@ pub fn format_behavioral_contracts(
     out
 }
 
+// =============================================================================
+// Evolution Plan (Objective-Driven Development)
+// =============================================================================
+
+use crate::config::StabilityObjective;
+
+/// A single item in the evolution plan.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EvolutionItem {
+    /// Node ID.
+    pub node_id: u64,
+    /// File/module path.
+    pub path: String,
+    /// Current stability.
+    pub current_stability: f32,
+    /// Target stability from the objective.
+    pub target_stability: f32,
+    /// Gap = target - current (clamped to >= 0).
+    pub gap: f32,
+    /// Propagated priority (activation after automaton run).
+    /// Higher = more cascading impact from improving this node.
+    pub priority: f32,
+    /// Role assigned by the description generator.
+    pub role: String,
+    /// In-degree (how many nodes depend on this one).
+    pub in_degree: usize,
+    /// Whether a test file is a direct neighbor.
+    pub has_test_neighbor: bool,
+    /// Suggested action to close the gap.
+    pub suggested_action: String,
+}
+
+/// The full evolution plan for a project.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EvolutionPlan {
+    /// Project name.
+    pub project_name: String,
+    /// The objective used.
+    pub objective: StabilityObjective,
+    /// Ticks the automaton executed.
+    pub ticks_executed: u64,
+    /// Items ranked by priority (highest first).
+    pub items: Vec<EvolutionItem>,
+    /// Summary statistics.
+    pub summary: EvolutionSummary,
+}
+
+/// Summary of the evolution plan.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EvolutionSummary {
+    /// Total nodes analyzed.
+    pub total_nodes: usize,
+    /// Nodes already at or above target.
+    pub at_target: usize,
+    /// Nodes below target.
+    pub below_target: usize,
+    /// Average gap across all nodes.
+    pub avg_gap: f32,
+    /// Maximum gap.
+    pub max_gap: f32,
+    /// Overall "health score" = 1.0 - avg_gap (0..1, higher is better).
+    pub health_score: f32,
+}
+
+/// Run evolution planning: seed the automaton with stability gaps, propagate,
+/// and return an ordered work plan.
+pub fn run_evolution_plan(
+    graph: SourceCodeGraph,
+    description: &AutomatonDescription,
+    objective: &StabilityObjective,
+) -> AutomatonResult<EvolutionPlan> {
+    let config = AutomatonConfig {
+        max_ticks: 30,
+        history_window: 8,
+        stability_threshold: 0.005,
+        min_ticks_before_stability: 3,
+        ..Default::default()
+    };
+
+    let temporal = SourceCodeTemporalGraph::from_source_graph_with_config(
+        graph.clone(),
+        config.history_window,
+    );
+
+    let mut automaton = GraphAutomaton::with_config(temporal, config);
+
+    // Register same rules as impact analysis — the propagation mechanics are identical,
+    // only the seed strategy differs.
+    automaton.register_rule(Arc::new(DampedPropagationRule::from_description(description)));
+    automaton.register_rule(Arc::new(ImportPropagationRule::default()));
+    automaton.register_rule(Arc::new(ModuleActivationRule::default()));
+
+    // Build per-node context: in-degree and test adjacency
+    let mut in_degrees: HashMap<NodeId, usize> = HashMap::new();
+    let mut has_test: HashMap<NodeId, bool> = HashMap::new();
+
+    for edge in &graph.edges {
+        *in_degrees.entry(edge.to).or_insert(0) += 1;
+    }
+
+    for node in &graph.nodes {
+        let is_test = matches!(node.kind, vibe_graph_core::GraphNodeKind::Test)
+            || node.name.contains("test");
+        if is_test {
+            // Mark all nodes this test imports as "has test neighbor"
+            for edge in &graph.edges {
+                if edge.from == node.id {
+                    has_test.insert(edge.to, true);
+                }
+            }
+        }
+    }
+
+    // Compute max in-degree for normalization
+    let max_in = in_degrees.values().copied().max().unwrap_or(1).max(1) as f32;
+
+    // Seed activation from stability gaps, amplified by in-degree.
+    // Nodes with many dependents AND a gap get more "improvement pressure"
+    // because improving them cascades to more of the codebase.
+    for node_config in &description.nodes {
+        let node_id = NodeId(node_config.id);
+        let role = node_config.rule.as_deref().unwrap_or("identity");
+        let current = node_config.stability.unwrap_or(0.0);
+        let gap = objective.gap(role, current);
+
+        let nd_in = in_degrees.get(&node_id).copied().unwrap_or(0) as f32;
+        // Activation = gap * (1 + 3 * normalized_in_degree)
+        // Stronger in-degree boost creates wider priority spread:
+        // - A node with gap=0.18 and max in-degree gets activation ~0.72
+        // - A node with gap=0.18 and median in-degree gets ~0.45
+        // - A node with gap=0.18 and zero in-degree gets 0.18
+        let initial_activation = gap * (1.0 + 3.0 * nd_in / max_in);
+
+        let mut state = StateData::with_activation(json!(null), initial_activation);
+        state.annotations.insert("role".to_string(), role.to_string());
+        state.annotations.insert("gap".to_string(), format!("{:.3}", gap));
+        state.annotations.insert(
+            "target".to_string(),
+            format!("{:.2}", objective.target_for(role)),
+        );
+
+        let _ = automaton.graph_mut().set_initial_state(&node_id, state);
+    }
+
+    // Run to stability
+    let results = automaton.run()?;
+    let ticks = results.len() as u64;
+
+    // Build the plan from the result
+    let mut items: Vec<EvolutionItem> = Vec::new();
+
+    for node_config in &description.nodes {
+        let node_id = NodeId(node_config.id);
+        let role = node_config.rule.as_deref().unwrap_or("identity");
+        let current = node_config.stability.unwrap_or(0.0);
+        let target = objective.target_for(role);
+        let gap = objective.gap(role, current);
+
+        // Skip nodes already at target
+        if gap <= 0.001 {
+            continue;
+        }
+
+        // Skip non-source files (config, docs, binaries) from actionable items.
+        // They contribute to the health score but shouldn't be in the work plan.
+        let is_source = StabilityObjective::is_source_file(&node_config.path);
+        let is_directory = node_config.kind.is_container();
+        if !is_source && !is_directory {
+            continue;
+        }
+
+        // Priority = composite of gap, in-degree boost, and propagated activation.
+        // The propagated activation captures cascading effects through the graph;
+        // we blend it with the structural signal (gap * degree) for differentiation.
+        let propagated = automaton
+            .graph()
+            .get_node(&node_id)
+            .map(|n| n.current_state().activation)
+            .unwrap_or(0.0);
+
+        let nd_in_f = in_degrees.get(&node_id).copied().unwrap_or(0) as f32;
+        let structural = gap * (1.0 + 3.0 * nd_in_f / max_in);
+        // Blend: 60% structural (gap + degree), 40% propagated (cascading effect)
+        let priority = 0.6 * structural + 0.4 * propagated;
+
+        let nd_in = in_degrees.get(&node_id).copied().unwrap_or(0);
+        let nd_test = has_test.get(&node_id).copied().unwrap_or(false);
+
+        let action = if is_directory {
+            "review module boundaries and child cohesion"
+        } else {
+            objective.suggest_action(role, gap, nd_in, nd_test)
+        };
+
+        items.push(EvolutionItem {
+            node_id: node_config.id,
+            path: node_config.path.clone(),
+            current_stability: current,
+            target_stability: target,
+            gap,
+            priority,
+            role: role.to_string(),
+            in_degree: nd_in,
+            has_test_neighbor: nd_test,
+            suggested_action: action.to_string(),
+        });
+    }
+
+    // Sort by priority descending (highest cascading impact first)
+    items.sort_by(|a, b| {
+        b.priority
+            .partial_cmp(&a.priority)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Compute summary
+    let total = description.nodes.len();
+    let below = items.len();
+    let at_target = total - below;
+    let avg_gap = if !items.is_empty() {
+        items.iter().map(|i| i.gap).sum::<f32>() / items.len() as f32
+    } else {
+        0.0
+    };
+    let max_gap = items.iter().map(|i| i.gap).fold(0.0f32, f32::max);
+    let health_score = 1.0 - (avg_gap * below as f32 / total.max(1) as f32);
+
+    Ok(EvolutionPlan {
+        project_name: description.meta.name.clone(),
+        objective: objective.clone(),
+        ticks_executed: ticks,
+        items,
+        summary: EvolutionSummary {
+            total_nodes: total,
+            at_target,
+            below_target: below,
+            avg_gap,
+            max_gap,
+            health_score: health_score.clamp(0.0, 1.0),
+        },
+    })
+}
+
+/// Format an evolution plan as human-readable markdown.
+pub fn format_evolution_plan(plan: &EvolutionPlan) -> String {
+    let mut out = String::new();
+
+    // Compute path prefix for shorter display
+    let prefix = plan
+        .items
+        .iter()
+        .find_map(|item| {
+            // Find project name in path, strip up to and including it
+            item.path.find(&plan.project_name).map(|pos| {
+                let end = pos + plan.project_name.len();
+                if item.path.as_bytes().get(end) == Some(&b'/') {
+                    item.path[..=end].to_string()
+                } else {
+                    item.path[..end].to_string()
+                }
+            })
+        })
+        .unwrap_or_default();
+
+    out.push_str(&format!("# Evolution Plan: {}\n\n", plan.project_name));
+
+    // Health score bar
+    let pct = (plan.summary.health_score * 100.0) as u32;
+    let filled = (pct / 5) as usize;
+    let empty = 20 - filled;
+    let bar: String = format!("[{}{}] {}%", "█".repeat(filled), "░".repeat(empty), pct);
+    out.push_str(&format!("**Health Score**: {}\n\n", bar));
+
+    out.push_str(&format!(
+        "## Summary\n\n\
+         - Total nodes: {}\n\
+         - At or above target: {} ✅\n\
+         - Below target: {} ⬆️\n\
+         - Average gap: {:.3}\n\
+         - Max gap: {:.3}\n\n",
+        plan.summary.total_nodes,
+        plan.summary.at_target,
+        plan.summary.below_target,
+        plan.summary.avg_gap,
+        plan.summary.max_gap,
+    ));
+
+    // Objective table
+    out.push_str("## Stability Targets\n\n");
+    out.push_str("| Role | Target |\n|------|--------|\n");
+    let mut sorted_targets: Vec<_> = plan.objective.targets.iter().collect();
+    sorted_targets.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (role, target) in &sorted_targets {
+        out.push_str(&format!("| `{}` | {:.2} |\n", role, target));
+    }
+    out.push('\n');
+
+    // Top items
+    if !plan.items.is_empty() {
+        out.push_str("## Priority Work Items\n\n");
+        out.push_str("Ranked by cascading impact (improving these first has the most effect):\n\n");
+        out.push_str("| # | Priority | Gap | Current→Target | Role | Path | Action |\n");
+        out.push_str("|---|----------|-----|----------------|------|------|--------|\n");
+
+        for (i, item) in plan.items.iter().take(30).enumerate() {
+            let short = shorten_path(&item.path, &prefix);
+            out.push_str(&format!(
+                "| {} | {:.3} | {:.2} | {:.2}→{:.2} | `{}` | `{}` | {} |\n",
+                i + 1,
+                item.priority,
+                item.gap,
+                item.current_stability,
+                item.target_stability,
+                item.role,
+                short,
+                item.suggested_action,
+            ));
+        }
+
+        if plan.items.len() > 30 {
+            out.push_str(&format!(
+                "\n*... and {} more items below target.*\n",
+                plan.items.len() - 30
+            ));
+        }
+        out.push('\n');
+    }
+
+    // Quick wins: items with small gap but high in-degree
+    let quick_wins: Vec<&EvolutionItem> = plan
+        .items
+        .iter()
+        .filter(|i| i.gap < 0.15 && i.in_degree > 0)
+        .take(5)
+        .collect();
+
+    if !quick_wins.is_empty() {
+        out.push_str("## Quick Wins\n\n");
+        out.push_str("Small gap but has dependents — easy improvements with ripple effect:\n\n");
+        for item in &quick_wins {
+            let short = shorten_path(&item.path, &prefix);
+            out.push_str(&format!(
+                "- `{}` (gap: {:.2}, {} dependents) — {}\n",
+                short, item.gap, item.in_degree, item.suggested_action,
+            ));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

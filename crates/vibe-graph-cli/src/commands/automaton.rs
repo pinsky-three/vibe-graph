@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use vibe_graph_automaton::{
-    format_behavioral_contracts, format_impact_report, run_impact_analysis, AutomatonStore,
-    DescriptionGenerator, GeneratorConfig,
+    format_behavioral_contracts, format_evolution_plan, format_impact_report, run_evolution_plan,
+    run_impact_analysis, AutomatonStore, DescriptionGenerator, GeneratorConfig, StabilityObjective,
 };
 use vibe_graph_ops::{GraphRequest, OpsContext, Store};
 
@@ -48,6 +48,13 @@ pub async fn execute(ctx: &OpsContext, cmd: AutomatonCommands) -> Result<()> {
             with_impact,
             cursor_rule,
         } => describe(&path, output, with_impact, cursor_rule),
+
+        AutomatonCommands::Plan {
+            path,
+            top,
+            json,
+            output,
+        } => plan(ctx, &path, top, json, output).await,
     }
 }
 
@@ -514,6 +521,139 @@ fn describe(
         println!("✅ Behavioral contracts saved to: {}", out.display());
     } else {
         print!("{}", md);
+    }
+
+    Ok(())
+}
+
+/// Generate an evolution plan toward a stability objective.
+async fn plan(
+    ctx: &OpsContext,
+    path: &Path,
+    top: usize,
+    json_output: bool,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    // Load or generate description
+    let automaton_store = AutomatonStore::new(&path);
+    let description = if automaton_store.has_description() {
+        println!("📋 Loading automaton description...");
+        automaton_store
+            .load_description()?
+            .expect("Description should exist")
+    } else {
+        println!("📋 No description found, generating one...");
+        let graph = load_or_build_graph(ctx, &path).await?;
+        let generator = DescriptionGenerator::with_config(GeneratorConfig::default());
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let desc = generator.generate(&graph, &name);
+        automaton_store.save_description(&desc)?;
+        println!("   Generated and saved description.");
+        desc
+    };
+
+    // Load graph
+    let graph = load_or_build_graph(ctx, &path).await?;
+
+    // Use default stability objective
+    let objective = StabilityObjective::default();
+
+    println!("🎯 Computing evolution plan...");
+    println!("   Objective targets:");
+    let mut sorted: Vec<_> = objective.targets.iter().collect();
+    sorted.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (role, target) in &sorted {
+        println!("     {}: {:.2}", role, target);
+    }
+    println!();
+
+    let plan = run_evolution_plan(graph, &description, &objective)
+        .map_err(|e| anyhow::anyhow!("Automaton error: {}", e))?;
+
+    if json_output {
+        let json = serde_json::to_string_pretty(&plan)?;
+        if let Some(out) = &output {
+            std::fs::write(out, &json)?;
+            println!("💾 JSON plan saved to: {}", out.display());
+        } else {
+            println!("{}", json);
+        }
+    } else {
+        // Human-readable output
+        let pct = (plan.summary.health_score * 100.0) as u32;
+        let filled = (pct / 5) as usize;
+        let empty = 20 - filled;
+        println!(
+            "📊 Health Score: [{}{}] {}%",
+            "█".repeat(filled),
+            "░".repeat(empty),
+            pct
+        );
+        println!();
+        println!(
+            "   {} nodes total, {} at target ✅, {} below target ⬆️",
+            plan.summary.total_nodes, plan.summary.at_target, plan.summary.below_target,
+        );
+        println!(
+            "   Avg gap: {:.3}, Max gap: {:.3}",
+            plan.summary.avg_gap, plan.summary.max_gap,
+        );
+        println!();
+
+        // Show top items
+        let visible: Vec<_> = plan.items.iter().take(top).collect();
+        if !visible.is_empty() {
+            println!("🔧 Top {} priority work items:\n", visible.len());
+
+            // Compute path prefix for shorter display
+            let prefix = plan
+                .items
+                .first()
+                .and_then(|item| {
+                    item.path.find(&plan.project_name).map(|pos| {
+                        let end = pos + plan.project_name.len();
+                        if item.path.as_bytes().get(end) == Some(&b'/') {
+                            item.path[..=end].to_string()
+                        } else {
+                            item.path[..end].to_string()
+                        }
+                    })
+                })
+                .unwrap_or_default();
+
+            for (i, item) in visible.iter().enumerate() {
+                let short = item.path.strip_prefix(&prefix).unwrap_or(&item.path);
+                let test_marker = if item.has_test_neighbor { "🧪" } else { "  " };
+                println!(
+                    "   {:>2}. [{:.3}] {:.2}→{:.2} {} {} [{}]",
+                    i + 1,
+                    item.priority,
+                    item.current_stability,
+                    item.target_stability,
+                    test_marker,
+                    short,
+                    item.role,
+                );
+                println!(
+                    "       └─ {}",
+                    item.suggested_action,
+                );
+            }
+            println!();
+        }
+
+        // Save markdown if output specified
+        if let Some(out) = &output {
+            let md = format_evolution_plan(&plan);
+            std::fs::write(out, &md)?;
+            println!("💾 Full plan saved to: {}", out.display());
+        }
     }
 
     Ok(())

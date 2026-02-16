@@ -399,6 +399,35 @@ enum AutomatonCommands {
         #[arg(long)]
         cursor_rule: bool,
     },
+
+    /// Generate an evolution plan toward a stability objective.
+    ///
+    /// Computes the gap between current and target stability per module,
+    /// propagates "improvement pressure" through the dependency graph, and
+    /// outputs a prioritized work plan showing what to improve first.
+    ///
+    /// Examples:
+    ///   vg automaton plan                       # default objective
+    ///   vg automaton plan --top 10              # show top 10 items
+    ///   vg automaton plan --json                # machine-readable output
+    ///   vg automaton plan -o plan.md            # save to file
+    Plan {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Show top N work items (default 20).
+        #[arg(long, default_value = "20")]
+        top: usize,
+
+        /// Output as JSON instead of human-readable markdown.
+        #[arg(long)]
+        json: bool,
+
+        /// Save the plan to a file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Remote repository commands.

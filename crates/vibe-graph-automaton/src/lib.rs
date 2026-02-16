@@ -72,7 +72,7 @@ pub use persistence::{
 // Configuration
 pub use config::{
     AutomatonDescription, ConfigDefaults, ConfigMeta, ConfigSource, InheritanceMode, LocalRules,
-    NodeConfig, NodeKind, RuleConfig, RuleType,
+    NodeConfig, NodeKind, RuleConfig, RuleType, StabilityObjective,
 };
 
 // Description generation and inference
@@ -94,6 +94,11 @@ pub use source_code::{
 pub use source_code::{
     apply_description, format_behavioral_contracts, format_impact_report, run_impact_analysis,
     DampedPropagationRule, ImpactLevel, ImpactNode, ImpactReport, ImpactStats,
+};
+
+// Evolution planning (objective-driven development)
+pub use source_code::{
+    format_evolution_plan, run_evolution_plan, EvolutionItem, EvolutionPlan, EvolutionSummary,
 };
 
 // Re-export TemporalGraph implementation

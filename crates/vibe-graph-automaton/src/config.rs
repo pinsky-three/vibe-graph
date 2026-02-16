@@ -270,6 +270,109 @@ impl AutomatonDescription {
     }
 }
 
+// =============================================================================
+// Stability Objective
+// =============================================================================
+
+/// Defines target stability per role. The gap between current and target
+/// stability drives evolution planning — nodes far from their target get
+/// high "improvement pressure" that propagates through the dependency graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StabilityObjective {
+    /// Target stability per role name. Keys match `NodeConfig::rule` values.
+    pub targets: HashMap<String, f32>,
+}
+
+impl StabilityObjective {
+    /// Create with explicit targets.
+    pub fn new(targets: HashMap<String, f32>) -> Self {
+        Self { targets }
+    }
+
+    /// Get the target stability for a role, falling back to a sensible default.
+    pub fn target_for(&self, role: &str) -> f32 {
+        self.targets.get(role).copied().unwrap_or(0.50)
+    }
+
+    /// Compute the stability gap for a node: how far it is from its target.
+    /// Returns 0.0 if the node is at or above its target.
+    pub fn gap(&self, role: &str, current_stability: f32) -> f32 {
+        let target = self.target_for(role);
+        (target - current_stability).max(0.0)
+    }
+
+    /// Check if a path represents a source code file (vs config/docs/binary).
+    pub fn is_source_file(path: &str) -> bool {
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        matches!(
+            ext,
+            "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "rb" | "ex" | "exs"
+        )
+    }
+
+    /// Suggest the kind of work needed to close a gap, based on role + gap size.
+    pub fn suggest_action(&self, role: &str, gap: f32, in_degree: usize, has_test_neighbor: bool) -> &'static str {
+        if gap <= 0.0 {
+            return "none — at or above target";
+        }
+        match role {
+            "entry_point" => {
+                if !has_test_neighbor {
+                    "add integration tests for public API surface"
+                } else {
+                    "document API contracts and invariants"
+                }
+            }
+            "hub" => {
+                if !has_test_neighbor {
+                    "add comprehensive test suite (high fan-in)"
+                } else if in_degree > 5 {
+                    "extract interface to reduce coupling"
+                } else {
+                    "add documentation and usage examples"
+                }
+            }
+            "directory_container" => "review module boundaries and cohesion",
+            "utility_propagation" => {
+                if !has_test_neighbor {
+                    "add unit tests for helper functions"
+                } else {
+                    "document edge cases and invariants"
+                }
+            }
+            "sink" => "verify this module is still needed (no dependents)",
+            _ => {
+                // "identity" and other roles
+                if !has_test_neighbor && in_degree > 0 {
+                    "add tests (other modules depend on this)"
+                } else if !has_test_neighbor {
+                    "add basic test coverage"
+                } else if in_degree > 3 {
+                    "reduce coupling or extract stable interface"
+                } else {
+                    "improve documentation and error handling"
+                }
+            }
+        }
+    }
+}
+
+impl Default for StabilityObjective {
+    fn default() -> Self {
+        let mut targets = HashMap::new();
+        targets.insert("entry_point".to_string(), 0.95);
+        targets.insert("hub".to_string(), 0.85);
+        targets.insert("directory_container".to_string(), 0.80);
+        targets.insert("utility_propagation".to_string(), 0.60);
+        targets.insert("identity".to_string(), 0.50);
+        targets.insert("sink".to_string(), 0.30);
+        Self { targets }
+    }
+}
+
 /// Get current timestamp as ISO string.
 fn chrono_now() -> String {
     use std::time::SystemTime;
