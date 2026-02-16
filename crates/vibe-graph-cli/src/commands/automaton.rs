@@ -573,7 +573,7 @@ async fn plan(
     }
     println!();
 
-    let plan = run_evolution_plan(graph, &description, &objective)
+    let plan = run_evolution_plan(graph, &description, &objective, None)
         .map_err(|e| anyhow::anyhow!("Automaton error: {}", e))?;
 
     if json_output {

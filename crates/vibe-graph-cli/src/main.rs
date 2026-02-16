@@ -267,6 +267,14 @@ enum Commands {
         /// Maximum ticks per automaton run.
         #[arg(long)]
         max_ticks: Option<usize>,
+
+        /// Set a goal to direct the evolution plan (e.g. "add WebSocket support").
+        #[arg(long)]
+        goal: Option<String>,
+
+        /// Target specific files/modules for the goal (repeatable).
+        #[arg(long = "target", short = 't')]
+        targets: Vec<String>,
     },
 
     /// Work with automaton descriptions (generate, infer, run).
@@ -605,6 +613,8 @@ async fn main() -> Result<()> {
         snapshot: false,
         top: 20,
         max_ticks: None,
+        goal: None,
+        targets: Vec::new(),
     });
 
     match command {
@@ -818,9 +828,12 @@ async fn main() -> Result<()> {
             snapshot,
             top,
             max_ticks,
+            goal,
+            targets,
         } => {
             commands::run::execute(
                 &ctx, &path, force, once, interval, json, snapshot, top, max_ticks,
+                goal, targets,
             )
             .await?;
         }

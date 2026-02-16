@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use vibe_graph_automaton::{
     format_behavioral_contracts, format_evolution_plan, run_evolution_plan, run_impact_analysis,
     AutomatonDescription, AutomatonStore, DescriptionGenerator, EvolutionItem, GeneratorConfig,
-    ImpactReport, StabilityObjective,
+    ImpactReport, Perturbation, StabilityObjective,
 };
 use vibe_graph_core::{NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
@@ -34,6 +34,8 @@ pub async fn execute(
     snapshot: bool,
     top: usize,
     max_ticks: Option<usize>,
+    goal: Option<String>,
+    targets: Vec<String>,
 ) -> Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
@@ -42,6 +44,32 @@ pub async fn execute(
 
     // ── Phase 1: Bootstrap ──────────────────────────────────────────────
     let (graph, description) = bootstrap(ctx, &path, force).await?;
+
+    // ── Perturbation: resolve from CLI flags or persisted state ──────────
+    let store = AutomatonStore::new(&path);
+    let perturbation = if let Some(ref goal_text) = goal {
+        let p = if targets.is_empty() {
+            Perturbation::new(goal_text)
+        } else {
+            Perturbation::with_targets(goal_text, targets.clone())
+        };
+        // Persist so it survives restarts
+        let _ = store.save_perturbation(&p);
+        eprintln!("   🎯 Goal set: \"{}\"", p.goal);
+        if !p.targets.is_empty() {
+            eprintln!("   📌 Targets: {}", p.targets.join(", "));
+        }
+        Some(p)
+    } else {
+        // Try loading persisted perturbation
+        match store.load_perturbation() {
+            Ok(Some(p)) => {
+                eprintln!("   🎯 Active goal: \"{}\"", p.goal);
+                Some(p)
+            }
+            _ => None,
+        }
+    };
 
     // ── Phase 2: Initial run ────────────────────────────────────────────
     let changed_files = detect_git_changes(ctx, &path).await;
@@ -65,10 +93,10 @@ pub async fn execute(
 
     if once {
         // Write a fresh next-task.md so it's never stale
-        match run_evolution_plan(graph.clone(), &description, &StabilityObjective::default()) {
+        match run_evolution_plan(graph.clone(), &description, &StabilityObjective::default(), perturbation.as_ref()) {
             Ok(plan) if !plan.items.is_empty() => {
                 let task = &plan.items[0];
-                let prompt = build_task_prompt(task, &graph, &description, &plan.project_name);
+                let prompt = build_task_prompt(task, &graph, &description, &plan.project_name, perturbation.as_ref());
                 if let Ok(p) = write_task_file(&path, &prompt) {
                     eprintln!("\n   📋 Next task: {}", p.display());
                 }
@@ -80,7 +108,7 @@ pub async fn execute(
 
     // ── Phase 3: Watch loop ─────────────────────────────────────────────
     print_controls();
-    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot).await
+    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation).await
 }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
@@ -313,6 +341,9 @@ fn print_controls() {
     eprintln!("  p        show evolution plan");
     eprintln!("  d        update .cursor/rules (behavioral contracts)");
     eprintln!("  s        save snapshot");
+    eprintln!("  g        set goal (direct evolution toward a feature)");
+    eprintln!("  t        add target file to current goal");
+    eprintln!("  x        clear goal (return to stability-only mode)");
     eprintln!("  q        quit");
     eprintln!("────────────────────────────────────────────────────");
     eprintln!("   Watching for changes...\n");
@@ -332,11 +363,23 @@ async fn watch_loop(
     top: usize,
     max_ticks: Option<usize>,
     snapshot: bool,
+    initial_perturbation: Option<Perturbation>,
 ) -> Result<()> {
     let mut last_fingerprint = change_fingerprint(initial_changes);
+    let mut perturbation: Option<Perturbation> = initial_perturbation;
+    let store = AutomatonStore::new(path);
 
     // Set terminal to raw mode for non-blocking key reads
     let _raw_guard = RawModeGuard::enter();
+
+    // Show initial goal status
+    if let Some(ref p) = perturbation {
+        eprintln!("   🎯 Active goal: \"{}\"", p.goal);
+        if !p.targets.is_empty() {
+            eprintln!("   📌 Targets: {}", p.targets.join(", "));
+        }
+        eprintln!();
+    }
 
     loop {
         // Poll: sleep in small increments, checking for keyboard input
@@ -367,7 +410,7 @@ async fn watch_loop(
                     b'p' => {
                         // Plan
                         eprintln!("   📋 Computing evolution plan...\n");
-                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default()) {
+                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default(), perturbation.as_ref()) {
                             Ok(plan) => {
                                 let md = format_evolution_plan(&plan);
                                 eprint!("{}", md);
@@ -380,10 +423,10 @@ async fn watch_loop(
                     b'n' => {
                         // Next task: compute plan and emit the top item as a task prompt
                         eprintln!("   🎯 Computing next task...\n");
-                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default()) {
+                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default(), perturbation.as_ref()) {
                             Ok(plan) if !plan.items.is_empty() => {
                                 let task = &plan.items[0];
-                                let prompt = build_task_prompt(task, graph, description, &plan.project_name);
+                                let prompt = build_task_prompt(task, graph, description, &plan.project_name, perturbation.as_ref());
                                 // Write to file for Cursor to pick up
                                 let task_path = write_task_file(path, &prompt)?;
                                 // Also print so user can copy-paste
@@ -413,6 +456,56 @@ async fn watch_loop(
                         let changed_files = detect_git_changes(ctx, path).await;
                         let report = run_analysis(graph, description, &changed_files, max_ticks)?;
                         save_snapshot(path, &report)?;
+                        print_watching();
+                    }
+                    b'g' => {
+                        // Set goal: read a line from stdin in cooked mode
+                        if let Some(ref guard) = _raw_guard {
+                            if let Some(goal_text) = guard.read_line_cooked("   🎯 Enter goal: ") {
+                                let p = if let Some(ref existing) = perturbation {
+                                    Perturbation::with_targets(&goal_text, existing.targets.clone())
+                                } else {
+                                    Perturbation::new(&goal_text)
+                                };
+                                let _ = store.save_perturbation(&p);
+                                eprintln!("   ✅ Goal set: \"{}\"\n", p.goal);
+                                perturbation = Some(p);
+                            } else {
+                                eprintln!("   (cancelled)\n");
+                            }
+                        } else {
+                            eprintln!("   ⚠ Raw mode not available, cannot read input.\n");
+                        }
+                        print_watching();
+                    }
+                    b't' => {
+                        // Add target file to current goal
+                        if perturbation.is_none() {
+                            eprintln!("   ⚠ No active goal. Press 'g' first to set a goal.\n");
+                        } else if let Some(ref guard) = _raw_guard {
+                            if let Some(target_path) = guard.read_line_cooked("   📌 Enter target path: ") {
+                                if let Some(ref mut p) = perturbation {
+                                    p.targets.push(target_path.clone());
+                                    let _ = store.save_perturbation(p);
+                                    eprintln!("   ✅ Target added: \"{}\"\n", target_path);
+                                }
+                            } else {
+                                eprintln!("   (cancelled)\n");
+                            }
+                        } else {
+                            eprintln!("   ⚠ Raw mode not available, cannot read input.\n");
+                        }
+                        print_watching();
+                    }
+                    b'x' => {
+                        // Clear perturbation
+                        if perturbation.is_some() {
+                            let _ = store.clear_perturbation();
+                            perturbation = None;
+                            eprintln!("   ✅ Goal cleared. Returning to stability-only mode.\n");
+                        } else {
+                            eprintln!("   (no active goal to clear)\n");
+                        }
                         print_watching();
                     }
                     _ => {}
@@ -474,6 +567,7 @@ fn build_task_prompt(
     graph: &SourceCodeGraph,
     _description: &AutomatonDescription,
     project_name: &str,
+    perturbation: Option<&Perturbation>,
 ) -> String {
     let prefix = find_path_prefix(project_name, &item.path);
     let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path);
@@ -518,7 +612,28 @@ fn build_task_prompt(
 
     let mut prompt = String::new();
 
-    prompt.push_str(&format!("# Task: Improve `{}`\n\n", short_path));
+    // Goal-aware title
+    if let Some(pert) = perturbation {
+        prompt.push_str(&format!(
+            "# Task: {} — `{}`\n\n",
+            pert.goal, short_path
+        ));
+    } else {
+        prompt.push_str(&format!("# Task: Improve `{}`\n\n", short_path));
+    }
+
+    // Goal section (only when perturbation is active)
+    if let Some(pert) = perturbation {
+        prompt.push_str("## Goal\n\n");
+        prompt.push_str(&format!("**{}**\n\n", pert.goal));
+        if !pert.targets.is_empty() {
+            prompt.push_str("Targeted files:\n");
+            for t in &pert.targets {
+                prompt.push_str(&format!("- `{}`\n", t));
+            }
+            prompt.push('\n');
+        }
+    }
 
     prompt.push_str("## Context\n\n");
     prompt.push_str(&format!("- **File**: `{}`\n", short_path));
@@ -562,29 +677,37 @@ fn build_task_prompt(
         short_path
     ));
 
-    match item.suggested_action.as_str() {
-        action if action.contains("test") => {
-            prompt.push_str("2. Create or extend the test file for this module.\n");
-            prompt.push_str("3. Write at least: one happy-path test, one edge-case test, one failure test.\n");
-            prompt.push_str("4. Ensure tests cover the public API surface.\n");
-            prompt.push_str("5. Run `cargo test` to verify all tests pass.\n");
-        }
-        action if action.contains("documentation") || action.contains("document") => {
-            prompt.push_str("2. Add module-level doc comments explaining purpose and usage.\n");
-            prompt.push_str("3. Document public functions with examples where helpful.\n");
-            prompt.push_str("4. Add inline comments for non-obvious logic.\n");
-            prompt.push_str("5. Run `cargo doc` to verify documentation builds.\n");
-        }
-        action if action.contains("interface") || action.contains("coupling") || action.contains("extract") => {
-            prompt.push_str("2. Identify the public API surface and its consumers.\n");
-            prompt.push_str("3. Extract a trait or interface to decouple dependents.\n");
-            prompt.push_str("4. Update dependents to use the trait instead of the concrete type.\n");
-            prompt.push_str("5. Run `cargo test` to verify nothing broke.\n");
-        }
-        _ => {
-            prompt.push_str("2. Apply the suggested improvement.\n");
-            prompt.push_str("3. Verify the change doesn't break dependents.\n");
-            prompt.push_str("4. Run `cargo test` to confirm.\n");
+    // Goal-directed instructions take precedence
+    if perturbation.is_some() && item.suggested_action.contains("goal-directed") {
+        prompt.push_str("2. Implement the changes needed to support the stated goal.\n");
+        prompt.push_str("3. Update or add tests to cover the new functionality.\n");
+        prompt.push_str("4. Ensure the change integrates with existing dependents.\n");
+        prompt.push_str("5. Run `cargo test` to verify all tests pass.\n");
+    } else {
+        match item.suggested_action.as_str() {
+            action if action.contains("test") => {
+                prompt.push_str("2. Create or extend the test file for this module.\n");
+                prompt.push_str("3. Write at least: one happy-path test, one edge-case test, one failure test.\n");
+                prompt.push_str("4. Ensure tests cover the public API surface.\n");
+                prompt.push_str("5. Run `cargo test` to verify all tests pass.\n");
+            }
+            action if action.contains("documentation") || action.contains("document") => {
+                prompt.push_str("2. Add module-level doc comments explaining purpose and usage.\n");
+                prompt.push_str("3. Document public functions with examples where helpful.\n");
+                prompt.push_str("4. Add inline comments for non-obvious logic.\n");
+                prompt.push_str("5. Run `cargo doc` to verify documentation builds.\n");
+            }
+            action if action.contains("interface") || action.contains("coupling") || action.contains("extract") => {
+                prompt.push_str("2. Identify the public API surface and its consumers.\n");
+                prompt.push_str("3. Extract a trait or interface to decouple dependents.\n");
+                prompt.push_str("4. Update dependents to use the trait instead of the concrete type.\n");
+                prompt.push_str("5. Run `cargo test` to verify nothing broke.\n");
+            }
+            _ => {
+                prompt.push_str("2. Apply the suggested improvement.\n");
+                prompt.push_str("3. Verify the change doesn't break dependents.\n");
+                prompt.push_str("4. Run `cargo test` to confirm.\n");
+            }
         }
     }
 
@@ -722,6 +845,41 @@ impl RawModeGuard {
 
         #[cfg(not(unix))]
         {
+            None
+        }
+    }
+
+    /// Temporarily restore normal terminal mode, read a line, then re-enter raw mode.
+    fn read_line_cooked(&self, prompt: &str) -> Option<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = io::stdin().as_raw_fd();
+            // Restore original (cooked) mode
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &self.original) };
+
+            eprint!("{}", prompt);
+            let mut line = String::new();
+            let ok = io::stdin().read_line(&mut line).is_ok();
+
+            // Re-enter raw mode
+            let mut raw = self.original;
+            raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+            raw.c_cc[libc::VMIN] = 0;
+            raw.c_cc[libc::VTIME] = 0;
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) };
+
+            if ok {
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() { None } else { Some(trimmed) }
+            } else {
+                None
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = prompt;
             None
         }
     }

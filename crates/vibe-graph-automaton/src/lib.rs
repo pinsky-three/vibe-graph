@@ -99,6 +99,7 @@ pub use source_code::{
 // Evolution planning (objective-driven development)
 pub use source_code::{
     format_evolution_plan, run_evolution_plan, EvolutionItem, EvolutionPlan, EvolutionSummary,
+    Perturbation,
 };
 
 // Re-export TemporalGraph implementation

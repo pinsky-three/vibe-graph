@@ -40,6 +40,7 @@ const CONFIG_FILE: &str = "config.json";
 const DESCRIPTION_FILE: &str = "description.json";
 const TICK_HISTORY_FILE: &str = "tick_history.json";
 const SNAPSHOTS_DIR: &str = "snapshots";
+const PERTURBATION_FILE: &str = "perturbation.json";
 
 /// Metadata about a persisted automaton state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +511,52 @@ impl AutomatonStore {
             has_state: self.has_state(),
         })
     }
+
+    // =========================================================================
+    // Perturbation Persistence
+    // =========================================================================
+
+    /// Save the active perturbation to `perturbation.json`.
+    pub fn save_perturbation(
+        &self,
+        perturbation: &crate::source_code::Perturbation,
+    ) -> AutomatonResult<PathBuf> {
+        self.init()?;
+        let path = self.automaton_dir.join(PERTURBATION_FILE);
+        let json = serde_json::to_string_pretty(perturbation)?;
+        std::fs::write(&path, json)?;
+        info!(path = %path.display(), "Saved perturbation");
+        Ok(path)
+    }
+
+    /// Load the active perturbation (if any).
+    pub fn load_perturbation(&self) -> AutomatonResult<Option<crate::source_code::Perturbation>> {
+        let path = self.automaton_dir.join(PERTURBATION_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)?;
+        let perturbation: crate::source_code::Perturbation = serde_json::from_str(&content)?;
+        debug!(path = %path.display(), goal = %perturbation.goal, "Loaded perturbation");
+        Ok(Some(perturbation))
+    }
+
+    /// Clear the active perturbation (return to stability-only mode).
+    pub fn clear_perturbation(&self) -> AutomatonResult<bool> {
+        let path = self.automaton_dir.join(PERTURBATION_FILE);
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+            info!(path = %path.display(), "Cleared perturbation");
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Check if a perturbation is active.
+    pub fn has_perturbation(&self) -> bool {
+        self.automaton_dir.join(PERTURBATION_FILE).exists()
+    }
 }
 
 /// Information about a snapshot.
@@ -754,5 +801,85 @@ mod tests {
         assert_eq!(loaded.rules.len(), 2);
         assert_eq!(loaded.effective_stability(1), 1.0);
         assert_eq!(loaded.effective_rule(1), "entry_point");
+    }
+
+    // ── Perturbation persistence tests ──────────────────────────────────
+
+    #[test]
+    fn test_save_and_load_perturbation() {
+        use crate::source_code::Perturbation;
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = AutomatonStore::new(temp_dir.path());
+
+        let p = Perturbation::with_targets(
+            "add WebSocket support",
+            vec!["src/ws.rs".into(), "src/server.rs".into()],
+        );
+
+        // Save
+        let saved_path = store.save_perturbation(&p).unwrap();
+        assert!(saved_path.exists());
+        assert!(store.has_perturbation());
+
+        // Load
+        let loaded = store.load_perturbation().unwrap().unwrap();
+        assert_eq!(loaded.goal, "add WebSocket support");
+        assert_eq!(loaded.targets.len(), 2);
+        assert_eq!(loaded.boost, 3.0);
+    }
+
+    #[test]
+    fn test_load_perturbation_when_none_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = AutomatonStore::new(temp_dir.path());
+        store.init().unwrap();
+
+        assert!(!store.has_perturbation());
+        let loaded = store.load_perturbation().unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_clear_perturbation() {
+        use crate::source_code::Perturbation;
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = AutomatonStore::new(temp_dir.path());
+
+        let p = Perturbation::new("test goal");
+        store.save_perturbation(&p).unwrap();
+        assert!(store.has_perturbation());
+
+        // Clear
+        let cleared = store.clear_perturbation().unwrap();
+        assert!(cleared);
+        assert!(!store.has_perturbation());
+
+        // Clearing again returns false
+        let cleared_again = store.clear_perturbation().unwrap();
+        assert!(!cleared_again);
+    }
+
+    #[test]
+    fn test_perturbation_survives_store_reinit() {
+        use crate::source_code::Perturbation;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Save with one store instance
+        {
+            let store = AutomatonStore::new(temp_dir.path());
+            let p = Perturbation::new("persistent goal");
+            store.save_perturbation(&p).unwrap();
+        }
+
+        // Load with a fresh store instance
+        {
+            let store = AutomatonStore::new(temp_dir.path());
+            assert!(store.has_perturbation());
+            let loaded = store.load_perturbation().unwrap().unwrap();
+            assert_eq!(loaded.goal, "persistent goal");
+        }
     }
 }

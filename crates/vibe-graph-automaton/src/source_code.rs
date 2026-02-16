@@ -1143,6 +1143,94 @@ pub struct EvolutionItem {
     pub suggested_action: String,
 }
 
+/// A directed perturbation that biases the evolution plan toward a specific goal.
+///
+/// When active, the perturbation boosts the priority of matched nodes and
+/// rewrites suggested actions to be goal-aligned rather than purely
+/// stability-gap-driven.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Perturbation {
+    /// Free-text description of the goal (e.g. "add WebSocket support").
+    pub goal: String,
+    /// Explicit file/module paths to target (optional, substring-matched).
+    #[serde(default)]
+    pub targets: Vec<String>,
+    /// Boost factor for matched nodes (default 3.0).
+    #[serde(default = "Perturbation::default_boost")]
+    pub boost: f32,
+}
+
+impl Perturbation {
+    /// Create a new perturbation with just a goal.
+    pub fn new(goal: impl Into<String>) -> Self {
+        Self {
+            goal: goal.into(),
+            targets: Vec::new(),
+            boost: Self::default_boost(),
+        }
+    }
+
+    /// Create a perturbation with a goal and explicit file targets.
+    pub fn with_targets(goal: impl Into<String>, targets: Vec<String>) -> Self {
+        Self {
+            goal: goal.into(),
+            targets,
+            boost: Self::default_boost(),
+        }
+    }
+
+    fn default_boost() -> f32 {
+        3.0
+    }
+
+    /// Check whether a node path matches this perturbation.
+    ///
+    /// A node matches if:
+    /// - Any explicit target is a substring of the node path, OR
+    /// - Any keyword from the goal text appears in the node path
+    pub fn matches_path(&self, node_path: &str) -> bool {
+        let lower_path = node_path.to_lowercase();
+
+        // Explicit targets: substring match
+        for target in &self.targets {
+            let lower_target = target.to_lowercase();
+            if lower_path.contains(&lower_target) {
+                return true;
+            }
+        }
+
+        // Keyword match from goal text
+        let keywords = self.goal_keywords();
+        for keyword in &keywords {
+            if lower_path.contains(keyword) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Extract meaningful keywords from the goal text.
+    ///
+    /// Filters out common stop words and short tokens to avoid
+    /// overly broad matching.
+    fn goal_keywords(&self) -> Vec<String> {
+        const STOP_WORDS: &[&str] = &[
+            "a", "an", "the", "to", "for", "of", "in", "on", "at", "by", "is", "it",
+            "and", "or", "but", "not", "with", "from", "that", "this", "add", "implement",
+            "create", "make", "build", "fix", "update", "remove", "delete", "change",
+            "improve", "new", "all", "each", "every", "some", "any",
+        ];
+
+        self.goal
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+            .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(w))
+            .map(|w| w.to_string())
+            .collect()
+    }
+}
+
 /// The full evolution plan for a project.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EvolutionPlan {
@@ -1150,6 +1238,9 @@ pub struct EvolutionPlan {
     pub project_name: String,
     /// The objective used.
     pub objective: StabilityObjective,
+    /// Active perturbation goal (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
     /// Ticks the automaton executed.
     pub ticks_executed: u64,
     /// Items ranked by priority (highest first).
@@ -1181,6 +1272,7 @@ pub fn run_evolution_plan(
     graph: SourceCodeGraph,
     description: &AutomatonDescription,
     objective: &StabilityObjective,
+    perturbation: Option<&Perturbation>,
 ) -> AutomatonResult<EvolutionPlan> {
     let config = AutomatonConfig {
         max_ticks: 30,
@@ -1305,15 +1397,31 @@ pub fn run_evolution_plan(
         let nd_in_f = in_degrees.get(&node_id).copied().unwrap_or(0) as f32;
         let structural = gap * (1.0 + 3.0 * nd_in_f / max_in);
         // Blend: 60% structural (gap + degree), 40% propagated (cascading effect)
-        let priority = 0.6 * structural + 0.4 * propagated;
+        let mut priority = 0.6 * structural + 0.4 * propagated;
 
         let nd_in = in_degrees.get(&node_id).copied().unwrap_or(0);
         let nd_test = has_test.get(&node_id).copied().unwrap_or(false);
 
-        let action = if is_directory {
-            "review module boundaries and child cohesion"
+        // Apply perturbation boost: matched nodes get priority multiplied
+        let goal_matched = perturbation
+            .map(|p| p.matches_path(&node_config.path))
+            .unwrap_or(false);
+        if goal_matched {
+            let boost = perturbation.map(|p| p.boost).unwrap_or(1.0);
+            priority *= boost;
+        }
+
+        let action = if goal_matched {
+            // Goal-aligned action overrides stability-gap suggestion
+            perturbation
+                .map(|p| format!("{} (goal-directed)", p.goal))
+                .unwrap_or_default()
+        } else if is_directory {
+            "review module boundaries and child cohesion".to_string()
         } else {
-            objective.suggest_action(role, gap, nd_in, nd_test)
+            objective
+                .suggest_action(role, gap, nd_in, nd_test)
+                .to_string()
         };
 
         items.push(EvolutionItem {
@@ -1326,7 +1434,7 @@ pub fn run_evolution_plan(
             role: role.to_string(),
             in_degree: nd_in,
             has_test_neighbor: nd_test,
-            suggested_action: action.to_string(),
+            suggested_action: action,
         });
     }
 
@@ -1352,6 +1460,7 @@ pub fn run_evolution_plan(
     Ok(EvolutionPlan {
         project_name: description.meta.name.clone(),
         objective: objective.clone(),
+        goal: perturbation.map(|p| p.goal.clone()),
         ticks_executed: ticks,
         items,
         summary: EvolutionSummary {
@@ -1387,6 +1496,11 @@ pub fn format_evolution_plan(plan: &EvolutionPlan) -> String {
         .unwrap_or_default();
 
     out.push_str(&format!("# Evolution Plan: {}\n\n", plan.project_name));
+
+    // Show active goal if perturbation is present
+    if let Some(ref goal) = plan.goal {
+        out.push_str(&format!("**Active Goal**: _{}_\n\n", goal));
+    }
 
     // Health score bar
     let pct = (plan.summary.health_score * 100.0) as u32;
@@ -1593,5 +1707,107 @@ mod tests {
         assert_eq!(top.len(), 2);
         assert_eq!(top[0].0, NodeId(1));
         assert_eq!(top[1].0, NodeId(2));
+    }
+
+    // ── Perturbation tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_perturbation_new() {
+        let p = Perturbation::new("add WebSocket support");
+        assert_eq!(p.goal, "add WebSocket support");
+        assert!(p.targets.is_empty());
+        assert_eq!(p.boost, 3.0);
+    }
+
+    #[test]
+    fn test_perturbation_with_targets() {
+        let p = Perturbation::with_targets(
+            "add auth",
+            vec!["src/auth.rs".into(), "src/middleware.rs".into()],
+        );
+        assert_eq!(p.targets.len(), 2);
+        assert_eq!(p.boost, 3.0);
+    }
+
+    #[test]
+    fn test_perturbation_matches_explicit_target() {
+        let p = Perturbation::with_targets("anything", vec!["src/api".into()]);
+        assert!(p.matches_path("crates/foo/src/api/handler.rs"));
+        assert!(p.matches_path("src/api.rs"));
+        assert!(!p.matches_path("src/web/server.rs"));
+    }
+
+    #[test]
+    fn test_perturbation_matches_keyword_from_goal() {
+        let p = Perturbation::new("add WebSocket support");
+        // "websocket" and "support" are keywords (>= 3 chars, not stop words)
+        assert!(p.matches_path("crates/server/src/websocket.rs"));
+        assert!(!p.matches_path("crates/server/src/http.rs"));
+    }
+
+    #[test]
+    fn test_perturbation_case_insensitive_matching() {
+        let p = Perturbation::new("improve GraphQL layer");
+        assert!(p.matches_path("src/GRAPHQL/resolver.rs"));
+        assert!(p.matches_path("src/graphql/schema.rs"));
+    }
+
+    #[test]
+    fn test_perturbation_keyword_extraction_filters_stop_words() {
+        let p = Perturbation::new("add a new caching layer for the API");
+        let keywords = p.goal_keywords();
+        // "add", "a", "new", "for", "the" are stop words
+        assert!(keywords.contains(&"caching".to_string()));
+        assert!(keywords.contains(&"layer".to_string()));
+        assert!(keywords.contains(&"api".to_string()));
+        assert!(!keywords.contains(&"add".to_string()));
+        assert!(!keywords.contains(&"new".to_string()));
+        assert!(!keywords.contains(&"the".to_string()));
+    }
+
+    #[test]
+    fn test_perturbation_combined_matching() {
+        // Both explicit targets and keyword matching should work together
+        let p = Perturbation::with_targets(
+            "add metrics endpoint",
+            vec!["src/api/".into()],
+        );
+        // Explicit target match
+        assert!(p.matches_path("src/api/routes.rs"));
+        // Keyword match ("metrics")
+        assert!(p.matches_path("src/telemetry/metrics.rs"));
+        // Neither
+        assert!(!p.matches_path("src/auth/login.rs"));
+    }
+
+    #[test]
+    fn test_perturbation_empty_goal_no_keyword_matches() {
+        let p = Perturbation::with_targets("", vec!["src/foo".into()]);
+        // No keywords from empty goal
+        assert!(p.matches_path("src/foo/bar.rs"));
+        assert!(!p.matches_path("src/baz/quux.rs"));
+    }
+
+    #[test]
+    fn test_perturbation_serde_roundtrip() {
+        let p = Perturbation::with_targets(
+            "add WebSocket support",
+            vec!["src/ws.rs".into()],
+        );
+        let json = serde_json::to_string(&p).unwrap();
+        let p2: Perturbation = serde_json::from_str(&json).unwrap();
+        assert_eq!(p2.goal, p.goal);
+        assert_eq!(p2.targets, p.targets);
+        assert_eq!(p2.boost, p.boost);
+    }
+
+    #[test]
+    fn test_perturbation_serde_defaults() {
+        // Deserialize with only the required "goal" field
+        let json = r#"{"goal": "test"}"#;
+        let p: Perturbation = serde_json::from_str(json).unwrap();
+        assert_eq!(p.goal, "test");
+        assert!(p.targets.is_empty());
+        assert_eq!(p.boost, 3.0);
     }
 }
