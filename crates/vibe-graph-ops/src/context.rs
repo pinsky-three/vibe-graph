@@ -517,6 +517,13 @@ impl OpsContext {
                     },
                 };
 
+                // Detect inline tests and mark the node
+                if let Some(node_id) = builder.get_node_id(&source.path) {
+                    if has_inline_tests(&content, &source.path) {
+                        builder.set_node_metadata(node_id, "has_tests", "true");
+                    }
+                }
+
                 let refs = detect_references(&content, &source.path);
 
                 for reference in refs {
@@ -687,6 +694,24 @@ fn clone_repository(url: &str, path: &Path, username: &str, token: &str) -> OpsR
 }
 
 /// Find the common workspace root of all repositories.
+/// Detect whether a file contains inline test code based on language-specific patterns.
+fn has_inline_tests(content: &str, path: &Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext {
+        "rs" => content.contains("#[cfg(test)]") || content.contains("#[test]"),
+        "py" => {
+            content.contains("def test_")
+                || content.contains("class Test")
+                || content.contains("unittest.TestCase")
+        }
+        "ts" | "tsx" | "js" | "jsx" => {
+            content.contains("describe(") || content.contains("it(") || content.contains("test(")
+        }
+        "go" => content.contains("func Test"),
+        _ => false,
+    }
+}
+
 fn find_workspace_root(repositories: &[Repository]) -> Option<PathBuf> {
     if repositories.is_empty() {
         return None;

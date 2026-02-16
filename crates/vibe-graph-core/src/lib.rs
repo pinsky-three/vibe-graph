@@ -492,6 +492,13 @@ impl SourceCodeGraphBuilder {
         None
     }
 
+    /// Set a metadata key on an existing node.
+    pub fn set_node_metadata(&mut self, node_id: NodeId, key: impl Into<String>, value: impl Into<String>) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+            node.metadata.insert(key.into(), value.into());
+        }
+    }
+
     /// Get the current node count.
     pub fn node_count(&self) -> usize {
         self.nodes.len()

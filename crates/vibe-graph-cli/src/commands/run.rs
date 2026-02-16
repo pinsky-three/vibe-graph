@@ -64,6 +64,17 @@ pub async fn execute(
     }
 
     if once {
+        // Write a fresh next-task.md so it's never stale
+        match run_evolution_plan(graph.clone(), &description, &StabilityObjective::default()) {
+            Ok(plan) if !plan.items.is_empty() => {
+                let task = &plan.items[0];
+                let prompt = build_task_prompt(task, &graph, &description, &plan.project_name);
+                if let Ok(p) = write_task_file(&path, &prompt) {
+                    eprintln!("\n   📋 Next task: {}", p.display());
+                }
+            }
+            _ => {}
+        }
         return Ok(());
     }
 
@@ -584,9 +595,7 @@ fn build_task_prompt(
     ));
     prompt.push_str("- All existing tests continue to pass\n");
     prompt.push_str("- `cargo clippy` reports no new warnings\n");
-    prompt.push_str(&format!(
-        "- After this change, re-run `vg run --once` to verify health improves\n"
-    ));
+    prompt.push_str("- After this change, re-run `vg run --once` to verify health improves\n");
 
     prompt
 }

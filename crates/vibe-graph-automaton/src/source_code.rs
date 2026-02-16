@@ -1214,6 +1214,11 @@ pub fn run_evolution_plan(
     }
 
     for node in &graph.nodes {
+        // Check for inline tests via metadata (set during graph build)
+        if node.metadata.get("has_tests").map(|v| v == "true").unwrap_or(false) {
+            has_test.insert(node.id, true);
+        }
+
         let is_test =
             matches!(node.kind, vibe_graph_core::GraphNodeKind::Test) || node.name.contains("test");
         if is_test {
