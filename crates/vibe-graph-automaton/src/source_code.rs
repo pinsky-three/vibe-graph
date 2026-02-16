@@ -1441,11 +1441,15 @@ pub fn run_evolution_plan(
         });
     }
 
-    // Sort by priority descending (highest cascading impact first)
+    // Sort deterministically by priority + explicit tie-breakers.
+    // This keeps next-task selection stable across runs when priorities are close.
     items.sort_by(|a, b| {
         b.priority
-            .partial_cmp(&a.priority)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.priority)
+            .then_with(|| b.gap.total_cmp(&a.gap))
+            .then_with(|| b.in_degree.cmp(&a.in_degree))
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.node_id.cmp(&b.node_id))
     });
 
     // Compute summary
