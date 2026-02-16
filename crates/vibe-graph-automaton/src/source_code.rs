@@ -478,10 +478,631 @@ pub fn get_top_activated(automaton: &GraphAutomaton, n: usize) -> Vec<(NodeId, f
     nodes
 }
 
+// =============================================================================
+// Description → Runtime Bridge
+// =============================================================================
+
+use crate::config::AutomatonDescription;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+/// Result of running the automaton with impact analysis.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImpactReport {
+    /// Project name from the description.
+    pub project_name: String,
+    /// Number of ticks executed.
+    pub ticks_executed: u64,
+    /// Whether the automaton stabilized.
+    pub stabilized: bool,
+    /// Changed files that seeded the run (if any).
+    pub changed_files: Vec<String>,
+    /// Nodes ranked by impact (activation), highest first.
+    pub impact_ranking: Vec<ImpactNode>,
+    /// Summary statistics.
+    pub stats: ImpactStats,
+}
+
+/// A node in the impact ranking.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImpactNode {
+    /// Node ID.
+    pub node_id: u64,
+    /// File/module path.
+    pub path: String,
+    /// Final activation level (0.0 - 1.0).
+    pub activation: f32,
+    /// Stability from the description (0.0 - 1.0).
+    pub stability: f32,
+    /// Classification/role assigned by the generator.
+    pub role: String,
+    /// Whether this node was a direct change seed.
+    pub is_changed: bool,
+    /// Impact level category.
+    pub impact_level: ImpactLevel,
+}
+
+/// Categorical impact level.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum ImpactLevel {
+    /// Activation >= 0.7
+    High,
+    /// Activation 0.3 - 0.7
+    Medium,
+    /// Activation 0.05 - 0.3
+    Low,
+    /// Activation < 0.05
+    None,
+}
+
+impl ImpactLevel {
+    pub fn from_activation(activation: f32) -> Self {
+        if activation >= 0.7 {
+            Self::High
+        } else if activation >= 0.3 {
+            Self::Medium
+        } else if activation >= 0.05 {
+            Self::Low
+        } else {
+            Self::None
+        }
+    }
+
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            Self::High => "🔴",
+            Self::Medium => "🟡",
+            Self::Low => "🟢",
+            Self::None => "⚪",
+        }
+    }
+}
+
+/// Summary statistics for the impact analysis.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImpactStats {
+    /// Total nodes in the graph.
+    pub total_nodes: usize,
+    /// Nodes with high impact.
+    pub high_impact: usize,
+    /// Nodes with medium impact.
+    pub medium_impact: usize,
+    /// Nodes with low impact.
+    pub low_impact: usize,
+    /// Nodes with no impact.
+    pub no_impact: usize,
+    /// Average activation across all nodes.
+    pub avg_activation: f32,
+}
+
+/// Damped propagation rule that respects per-node stability from the description.
+///
+/// Nodes with high stability resist activation changes (the damping coefficient
+/// reduces the delta). This is the core rule for description-driven automata.
+#[derive(Debug, Clone)]
+pub struct DampedPropagationRule {
+    /// Per-node stability values (from description).
+    stability_map: HashMap<NodeId, f32>,
+    /// Global damping coefficient.
+    damping: f32,
+    /// Propagation factor along import edges.
+    propagation_factor: f32,
+    /// Minimum change threshold to produce a transition.
+    min_delta: f32,
+}
+
+impl DampedPropagationRule {
+    /// Create from an automaton description.
+    pub fn from_description(description: &AutomatonDescription) -> Self {
+        let stability_map: HashMap<NodeId, f32> = description
+            .nodes
+            .iter()
+            .map(|n| (NodeId(n.id), n.stability.unwrap_or(0.0)))
+            .collect();
+
+        Self {
+            stability_map,
+            damping: description.defaults.damping_coefficient,
+            // Lower propagation factor for more nuanced signal decay across hops.
+            // 0.25 means each hop retains 25% of the source activation.
+            propagation_factor: 0.25,
+            min_delta: 0.005,
+        }
+    }
+
+    fn node_stability(&self, node_id: NodeId) -> f32 {
+        self.stability_map.get(&node_id).copied().unwrap_or(0.0)
+    }
+}
+
+impl Rule for DampedPropagationRule {
+    fn id(&self) -> RuleId {
+        RuleId::new("damped_propagation")
+    }
+
+    fn description(&self) -> &str {
+        "Propagates activation along dependency edges, damped by per-node stability"
+    }
+
+    fn priority(&self) -> i32 {
+        10
+    }
+
+    fn should_apply(&self, ctx: &RuleContext) -> bool {
+        // Apply if self or any neighbor has activation
+        ctx.activation() > 0.01
+            || ctx
+                .neighbors
+                .iter()
+                .any(|n| n.state.current_state().activation > 0.01)
+    }
+
+    fn apply(&self, ctx: &RuleContext) -> AutomatonResult<RuleOutcome> {
+        let current = ctx.current_state();
+        let stability = self.node_stability(ctx.node_id);
+
+        // Compute incoming activation from neighbors
+        let max_neighbor_activation = ctx
+            .neighbors
+            .iter()
+            .filter(|n| {
+                n.relationship == "imports"
+                    || n.relationship == "uses"
+                    || n.relationship == "contains"
+            })
+            .map(|n| n.state.current_state().activation)
+            .fold(0.0f32, f32::max);
+
+        // Propagated signal
+        let propagated = max_neighbor_activation * self.propagation_factor;
+
+        // Raw delta from propagated activation
+        let raw_delta = propagated - current.activation;
+
+        // Apply damping: high stability resists change
+        // effective_delta = raw_delta * (1.0 - stability * damping)
+        let damping_factor = 1.0 - stability * self.damping;
+        let effective_delta = raw_delta * damping_factor;
+
+        let new_activation = (current.activation + effective_delta).clamp(0.0, 1.0);
+
+        // Only transition if change is significant
+        if (new_activation - current.activation).abs() < self.min_delta {
+            return Ok(RuleOutcome::Skip);
+        }
+
+        let mut new_state = current.clone();
+        new_state.activation = new_activation;
+        new_state.annotations.insert(
+            "damping_factor".to_string(),
+            format!("{:.3}", damping_factor),
+        );
+        new_state.annotations.insert(
+            "stability".to_string(),
+            format!("{:.2}", stability),
+        );
+
+        Ok(RuleOutcome::Transition(new_state))
+    }
+}
+
+/// Create a fully-configured automaton from a description and source graph.
+///
+/// This is the **Description → Runtime bridge**: it takes the generated/inferred
+/// description and wires up a live `GraphAutomaton` with:
+/// - Per-node initial activation set to the description's stability
+/// - `DampedPropagationRule` that respects per-node stability
+/// - `ImportPropagationRule` for dependency edge propagation
+/// - `ModuleActivationRule` for directory/module aggregation
+/// - `ChangeProximityRule` for git-change boosting
+///
+/// Optionally seeds activation from a list of changed file paths.
+pub fn apply_description(
+    graph: SourceCodeGraph,
+    description: &AutomatonDescription,
+    changed_files: &[PathBuf],
+) -> AutomatonResult<GraphAutomaton> {
+    let config = AutomatonConfig {
+        max_ticks: 30,
+        history_window: 8,
+        stability_threshold: 0.005,
+        min_ticks_before_stability: 5,
+        ..Default::default()
+    };
+
+    let temporal = SourceCodeTemporalGraph::from_source_graph_with_config(
+        graph.clone(),
+        config.history_window,
+    );
+
+    let mut automaton = GraphAutomaton::with_config(temporal, config);
+
+    // Register rules
+    automaton.register_rule(Arc::new(DampedPropagationRule::from_description(description)));
+    automaton.register_rule(Arc::new(ImportPropagationRule::default()));
+    automaton.register_rule(Arc::new(ModuleActivationRule::default()));
+    automaton.register_rule(Arc::new(ChangeProximityRule::default()));
+    automaton.register_rule(Arc::new(ComplexityTrackingRule));
+
+    // Build a path-to-node-id index for matching changed files
+    let path_index: HashMap<String, NodeId> = graph
+        .nodes
+        .iter()
+        .flat_map(|n| {
+            let mut entries = vec![(n.name.clone(), n.id)];
+            if let Some(p) = n.metadata.get("path") {
+                entries.push((p.clone(), n.id));
+            }
+            if let Some(p) = n.metadata.get("relative_path") {
+                entries.push((p.clone(), n.id));
+            }
+            entries
+        })
+        .collect();
+
+    // Normalize changed file paths for matching
+    let changed_node_ids: Vec<NodeId> = changed_files
+        .iter()
+        .filter_map(|cf| {
+            let cf_str = cf.to_string_lossy();
+            // Try exact match, then suffix match
+            path_index.get(cf_str.as_ref()).copied().or_else(|| {
+                path_index
+                    .iter()
+                    .find(|(path, _)| {
+                        cf_str.ends_with(path.as_str()) || path.ends_with(cf_str.as_ref())
+                    })
+                    .map(|(_, id)| *id)
+            })
+        })
+        .collect();
+
+    // Set initial state for all nodes from the description
+    for node_config in &description.nodes {
+        let node_id = NodeId(node_config.id);
+        let stability = node_config.stability.unwrap_or(0.0);
+        let is_changed = changed_node_ids.contains(&node_id);
+
+        // Changed files get activation=1.0, others get a small baseline from stability
+        let initial_activation = if is_changed {
+            1.0
+        } else {
+            stability * 0.05 // tiny baseline proportional to stability
+        };
+
+        let payload = node_config
+            .payload
+            .as_ref()
+            .map(|p| serde_json::to_value(p).unwrap_or(json!(null)))
+            .unwrap_or(json!(null));
+
+        let mut state = StateData::with_activation(payload, initial_activation);
+
+        if is_changed {
+            state
+                .annotations
+                .insert("git:changed".to_string(), "true".to_string());
+        }
+
+        state.annotations.insert(
+            "role".to_string(),
+            node_config.rule.clone().unwrap_or_default(),
+        );
+
+        let _ = automaton.graph_mut().set_initial_state(&node_id, state);
+    }
+
+    Ok(automaton)
+}
+
+/// Run impact analysis: apply description, seed from changed files, run to stability.
+///
+/// Returns a structured `ImpactReport` with ranked impact nodes.
+pub fn run_impact_analysis(
+    graph: SourceCodeGraph,
+    description: &AutomatonDescription,
+    changed_files: &[PathBuf],
+    max_ticks: Option<usize>,
+) -> AutomatonResult<ImpactReport> {
+    let mut automaton = apply_description(graph, description, changed_files)?;
+
+    // Override max_ticks if specified
+    if let Some(mt) = max_ticks {
+        // We need to run manually since config is immutable after construction
+        let mut ticks = 0u64;
+        for _ in 0..mt {
+            let result = automaton.tick()?;
+            ticks += 1;
+            if result.transitions == 0 {
+                break;
+            }
+        }
+        let stabilized = ticks < mt as u64;
+
+        return build_report(
+            &automaton,
+            description,
+            changed_files,
+            ticks,
+            stabilized,
+        );
+    }
+
+    // Run to stability
+    let results = automaton.run()?;
+    let ticks = results.len() as u64;
+    let stabilized = automaton.is_stable() || results.last().map(|r| r.transitions == 0).unwrap_or(true);
+
+    build_report(&automaton, description, changed_files, ticks, stabilized)
+}
+
+fn build_report(
+    automaton: &GraphAutomaton,
+    description: &AutomatonDescription,
+    changed_files: &[PathBuf],
+    ticks: u64,
+    stabilized: bool,
+) -> AutomatonResult<ImpactReport> {
+    // Build impact ranking
+    let mut ranking: Vec<ImpactNode> = automaton
+        .graph()
+        .nodes()
+        .map(|node| {
+            let node_id = node.id().0;
+            let activation = node.current_state().activation;
+            let is_changed = node
+                .current_state()
+                .annotations
+                .get("git:changed")
+                .is_some();
+
+            // Look up description config for this node
+            let node_config = description.get_node(node_id);
+            let path = node_config
+                .map(|c| c.path.clone())
+                .unwrap_or_else(|| node.name().to_string());
+            let stability = node_config.and_then(|c| c.stability).unwrap_or(0.0);
+            let role = node_config
+                .and_then(|c| c.rule.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            ImpactNode {
+                node_id,
+                path,
+                activation,
+                stability,
+                role,
+                is_changed,
+                impact_level: ImpactLevel::from_activation(activation),
+            }
+        })
+        .collect();
+
+    // Sort by activation descending
+    ranking.sort_by(|a, b| {
+        b.activation
+            .partial_cmp(&a.activation)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Compute stats
+    let total = ranking.len();
+    let high = ranking.iter().filter(|n| n.impact_level == ImpactLevel::High).count();
+    let medium = ranking.iter().filter(|n| n.impact_level == ImpactLevel::Medium).count();
+    let low = ranking.iter().filter(|n| n.impact_level == ImpactLevel::Low).count();
+    let none = ranking.iter().filter(|n| n.impact_level == ImpactLevel::None).count();
+    let avg_activation = if total > 0 {
+        ranking.iter().map(|n| n.activation).sum::<f32>() / total as f32
+    } else {
+        0.0
+    };
+
+    Ok(ImpactReport {
+        project_name: description.meta.name.clone(),
+        ticks_executed: ticks,
+        stabilized,
+        changed_files: changed_files.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+        impact_ranking: ranking,
+        stats: ImpactStats {
+            total_nodes: total,
+            high_impact: high,
+            medium_impact: medium,
+            low_impact: low,
+            no_impact: none,
+            avg_activation,
+        },
+    })
+}
+
+/// Format an impact report as a human-readable markdown string.
+pub fn format_impact_report(report: &ImpactReport) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!("# Impact Analysis: {}\n\n", report.project_name));
+
+    if !report.changed_files.is_empty() {
+        out.push_str("## Changed Files\n\n");
+        for f in &report.changed_files {
+            out.push_str(&format!("- `{}`\n", f));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&format!(
+        "## Summary\n\n\
+         - Ticks executed: {}\n\
+         - Stabilized: {}\n\
+         - Total nodes: {}\n\
+         - Average activation: {:.3}\n\n",
+        report.ticks_executed,
+        if report.stabilized { "yes" } else { "no" },
+        report.stats.total_nodes,
+        report.stats.avg_activation,
+    ));
+
+    out.push_str(&format!(
+        "| Impact | Count |\n\
+         |--------|-------|\n\
+         | 🔴 High   | {} |\n\
+         | 🟡 Medium | {} |\n\
+         | 🟢 Low    | {} |\n\
+         | ⚪ None   | {} |\n\n",
+        report.stats.high_impact,
+        report.stats.medium_impact,
+        report.stats.low_impact,
+        report.stats.no_impact,
+    ));
+
+    // Show impacted nodes (skip "none" category unless few total nodes)
+    let show_nodes: Vec<&ImpactNode> = report
+        .impact_ranking
+        .iter()
+        .filter(|n| n.impact_level != ImpactLevel::None)
+        .collect();
+
+    if !show_nodes.is_empty() {
+        out.push_str("## Impacted Files\n\n");
+        out.push_str("| Impact | Activation | Stability | Role | Path |\n");
+        out.push_str("|--------|-----------|-----------|------|------|\n");
+
+        for node in &show_nodes {
+            let changed_marker = if node.is_changed { " **(changed)**" } else { "" };
+            out.push_str(&format!(
+                "| {} | {:.3} | {:.2} | {} | `{}`{} |\n",
+                node.impact_level.symbol(),
+                node.activation,
+                node.stability,
+                node.role,
+                node.path,
+                changed_marker,
+            ));
+        }
+        out.push('\n');
+    }
+
+    // Suggested review order
+    let review_order: Vec<&ImpactNode> = report
+        .impact_ranking
+        .iter()
+        .filter(|n| n.impact_level != ImpactLevel::None && !n.is_changed)
+        .take(10)
+        .collect();
+
+    if !review_order.is_empty() {
+        out.push_str("## Suggested Review Order\n\n");
+        out.push_str("Files most likely to need attention (excluding direct changes):\n\n");
+        for (i, node) in review_order.iter().enumerate() {
+            out.push_str(&format!(
+                "{}. `{}` (activation: {:.3}, role: {})\n",
+                i + 1,
+                node.path,
+                node.activation,
+                node.role,
+            ));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Shorten a path by stripping the common workspace prefix.
+fn shorten_path<'a>(path: &'a str, prefix: &str) -> &'a str {
+    path.strip_prefix(prefix).unwrap_or(path)
+}
+
+/// Generate per-module behavioral contracts as markdown.
+pub fn format_behavioral_contracts(
+    description: &AutomatonDescription,
+    report: Option<&ImpactReport>,
+) -> String {
+    let mut out = String::new();
+
+    // Compute workspace root prefix for shorter paths.
+    // We find the project name in the first suitable path and strip up to project_name/.
+    let prefix = description
+        .nodes
+        .iter()
+        .find_map(|n| {
+            n.path.find(&description.meta.name).map(|pos| {
+                let end = pos + description.meta.name.len();
+                if n.path.as_bytes().get(end) == Some(&b'/') {
+                    n.path[..=end].to_string()
+                } else {
+                    n.path[..end].to_string()
+                }
+            })
+        })
+        .unwrap_or_default();
+
+    out.push_str(&format!(
+        "# Behavioral Contracts: {}\n\n",
+        description.meta.name
+    ));
+    out.push_str("Each module in this codebase has a role, stability level, and behavioral rules.\n");
+    out.push_str("AI agents and developers should respect these contracts when making changes.\n\n");
+
+    out.push_str(&format!(
+        "## Defaults\n\n\
+         - Default rule: `{}`\n\
+         - Damping coefficient: {}\n\
+         - Inheritance mode: {:?}\n\n",
+        description.defaults.default_rule,
+        description.defaults.damping_coefficient,
+        description.defaults.inheritance_mode,
+    ));
+
+    // Group nodes by role
+    let mut by_role: HashMap<String, Vec<&crate::config::NodeConfig>> = HashMap::new();
+    for node in &description.nodes {
+        let role = node.rule.clone().unwrap_or_else(|| "identity".to_string());
+        by_role.entry(role).or_default().push(node);
+    }
+
+    // Sort roles by count descending
+    let mut role_entries: Vec<_> = by_role.into_iter().collect();
+    role_entries.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    for (role, nodes) in &role_entries {
+        out.push_str(&format!("## Role: `{}`\n\n", role));
+        out.push_str(&format!("Nodes: {}\n\n", nodes.len()));
+
+        // Get rule description from the config
+        if let Some(rule_config) = description.get_rule(role) {
+            if let Some(prompt) = &rule_config.system_prompt {
+                out.push_str(&format!("**Behavior**: {}\n\n", prompt));
+            }
+        }
+
+        out.push_str("| Path | Stability | Impact |\n");
+        out.push_str("|------|-----------|--------|\n");
+
+        for node in nodes {
+            let impact = report
+                .and_then(|r| {
+                    r.impact_ranking
+                        .iter()
+                        .find(|n| n.node_id == node.id)
+                })
+                .map(|n| format!("{} {:.3}", n.impact_level.symbol(), n.activation))
+                .unwrap_or_else(|| "—".to_string());
+
+            out.push_str(&format!(
+                "| `{}` | {:.2} | {} |\n",
+                shorten_path(&node.path, &prefix),
+                node.stability.unwrap_or(0.0),
+                impact,
+            ));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use vibe_graph_core::{EdgeId, GraphEdge, GraphNode, GraphNodeKind};
 
     fn sample_source_graph() -> SourceCodeGraph {

@@ -90,6 +90,12 @@ pub use source_code::{
     SourceCodeAutomatonBuilder,
 };
 
+// Description → Runtime bridge (impact analysis)
+pub use source_code::{
+    apply_description, format_behavioral_contracts, format_impact_report, run_impact_analysis,
+    DampedPropagationRule, ImpactLevel, ImpactNode, ImpactReport, ImpactStats,
+};
+
 // Re-export TemporalGraph implementation
 pub use temporal::SourceCodeTemporalGraph;
 

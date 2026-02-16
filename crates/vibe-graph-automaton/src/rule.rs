@@ -21,25 +21,27 @@ use crate::state::{EvolutionaryState, StateData};
 pub struct RuleId(String);
 
 impl RuleId {
-    /// Special rule ID for the initial state (no rule triggered it).
-    pub const INITIAL: RuleId = RuleId::from_static("__initial__");
+    // NOTE: Rust const fn cannot allocate Strings, so we use lazy_static-style
+    // helper methods instead of true constants. Use RuleId::initial(), etc.
 
-    /// Special rule ID for external/manual mutations.
-    pub const EXTERNAL: RuleId = RuleId::from_static("__external__");
+    /// Get the "initial" pseudo-rule ID (no rule triggered it).
+    pub fn initial() -> Self {
+        Self("__initial__".to_string())
+    }
 
-    /// Special rule ID for no-op (state unchanged).
-    pub const NOOP: RuleId = RuleId::from_static("__noop__");
+    /// Get the "external" pseudo-rule ID (external/manual mutations).
+    pub fn external() -> Self {
+        Self("__external__".to_string())
+    }
+
+    /// Get the "noop" pseudo-rule ID (state unchanged).
+    pub fn noop() -> Self {
+        Self("__noop__".to_string())
+    }
 
     /// Create a new rule ID.
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
-    }
-
-    /// Create from a static string (for constants).
-    pub const fn from_static(_name: &'static str) -> Self {
-        // Const fn limitation: can't construct String at compile time.
-        // Use init_constant() at runtime or RuleId::new() instead.
-        Self(String::new())
     }
 
     /// Get the rule name.
@@ -49,25 +51,23 @@ impl RuleId {
 
     /// Check if this is the initial pseudo-rule.
     pub fn is_initial(&self) -> bool {
-        self.0 == "__initial__"
+        self.0 == "__initial__" || self.0.is_empty()
     }
 
     /// Check if this is an external mutation.
     pub fn is_external(&self) -> bool {
         self.0 == "__external__"
     }
-}
 
-// Workaround for const initialization
-impl RuleId {
-    fn init_constant(name: &'static str) -> Self {
-        Self(name.to_string())
+    /// Check if this is the noop pseudo-rule.
+    pub fn is_noop(&self) -> bool {
+        self.0 == "__noop__"
     }
 }
 
 impl Default for RuleId {
     fn default() -> Self {
-        Self::init_constant("__initial__")
+        Self::initial()
     }
 }
 

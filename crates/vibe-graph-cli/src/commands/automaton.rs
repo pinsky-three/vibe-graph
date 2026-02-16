@@ -1,12 +1,16 @@
 //! Automaton description commands.
 //!
-//! Commands for generating, inferring, and managing automaton descriptions.
+//! Commands for generating, inferring, managing automaton descriptions,
+//! running impact analysis, and exporting behavioral contracts.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use vibe_graph_automaton::{AutomatonStore, DescriptionGenerator, GeneratorConfig};
+use vibe_graph_automaton::{
+    format_behavioral_contracts, format_impact_report, run_impact_analysis, AutomatonStore,
+    DescriptionGenerator, GeneratorConfig,
+};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store};
 
 use crate::AutomatonCommands;
@@ -27,6 +31,23 @@ pub async fn execute(ctx: &OpsContext, cmd: AutomatonCommands) -> Result<()> {
         } => infer(ctx, &path, max_nodes, output).await,
 
         AutomatonCommands::Show { path } => show(&path),
+
+        AutomatonCommands::Run {
+            path,
+            from_git,
+            files,
+            max_ticks,
+            json,
+            output,
+            top,
+        } => run(ctx, &path, from_git, files, max_ticks, json, output, top).await,
+
+        AutomatonCommands::Describe {
+            path,
+            output,
+            with_impact,
+            cursor_rule,
+        } => describe(&path, output, with_impact, cursor_rule),
     }
 }
 
@@ -274,4 +295,237 @@ fn show(path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run impact analysis using the automaton.
+#[allow(clippy::too_many_arguments)]
+async fn run(
+    ctx: &OpsContext,
+    path: &Path,
+    from_git: bool,
+    explicit_files: Vec<PathBuf>,
+    max_ticks: Option<usize>,
+    json_output: bool,
+    output: Option<PathBuf>,
+    top: usize,
+) -> Result<()> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    // 1. Load or generate description
+    let automaton_store = AutomatonStore::new(&path);
+    let description = if automaton_store.has_description() {
+        println!("📋 Loading automaton description...");
+        automaton_store
+            .load_description()?
+            .expect("Description should exist")
+    } else {
+        println!("📋 No description found, generating one...");
+        let graph = load_or_build_graph(ctx, &path).await?;
+        let generator = DescriptionGenerator::with_config(GeneratorConfig::default());
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let desc = generator.generate(&graph, &name);
+        automaton_store.save_description(&desc)?;
+        println!("   Generated and saved description.");
+        desc
+    };
+
+    // 2. Load graph
+    let graph = load_or_build_graph(ctx, &path).await?;
+
+    // 3. Collect changed files
+    let changed_files: Vec<PathBuf> = if !explicit_files.is_empty() {
+        println!(
+            "🎯 Seeding from {} explicit file(s)...",
+            explicit_files.len()
+        );
+        explicit_files
+    } else if from_git || explicit_files.is_empty() {
+        // Default: use git changes
+        match vibe_graph_git::get_git_changes(&path) {
+            Ok(snapshot) if !snapshot.changes.is_empty() => {
+                let files: Vec<PathBuf> =
+                    snapshot.changes.iter().map(|c| c.path.clone()).collect();
+                println!("🔍 Found {} git change(s) to seed:", files.len());
+                for f in &files {
+                    println!("   {}", f.display());
+                }
+                files
+            }
+            Ok(_) => {
+                println!("ℹ️  No git changes detected. Running with baseline activation only.");
+                Vec::new()
+            }
+            Err(e) => {
+                println!("⚠️  Could not read git changes: {}. Running baseline.", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    // 4. Run impact analysis
+    println!("🚀 Running impact analysis...");
+    let report = run_impact_analysis(graph, &description, &changed_files, max_ticks)
+        .map_err(|e| anyhow::anyhow!("Automaton error: {}", e))?;
+
+    // 5. Output results
+    if json_output {
+        let json = serde_json::to_string_pretty(&report)?;
+        if let Some(out) = &output {
+            std::fs::write(out, &json)?;
+            println!("💾 JSON report saved to: {}", out.display());
+        } else {
+            println!("{}", json);
+        }
+    } else {
+        // Human-readable output
+        println!();
+        println!(
+            "✅ Impact analysis complete ({} ticks, {})",
+            report.ticks_executed,
+            if report.stabilized {
+                "stabilized"
+            } else {
+                "max ticks reached"
+            }
+        );
+        println!();
+
+        println!("📊 Summary:");
+        println!("   Total nodes:  {}", report.stats.total_nodes);
+        println!("   🔴 High:     {}", report.stats.high_impact);
+        println!("   🟡 Medium:   {}", report.stats.medium_impact);
+        println!("   🟢 Low:      {}", report.stats.low_impact);
+        println!("   ⚪ None:     {}", report.stats.no_impact);
+        println!(
+            "   Avg activation: {:.4}",
+            report.stats.avg_activation
+        );
+        println!();
+
+        // Show top N
+        let visible: Vec<_> = report
+            .impact_ranking
+            .iter()
+            .filter(|n| n.activation >= 0.01)
+            .take(top)
+            .collect();
+
+        if !visible.is_empty() {
+            println!(
+                "🎯 Top {} impacted files (of {} with activation):",
+                visible.len(),
+                report
+                    .impact_ranking
+                    .iter()
+                    .filter(|n| n.activation >= 0.01)
+                    .count()
+            );
+            println!();
+            for node in &visible {
+                let changed = if node.is_changed { " ← changed" } else { "" };
+                println!(
+                    "   {} {:.3}  [{:.2} stab]  {}  {}{}",
+                    node.impact_level.symbol(),
+                    node.activation,
+                    node.stability,
+                    node.role,
+                    node.path,
+                    changed,
+                );
+            }
+            println!();
+        }
+
+        // Save full markdown report if output specified
+        if let Some(out) = &output {
+            let md = format_impact_report(&report);
+            std::fs::write(out, &md)?;
+            println!("💾 Full report saved to: {}", out.display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Export behavioral contracts as markdown.
+fn describe(
+    path: &Path,
+    output: Option<PathBuf>,
+    _with_impact: bool,
+    cursor_rule: bool,
+) -> Result<()> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let store = AutomatonStore::new(&path);
+
+    if !store.has_description() {
+        println!("❌ No automaton description found.");
+        println!("   Run 'vg automaton generate' first.");
+        return Ok(());
+    }
+
+    let description = store.load_description()?.expect("Description should exist");
+
+    // TODO: Load latest impact report from store if `with_impact` is set
+    let md = format_behavioral_contracts(&description, None);
+
+    if cursor_rule {
+        // Generate .cursor/rules/automaton-contracts.mdc
+        let rules_dir = path.join(".cursor").join("rules");
+        std::fs::create_dir_all(&rules_dir)?;
+        let rule_path = rules_dir.join("automaton-contracts.mdc");
+
+        // Wrap in Cursor rule format
+        let cursor_content = format!(
+            "---\n\
+             description: Automaton behavioral contracts for {name}. \
+             These define per-module stability, roles, and change impact rules.\n\
+             globs:\n\
+             alwaysApply: true\n\
+             ---\n\n\
+             {content}",
+            name = description.meta.name,
+            content = md,
+        );
+
+        std::fs::write(&rule_path, &cursor_content)?;
+        println!(
+            "✅ Cursor rule generated: {}",
+            rule_path.display()
+        );
+        println!("   This will be automatically loaded by Cursor AI.");
+    } else if let Some(out) = output {
+        std::fs::write(&out, &md)?;
+        println!("✅ Behavioral contracts saved to: {}", out.display());
+    } else {
+        print!("{}", md);
+    }
+
+    Ok(())
+}
+
+/// Helper: load the source code graph, building it if needed.
+async fn load_or_build_graph(ctx: &OpsContext, path: &Path) -> Result<vibe_graph_core::SourceCodeGraph> {
+    let ops_store = Store::new(path);
+    if ops_store.has_graph() {
+        ops_store
+            .load_graph()
+            .context("Failed to load graph")?
+            .context("Graph should exist")
+    } else {
+        println!("📊 Building SourceCodeGraph...");
+        let request = GraphRequest::new(path);
+        let response = ctx.graph(request).await.context("Failed to build graph")?;
+        println!(
+            "   Built: {} nodes, {} edges",
+            response.graph.node_count(),
+            response.graph.edge_count()
+        );
+        Ok(response.graph)
+    }
 }

@@ -330,6 +330,75 @@ enum AutomatonCommands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+
+    /// Run impact analysis using the automaton description.
+    ///
+    /// Seeds activation from git changes (or specified files), runs to stability,
+    /// and reports which files are most impacted by the changes.
+    ///
+    /// Examples:
+    ///   vg automaton run                       # current git changes
+    ///   vg automaton run --from-git             # explicit git seeding
+    ///   vg automaton run --file src/lib.rs      # seed specific file
+    ///   vg automaton run --max-ticks 30         # limit ticks
+    ///   vg automaton run --json                 # JSON output
+    Run {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Seed activation from current git working tree changes (default behavior).
+        #[arg(long)]
+        from_git: bool,
+
+        /// Seed activation from specific files (can repeat).
+        #[arg(long = "file", short = 'f')]
+        files: Vec<PathBuf>,
+
+        /// Maximum ticks to run (defaults to 50).
+        #[arg(long)]
+        max_ticks: Option<usize>,
+
+        /// Output as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+
+        /// Also save the full report to a file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Show top N impacted files (default 20).
+        #[arg(long, default_value = "20")]
+        top: usize,
+    },
+
+    /// Export behavioral contracts from the automaton description.
+    ///
+    /// Generates a markdown document describing per-module roles, stability
+    /// values, and behavioral rules. Useful for AI agents and code review.
+    ///
+    /// Examples:
+    ///   vg automaton describe                   # print to stdout
+    ///   vg automaton describe -o contracts.md   # save to file
+    ///   vg automaton describe --with-impact      # include last impact analysis
+    ///   vg automaton describe --cursor-rule      # generate .cursor/rules file
+    Describe {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output to a specific file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Include the latest impact analysis results.
+        #[arg(long)]
+        with_impact: bool,
+
+        /// Generate a .cursor/rules/automaton-contracts.mdc file.
+        #[arg(long)]
+        cursor_rule: bool,
+    },
 }
 
 /// Remote repository commands.

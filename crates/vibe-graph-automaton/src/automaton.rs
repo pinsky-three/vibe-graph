@@ -482,7 +482,7 @@ impl GraphAutomaton {
                 return rule.id();
             }
         }
-        RuleId::NOOP
+        RuleId::noop()
     }
 
     fn compute_avg_activation(&self) -> f32 {

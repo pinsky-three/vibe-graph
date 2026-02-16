@@ -127,7 +127,7 @@ impl Transition {
 
     /// Create an "initial" transition (no rule triggered it).
     pub fn initial(state: StateData) -> Self {
-        Self::new(RuleId::INITIAL, state)
+        Self::new(RuleId::initial(), state)
     }
 }
 
