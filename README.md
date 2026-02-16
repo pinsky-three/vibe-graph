@@ -25,6 +25,16 @@ vg sync
 # Build the dependency graph
 vg graph
 
+# Start the automaton runtime (default command)
+vg run
+# Interactive: re-analyze, evolution plan, AI task generation, goal setting
+
+# One-shot health check (CI-friendly)
+vg run --once
+
+# Direct the evolution toward a feature
+vg run --goal "add WebSocket support" --target src/ws.rs
+
 # Launch interactive visualization
 vg serve
 # Open http://localhost:3000
@@ -35,6 +45,9 @@ vg serve --mcp
 
 ## Features
 
+- **🧬 Automaton Runtime** — Self-improving development loop with evolution planning and directed perturbation
+- **🎯 Directed Evolution** — Set goals to bias the evolution plan toward specific features or improvements
+- **🤖 AI Agent Integration** — Generates structured task prompts for Cursor, Claude, or any AI agent
 - **🤖 Model Context Protocol (MCP)** — Native MCP server for AI agents to semantically explore code
 - **⚡ GPU Acceleration** — WebGPU-powered Barnes-Hut layout for large graphs (>10k nodes)
 - **🔍 Auto-detection** — Recognizes single repos, multi-repo workspaces, or plain directories
@@ -65,20 +78,35 @@ make build
 
 | Command | Description |
 |---------|-------------|
+| `vg run` | **Default.** Start the automaton runtime (interactive watch loop) |
+| `vg run --once` | Single-pass analysis + task generation (CI mode) |
+| `vg run --goal "..."` | Direct evolution toward a specific feature or goal |
 | `vg sync` | Analyze workspace, save to `.self/` |
-| `vg sync <org>` | Clone and analyze entire GitHub org |
-| `vg sync <owner/repo>` | Clone and analyze single GitHub repo |
 | `vg graph` | Build SourceCodeGraph with reference detection |
 | `vg serve` | Interactive visualization at localhost:3000 |
 | `vg serve --mcp` | Start Model Context Protocol server for AI agents |
+| `vg automaton generate` | Generate automaton description from graph |
+| `vg automaton plan` | Show the evolution plan (prioritized work items) |
+| `vg automaton describe` | Export behavioral contracts (markdown) |
+| `vg automaton show` | Show current automaton description |
+| `vg viz` | Launch native egui visualization |
 | `vg compose` | Generate markdown documentation |
 | `vg status` | Show workspace and cache status |
 | `vg clean` | Remove `.self/` folder |
-| `vg remote show` | Show configured remote (auto-detected for single repos) |
-| `vg remote add <org>` | Set GitHub org as remote for workspaces |
+| `vg remote show` | Show configured remote |
+| `vg remote add <org>` | Set GitHub org as remote |
 | `vg remote list` | List repos from configured remote |
-| `vg remote clone` | Clone all repos from configured remote |
 | `vg config show` | Display current configuration |
+
+**Run Options:**
+- `--once` — Single pass, no watch loop (writes `next-task.md` and exits)
+- `--json` — JSON output (implies `--once`, for CI pipelines)
+- `--goal "description"` — Direct evolution toward a specific feature
+- `--target <path>` — Target specific files/modules (repeatable, used with `--goal`)
+- `--force` — Full rebuild from scratch
+- `--interval <secs>` — Poll interval for change detection (default: 5)
+- `--snapshot` — Save snapshot after each analysis pass
+- `--top <N>` — Show top N impacted files (default: 20)
 
 **Sync Options:**
 - `--cache` — Clone to global cache instead of current directory
@@ -86,6 +114,84 @@ make build
 - `--snapshot` — Create timestamped snapshot
 
 Run `vg --help` for full command reference.
+
+## 🧬 Automaton Runtime (`vg run`)
+
+The default command. Bootstraps the full pipeline (sync → graph → description) if needed, then starts an interactive runtime that monitors your codebase and generates evolution plans.
+
+```bash
+# Start interactive mode
+vg run
+
+# One-shot (CI / scripting)
+vg run --once
+```
+
+**Interactive Controls:**
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Re-analyze now |
+| `n` | Generate next task (AI agent prompt) |
+| `p` | Show full evolution plan |
+| `d` | Update `.cursor/rules` with behavioral contracts |
+| `s` | Save snapshot |
+| `g` | Set a goal (direct evolution toward a feature) |
+| `t` | Add a target file to the current goal |
+| `x` | Clear goal (return to stability-only mode) |
+| `q` | Quit |
+
+### Evolution Plan
+
+The automaton computes a **stability score** for every file based on structural properties (connectivity, role, test coverage). The evolution plan ranks all files below their target stability and suggests concrete actions:
+
+- **add tests** — for files with dependents but no test coverage
+- **add documentation** — for stable files lacking docs
+- **reduce coupling** — for highly-connected files
+- **goal-directed** — when a perturbation is active
+
+### Directed Perturbation
+
+Set a goal to bias the evolution plan toward implementing a specific feature:
+
+```bash
+# Via CLI flags
+vg run --goal "add WebSocket support" --target src/server.rs --target src/ws/
+
+# Or interactively: press 'g' during watch mode
+```
+
+When a goal is active:
+- Files matching the goal keywords or explicit targets get **3x priority boost**
+- Suggested actions are rewritten to be **goal-aligned**
+- The task prompt includes a **Goal** section with context
+- The perturbation persists across restarts (saved to `.self/automaton/perturbation.json`)
+
+### AI Agent Loop
+
+The `n` key (or `--once` flag) generates a structured task prompt at `.self/automaton/next-task.md`:
+
+```markdown
+# Task: add WebSocket support — `src/server.rs`
+
+## Goal
+**add WebSocket support**
+
+## Context
+- File, role, stability gap, priority, dependents, test coverage
+
+## Action
+**add WebSocket support (goal-directed)**
+
+## Instructions
+1. Read the file...
+2. Implement changes for the goal...
+
+## Acceptance Criteria
+- Stability improves, tests pass, clippy clean
+```
+
+Open this file and hand it to any AI agent (Cursor, Claude, etc.) to execute autonomously. Re-run `vg run --once` after each change to get the next task.
 
 ## 🤖 Model Context Protocol (MCP)
 
@@ -136,13 +242,16 @@ vg sync && vg serve
 vibe-graph/
 ├── crates/
 │   ├── vibe-graph-core        # Domain model: graphs, nodes, edges, references
-│   ├── vibe-graph-automaton   # Temporal state evolution & rule-driven automaton
-│   ├── vibe-graph-cli         # CLI entry point (vg command)
+│   ├── vibe-graph-automaton   # Temporal state evolution, evolution planning, perturbation
+│   ├── vibe-graph-cli         # CLI entry point (vg command) + automaton runtime
+│   ├── vibe-graph-ops         # Graph building, scanning, sync operations
 │   ├── vibe-graph-api         # REST + WebSocket API (Axum-based)
 │   ├── vibe-graph-mcp         # Model Context Protocol server implementation
 │   ├── vibe-graph-viz         # egui/WASM visualization
 │   ├── vibe-graph-git         # Git status and fossilization
-│   └── ...                    # Additional crates (ssot, semantic, llmca, etc.)
+│   ├── vibe-graph-llmca       # LLM-powered cellular automaton rules
+│   ├── vibe-graph-semantic    # Semantic analysis
+│   └── ...                    # Additional crates (ssot, sync, materializer, etc.)
 └── frontend/                  # TypeScript/Vite host for WASM visualization
 ```
 
@@ -151,19 +260,27 @@ vibe-graph/
 The automaton crate enables **temporal state evolution** on graphs—a foundation for "vibe coding" where code structure evolves over time via rule-driven transitions.
 
 ```rust
-use vibe_graph_automaton::{GraphAutomaton, Rule, StateData, TemporalGraph};
+use vibe_graph_automaton::{
+    GraphAutomaton, Rule, StateData, TemporalGraph,
+    run_evolution_plan, Perturbation, StabilityObjective,
+};
 
-// Each node tracks: history: Vec<(rule, state)>, current: (rule, state)
+// Temporal evolution
 let mut automaton = GraphAutomaton::new(temporal_graph)
     .with_rule(Arc::new(MyRule));
-
-// Evolve the graph
 automaton.tick()?;
+
+// Evolution planning with directed perturbation
+let perturbation = Perturbation::new("add WebSocket support");
+let plan = run_evolution_plan(graph, &description, &objective, Some(&perturbation))?;
+// plan.items are sorted by priority, with goal-matched files boosted 3x
 ```
 
 **Features:**
 - 🕰️ **Temporal State** — Each node maintains full transition history
 - 🔄 **Pluggable Rules** — Implement `Rule` trait for custom evolution logic
+- 📋 **Evolution Planning** — Stability-gap analysis with cascading priority propagation
+- 🎯 **Directed Perturbation** — Bias the plan toward implementing specific features
 - 🧠 **LLM-Powered Rules** — Use `--features llm` for AI-driven state transitions via [Rig](https://github.com/0xPlaygrounds/rig)
 - 🎮 **Examples** — Conway's Game of Life (deterministic & LLM-powered)
 
@@ -184,10 +301,17 @@ Analysis results persist in `.self/`:
 
 ```
 .self/
-├── manifest.json   # Workspace metadata
-├── project.json    # Full analysis data
-├── graph.json      # SourceCodeGraph with references
-└── snapshots/      # Historical snapshots
+├── manifest.json                  # Workspace metadata
+├── project.json                   # Full analysis data
+├── graph.json                     # SourceCodeGraph with references
+├── snapshots/                     # Historical snapshots
+└── automaton/
+    ├── description.json           # Automaton description (roles, rules, stability)
+    ├── state.json                 # Current temporal graph state
+    ├── perturbation.json          # Active directed goal (if any)
+    ├── next-task.md               # Latest AI agent task prompt
+    ├── tick_history.json          # History of automaton ticks
+    └── snapshots/                 # Timestamped automaton snapshots
 ```
 
 Add `.self/` to your `.gitignore`.
