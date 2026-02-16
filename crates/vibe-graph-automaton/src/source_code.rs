@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use vibe_graph_core::{NodeId, SourceCodeGraph};
 
-use crate::automaton::{AutomatonConfig, GraphAutomaton};
+use crate::automaton::{AutomatonConfig, AutomatonRuntime, GraphAutomaton};
 use crate::error::AutomatonResult;
 use crate::rule::{Rule, RuleContext, RuleId, RuleOutcome};
 use crate::state::StateData;
@@ -450,7 +450,7 @@ pub fn create_impact_analyzer(
 }
 
 /// Get nodes by activation level after running the automaton.
-pub fn get_hot_nodes(automaton: &GraphAutomaton, threshold: f32) -> Vec<(NodeId, f32)> {
+pub fn get_hot_nodes(automaton: &impl AutomatonRuntime, threshold: f32) -> Vec<(NodeId, f32)> {
     automaton
         .graph()
         .nodes()
@@ -460,7 +460,10 @@ pub fn get_hot_nodes(automaton: &GraphAutomaton, threshold: f32) -> Vec<(NodeId,
 }
 
 /// Get the top N most activated nodes.
-pub fn get_top_activated(automaton: &GraphAutomaton, n: usize) -> Vec<(NodeId, f32, String)> {
+pub fn get_top_activated(
+    automaton: &impl AutomatonRuntime,
+    n: usize,
+) -> Vec<(NodeId, f32, String)> {
     let mut nodes: Vec<_> = automaton
         .graph()
         .nodes()
@@ -833,7 +836,7 @@ pub fn run_impact_analysis(
 }
 
 fn build_report(
-    automaton: &GraphAutomaton,
+    automaton: &impl AutomatonRuntime,
     description: &AutomatonDescription,
     changed_files: &[PathBuf],
     ticks: u64,

@@ -22,7 +22,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::automaton::{AutomatonConfig, TickResult};
+use crate::automaton::{AutomatonConfig, AutomatonRuntime, TickResult};
 use crate::config::AutomatonDescription;
 use crate::error::AutomatonResult;
 use crate::temporal::SourceCodeTemporalGraph;
@@ -149,7 +149,7 @@ impl AutomatonStore {
     /// Save the current automaton state.
     pub fn save_state(
         &self,
-        automaton: &GraphAutomaton,
+        automaton: &impl AutomatonRuntime,
         label: Option<String>,
     ) -> AutomatonResult<PathBuf> {
         self.init()?;
@@ -349,7 +349,7 @@ impl AutomatonStore {
     /// Create a timestamped snapshot of the current state.
     pub fn snapshot(
         &self,
-        automaton: &GraphAutomaton,
+        automaton: &impl AutomatonRuntime,
         label: Option<String>,
     ) -> AutomatonResult<PathBuf> {
         self.init()?;

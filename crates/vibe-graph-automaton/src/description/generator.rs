@@ -672,7 +672,7 @@ mod tests {
                 },
             });
             edges.push(GraphEdge {
-                id: EdgeId(i as u64),
+                id: EdgeId(i),
                 from: NodeId(i),
                 to: NodeId(100),
                 relationship: "imports".to_string(),

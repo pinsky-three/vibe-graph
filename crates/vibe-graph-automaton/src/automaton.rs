@@ -207,6 +207,49 @@ pub struct GraphAutomaton {
     stability: Box<dyn StabilityHeuristic>,
 }
 
+/// Stable interface for reading/writing automaton runtime state.
+///
+/// This decouples helper modules from the concrete `GraphAutomaton` type while
+/// preserving the same behavioral surface.
+pub trait AutomatonRuntime {
+    /// Get reference to the underlying graph.
+    fn graph(&self) -> &SourceCodeTemporalGraph;
+
+    /// Get mutable reference to the underlying graph.
+    fn graph_mut(&mut self) -> &mut SourceCodeTemporalGraph;
+
+    /// Get current tick number.
+    fn tick_count(&self) -> u64;
+
+    /// Get tick history.
+    fn tick_history(&self) -> &[TickResult];
+
+    /// Get the automaton configuration.
+    fn config(&self) -> &AutomatonConfig;
+}
+
+impl AutomatonRuntime for GraphAutomaton {
+    fn graph(&self) -> &SourceCodeTemporalGraph {
+        &self.graph
+    }
+
+    fn graph_mut(&mut self) -> &mut SourceCodeTemporalGraph {
+        &mut self.graph
+    }
+
+    fn tick_count(&self) -> u64 {
+        self.current_tick
+    }
+
+    fn tick_history(&self) -> &[TickResult] {
+        &self.tick_history
+    }
+
+    fn config(&self) -> &AutomatonConfig {
+        &self.config
+    }
+}
+
 impl GraphAutomaton {
     /// Create a new automaton with default configuration.
     pub fn new(graph: SourceCodeTemporalGraph) -> Self {

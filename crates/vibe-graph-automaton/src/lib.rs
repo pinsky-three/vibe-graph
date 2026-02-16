@@ -52,8 +52,8 @@ pub mod llm_runner;
 pub mod test_fixtures;
 
 pub use automaton::{
-    ActivationConvergenceHeuristic, AutomatonConfig, GraphAutomaton, StabilityHeuristic,
-    TickResult, TransitionRateHeuristic,
+    ActivationConvergenceHeuristic, AutomatonConfig, AutomatonRuntime, GraphAutomaton,
+    StabilityHeuristic, TickResult, TransitionRateHeuristic,
 };
 pub use error::{AutomatonError, AutomatonResult};
 pub use rule::{
