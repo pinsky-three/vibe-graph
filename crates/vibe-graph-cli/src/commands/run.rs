@@ -122,13 +122,18 @@ pub async fn execute(
 
     // ── Phase 3: Watch loop ─────────────────────────────────────────────
     let project_config = ProjectConfig::resolve(&path, None);
+    let is_managed_child = std::env::var(super::process::VG_MANAGED_ENV).is_ok();
     if project_config.has_scripts() {
         eprintln!("   📄 Loaded vg.toml ({} scripts)", project_config.scripts.len());
     }
     if let Some(ref proc) = project_config.process {
-        eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
+        if is_managed_child {
+            eprintln!("   ⚙ Running as managed child — [process] disabled");
+        } else {
+            eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
+        }
     }
-    print_controls(project_config.has_process());
+    print_controls(project_config.has_process() && !is_managed_child);
     watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config).await
 }
 
@@ -396,14 +401,20 @@ async fn watch_loop(
     let objective = project_config.stability_objective();
     let mut last_script_feedback: Option<ScriptFeedback> = None;
 
-    // Spawn managed process if configured
+    // Spawn managed process if configured — but not if we're already a managed child
+    // (prevents infinite recursion when the project is vg itself)
+    let is_managed_child = std::env::var(super::process::VG_MANAGED_ENV).is_ok();
     let mut managed_process: Option<ManagedProcess> = None;
     if let Some(ref proc_config) = project_config.process {
-        let mut mp = ManagedProcess::new(proc_config, path);
-        if let Err(e) = mp.spawn() {
-            eprintln!("   ⚠ Failed to start process: {}", e);
+        if is_managed_child {
+            eprintln!("   ⚙ Running as managed child — skipping [process] spawn");
+        } else {
+            let mut mp = ManagedProcess::new(proc_config, path);
+            if let Err(e) = mp.spawn() {
+                eprintln!("   ⚠ Failed to start process: {}", e);
+            }
+            managed_process = Some(mp);
         }
-        managed_process = Some(mp);
     }
 
     // Set terminal to raw mode for non-blocking key reads

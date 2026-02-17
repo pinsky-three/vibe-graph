@@ -19,6 +19,11 @@ use vibe_graph_automaton::{
 /// Maximum stderr lines kept in the ring buffer.
 const MAX_STDERR_LINES: usize = 200;
 
+/// Env var set on child processes to prevent recursive spawning.
+/// When `vg run` is itself the managed process (self-hosting), the child
+/// sees this and skips spawning its own `[process]`.
+pub const VG_MANAGED_ENV: &str = "VG_MANAGED";
+
 /// A managed child process with restart and output capture.
 pub struct ManagedProcess {
     config: ProcessSection,
@@ -60,6 +65,9 @@ impl ManagedProcess {
             .current_dir(&self.cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+
+        // Recursion guard: tell child processes they're managed
+        cmd.env(VG_MANAGED_ENV, "1");
 
         // Apply extra env vars
         for (key, value) in &self.config.env {
