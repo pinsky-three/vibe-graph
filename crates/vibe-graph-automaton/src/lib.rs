@@ -109,9 +109,12 @@ pub use source_code::{
 pub use temporal::SourceCodeTemporalGraph;
 
 // Project config (vg.toml)
-pub use inference::{detect_project_type, generate_toml, infer_config, ProjectType};
-pub use project_config::{ProjectConfig, CONFIG_FILENAME};
-pub use script::{run_script, run_watch_scripts, ScriptError, ScriptFeedback, ScriptResult, Severity};
+pub use inference::{detect_project_type, generate_toml, infer_config, infer_process, ProjectType};
+pub use project_config::{ProcessSection, ProjectConfig, RestartPolicy, CONFIG_FILENAME};
+pub use script::{
+    parse_errors, run_script, run_watch_scripts, ProcessFeedback, ScriptError, ScriptFeedback,
+    ScriptResult, Severity,
+};
 
 // LLM runner re-exports (when feature enabled)
 #[cfg(feature = "llm")]

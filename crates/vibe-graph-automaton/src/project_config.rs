@@ -37,6 +37,10 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub watch: WatchSection,
 
+    /// Managed long-running process (the actual program).
+    #[serde(default)]
+    pub process: Option<ProcessSection>,
+
     /// Stability target overrides per role.
     #[serde(default)]
     pub stability: HashMap<String, f32>,
@@ -80,6 +84,78 @@ pub struct IgnoreSection {
     /// Glob patterns to skip.
     #[serde(default)]
     pub patterns: Vec<String>,
+}
+
+/// `[process]` section — the managed long-running program.
+///
+/// When configured, `vg run` spawns this as a child process, restarts it
+/// on code changes or crashes, and captures stderr/stdout as perturbation
+/// signals for the evolution plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessSection {
+    /// Shell command to start the process.
+    pub cmd: String,
+
+    /// Restart policy.
+    #[serde(default)]
+    pub restart: RestartPolicy,
+
+    /// Seconds to wait after SIGTERM before SIGKILL.
+    #[serde(default = "ProcessSection::default_grace_period")]
+    pub grace_period: u64,
+
+    /// Optional health check URL. If set, the process is considered
+    /// healthy only when this URL returns 2xx.
+    #[serde(default)]
+    pub health_check: Option<String>,
+
+    /// Extra environment variables passed to the process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+impl ProcessSection {
+    fn default_grace_period() -> u64 {
+        3
+    }
+}
+
+impl Default for ProcessSection {
+    fn default() -> Self {
+        Self {
+            cmd: String::new(),
+            restart: RestartPolicy::default(),
+            grace_period: Self::default_grace_period(),
+            health_check: None,
+            env: HashMap::new(),
+        }
+    }
+}
+
+/// When to restart the managed process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestartPolicy {
+    /// Restart when source files change (default).
+    #[default]
+    OnChange,
+    /// Restart only if the process exits unexpectedly.
+    OnCrash,
+    /// Always restart (on change AND on crash).
+    Always,
+    /// Never auto-restart.
+    Never,
+}
+
+impl std::fmt::Display for RestartPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OnChange => write!(f, "on-change"),
+            Self::OnCrash => write!(f, "on-crash"),
+            Self::Always => write!(f, "always"),
+            Self::Never => write!(f, "never"),
+        }
+    }
 }
 
 /// `[automaton]` section — runtime tuning.
@@ -272,6 +348,11 @@ impl ProjectConfig {
     /// Check if this config has watch scripts configured.
     pub fn has_watch_scripts(&self) -> bool {
         !self.watch.run.is_empty() && self.watch.run.iter().any(|n| self.scripts.contains_key(n.as_str()))
+    }
+
+    /// Check if this config has a managed process configured.
+    pub fn has_process(&self) -> bool {
+        self.process.is_some()
     }
 }
 
@@ -474,6 +555,66 @@ run = ["test"]
         let config = ProjectConfig::from_workspace_defaults(&defaults, &repo);
         assert_eq!(config.project.name, "my-repo");
         assert_eq!(config.scripts["test"], "cargo test");
+    }
+
+    #[test]
+    fn test_parse_process_section() {
+        let toml_str = r#"
+[process]
+cmd = "cargo run -- serve"
+restart = "on-change"
+grace_period = 5
+health_check = "http://localhost:3000/healthz"
+env = { RUST_LOG = "info", PORT = "3000" }
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.process.is_some());
+        let proc = config.process.unwrap();
+        assert_eq!(proc.cmd, "cargo run -- serve");
+        assert_eq!(proc.restart, RestartPolicy::OnChange);
+        assert_eq!(proc.grace_period, 5);
+        assert_eq!(proc.health_check.unwrap(), "http://localhost:3000/healthz");
+        assert_eq!(proc.env["RUST_LOG"], "info");
+        assert_eq!(proc.env["PORT"], "3000");
+    }
+
+    #[test]
+    fn test_parse_process_minimal() {
+        let toml_str = r#"
+[process]
+cmd = "python main.py"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let proc = config.process.unwrap();
+        assert_eq!(proc.cmd, "python main.py");
+        assert_eq!(proc.restart, RestartPolicy::OnChange);
+        assert_eq!(proc.grace_period, 3);
+        assert!(proc.health_check.is_none());
+        assert!(proc.env.is_empty());
+    }
+
+    #[test]
+    fn test_restart_policy_variants() {
+        for (input, expected) in [
+            ("\"on-change\"", RestartPolicy::OnChange),
+            ("\"on-crash\"", RestartPolicy::OnCrash),
+            ("\"always\"", RestartPolicy::Always),
+            ("\"never\"", RestartPolicy::Never),
+        ] {
+            let toml_str = format!("[process]\ncmd = \"test\"\nrestart = {}", input);
+            let config: ProjectConfig = toml::from_str(&toml_str).unwrap();
+            assert_eq!(config.process.unwrap().restart, expected);
+        }
+    }
+
+    #[test]
+    fn test_has_process() {
+        let config_no = ProjectConfig::default();
+        assert!(!config_no.has_process());
+
+        let toml_str = "[process]\ncmd = \"cargo run\"";
+        let config_yes: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(config_yes.has_process());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use tracing::debug;
 
-use crate::project_config::{ProjectConfig, ProjectSection, WatchSection};
+use crate::project_config::{ProcessSection, ProjectConfig, ProjectSection, WatchSection};
 
 /// Detected project type based on filesystem markers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +113,22 @@ fn infer_watch_scripts(project_type: &ProjectType) -> Vec<String> {
     }
 }
 
+/// Infer the default process command for a project type.
+pub fn infer_process(project_type: &ProjectType) -> Option<ProcessSection> {
+    let cmd = match project_type {
+        ProjectType::Rust => Some("cargo run"),
+        ProjectType::Node => Some("npm start"),
+        ProjectType::Go => Some("go run ."),
+        ProjectType::Python | ProjectType::Make | ProjectType::Docker | ProjectType::Unknown => {
+            None
+        }
+    };
+    cmd.map(|c| ProcessSection {
+        cmd: c.to_string(),
+        ..Default::default()
+    })
+}
+
 /// Infer a full `ProjectConfig` from the filesystem.
 ///
 /// Detects the project type and generates appropriate default scripts
@@ -142,10 +158,13 @@ pub fn infer_config(path: &Path) -> ProjectConfig {
         scripts
     };
 
+    let process = infer_process(&project_type);
+
     ProjectConfig {
         project: ProjectSection { name },
         scripts,
         watch: WatchSection { run: watch_run },
+        process,
         ..Default::default()
     }
 }
@@ -201,6 +220,26 @@ pub fn generate_toml(config: &ProjectConfig) -> String {
         out.push_str("[watch]\n");
         let items: Vec<String> = config.watch.run.iter().map(|s| format!("\"{}\"", s)).collect();
         out.push_str(&format!("run = [{}]\n", items.join(", ")));
+        out.push('\n');
+    }
+
+    // [process]
+    if let Some(ref proc) = config.process {
+        out.push_str("[process]\n");
+        out.push_str(&format!("cmd = \"{}\"\n", proc.cmd));
+        out.push_str(&format!("restart = \"{}\"\n", proc.restart));
+        if proc.grace_period != 3 {
+            out.push_str(&format!("grace_period = {}\n", proc.grace_period));
+        }
+        if let Some(ref hc) = proc.health_check {
+            out.push_str(&format!("health_check = \"{}\"\n", hc));
+        }
+        if !proc.env.is_empty() {
+            out.push_str("env = { ");
+            let pairs: Vec<String> = proc.env.iter().map(|(k, v)| format!("{} = \"{}\"", k, v)).collect();
+            out.push_str(&pairs.join(", "));
+            out.push_str(" }\n");
+        }
         out.push('\n');
     }
 

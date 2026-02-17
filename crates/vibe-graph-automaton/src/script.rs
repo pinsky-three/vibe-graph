@@ -136,6 +136,44 @@ impl ScriptFeedback {
 }
 
 // =============================================================================
+// Process feedback (from the managed long-running process)
+// =============================================================================
+
+/// Feedback captured from the managed process (crashes, stderr lines).
+///
+/// Unlike `ScriptFeedback` (batch scripts), this accumulates output over time
+/// from a long-running process. Each crash or restart resets the buffer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProcessFeedback {
+    /// Last exit code (None if still running).
+    pub exit_code: Option<i32>,
+    /// Recent stderr lines (ring buffer, capped).
+    pub stderr_lines: Vec<String>,
+    /// Parsed errors from stderr.
+    pub errors: Vec<ScriptError>,
+    /// How many times the process has crashed since last code change.
+    pub crash_count: usize,
+    /// How long the process has been running (current instance).
+    pub uptime: Duration,
+}
+
+impl ProcessFeedback {
+    /// Check if the process crashed (has an exit code and it's non-zero).
+    pub fn crashed(&self) -> bool {
+        self.exit_code.map(|c| c != 0).unwrap_or(false)
+    }
+
+    /// Merge this process feedback into a `ScriptFeedback` so it can be
+    /// passed uniformly to the evolution plan.
+    pub fn merge_into(&self, feedback: &mut ScriptFeedback) {
+        feedback.errors.extend(self.errors.clone());
+        if self.crashed() {
+            feedback.failed += 1;
+        }
+    }
+}
+
+// =============================================================================
 // Execution
 // =============================================================================
 

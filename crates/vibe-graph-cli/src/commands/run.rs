@@ -17,6 +17,7 @@ use vibe_graph_automaton::{
     run_watch_scripts, AutomatonDescription, AutomatonStore, DescriptionGenerator, EvolutionItem,
     GeneratorConfig, ImpactReport, Perturbation, ProjectConfig, ScriptFeedback,
 };
+use super::process::ManagedProcess;
 use vibe_graph_core::{NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
 
@@ -124,7 +125,10 @@ pub async fn execute(
     if project_config.has_scripts() {
         eprintln!("   📄 Loaded vg.toml ({} scripts)", project_config.scripts.len());
     }
-    print_controls();
+    if let Some(ref proc) = project_config.process {
+        eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
+    }
+    print_controls(project_config.has_process());
     watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config).await
 }
 
@@ -351,7 +355,7 @@ fn print_delta(report: &ImpactReport, top: usize, timestamp: &str) {
     }
 }
 
-fn print_controls() {
+fn print_controls(has_process: bool) {
     eprintln!("─── Controls ───────────────────────────────────────");
     eprintln!("  [enter]  re-analyze now");
     eprintln!("  n        next task (emit prompt for AI agent)");
@@ -361,6 +365,9 @@ fn print_controls() {
     eprintln!("  g        set goal (direct evolution toward a feature)");
     eprintln!("  t        add target file to current goal");
     eprintln!("  x        clear goal (return to stability-only mode)");
+    if has_process {
+        eprintln!("  r        restart managed process");
+    }
     eprintln!("  q        quit");
     eprintln!("────────────────────────────────────────────────────");
     eprintln!("   Watching for changes...\n");
@@ -389,6 +396,16 @@ async fn watch_loop(
     let objective = project_config.stability_objective();
     let mut last_script_feedback: Option<ScriptFeedback> = None;
 
+    // Spawn managed process if configured
+    let mut managed_process: Option<ManagedProcess> = None;
+    if let Some(ref proc_config) = project_config.process {
+        let mut mp = ManagedProcess::new(proc_config, path);
+        if let Err(e) = mp.spawn() {
+            eprintln!("   ⚠ Failed to start process: {}", e);
+        }
+        managed_process = Some(mp);
+    }
+
     // Set terminal to raw mode for non-blocking key reads
     let _raw_guard = RawModeGuard::enter();
 
@@ -411,8 +428,11 @@ async fn watch_loop(
             if let Some(key) = try_read_key() {
                 match key {
                     b'q' | 3 => {
-                        // q or Ctrl-C
+                        // q or Ctrl-C — kill managed process before exit
                         eprintln!("\n👋 Shutting down.");
+                        if let Some(ref mut mp) = managed_process {
+                            mp.kill().await;
+                        }
                         return Ok(());
                     }
                     b'\n' | b'\r' => {
@@ -528,7 +548,35 @@ async fn watch_loop(
                         }
                         print_watching();
                     }
+                    b'r' => {
+                        // Restart managed process
+                        if let Some(ref mut mp) = managed_process {
+                            if let Err(e) = mp.restart().await {
+                                eprintln!("   ❌ Failed to restart process: {}", e);
+                            }
+                        } else {
+                            eprintln!("   (no managed process configured)\n");
+                        }
+                        print_watching();
+                    }
                     _ => {}
+                }
+            }
+
+            // Check if managed process has crashed
+            if let Some(ref mut mp) = managed_process {
+                if !mp.check_alive().await {
+                    // Process exited — collect feedback and maybe restart
+                    let proc_fb = mp.to_feedback();
+                    if proc_fb.crashed() {
+                        // Merge process crash errors into script feedback
+                        let mut fb = last_script_feedback.clone().unwrap_or_default();
+                        proc_fb.merge_into(&mut fb);
+                        last_script_feedback = Some(fb);
+                    }
+                    if let Err(e) = mp.on_crash().await {
+                        eprintln!("   ❌ Failed to restart crashed process: {}", e);
+                    }
                 }
             }
 
@@ -555,6 +603,13 @@ async fn watch_loop(
                 last_script_feedback = Some(fb);
             }
 
+            // Restart managed process on code change
+            if let Some(ref mut mp) = managed_process {
+                if let Err(e) = mp.on_code_change().await {
+                    eprintln!("   ⚠ Failed to restart process: {}", e);
+                }
+            }
+
             if snapshot {
                 save_snapshot(path, &report)?;
             }
@@ -562,6 +617,7 @@ async fn watch_loop(
             last_fingerprint = new_fingerprint;
         }
     }
+
 }
 
 fn print_watching() {

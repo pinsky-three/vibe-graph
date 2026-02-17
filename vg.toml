@@ -6,7 +6,11 @@ build = "cargo build"
 check = "cargo check"
 lint = "cargo clippy -- -D warnings"
 test = "cargo test"
+dev = "cargo run -- run"
 
 [watch]
 run = ["check", "test"]
 
+[process]
+cmd = "cargo run -- run"
+restart = "on-change"

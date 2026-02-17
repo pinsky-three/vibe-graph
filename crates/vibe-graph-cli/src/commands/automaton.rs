@@ -357,8 +357,12 @@ async fn run(
         let request = vibe_graph_ops::GitChangesRequest::new(&path);
         match ctx.git_changes(request).await {
             Ok(response) if !response.changes.changes.is_empty() => {
-                let files: Vec<PathBuf> =
-                    response.changes.changes.iter().map(|c| c.path.clone()).collect();
+                let files: Vec<PathBuf> = response
+                    .changes
+                    .changes
+                    .iter()
+                    .map(|c| c.path.clone())
+                    .collect();
                 println!(
                     "🔍 Found {} git change(s) across {} repo(s) to seed:",
                     files.len(),
@@ -419,10 +423,7 @@ async fn run(
         println!("   🟡 Medium:   {}", report.stats.medium_impact);
         println!("   🟢 Low:      {}", report.stats.low_impact);
         println!("   ⚪ None:     {}", report.stats.no_impact);
-        println!(
-            "   Avg activation: {:.4}",
-            report.stats.avg_activation
-        );
+        println!("   Avg activation: {:.4}", report.stats.avg_activation);
         println!();
 
         // Show top N
@@ -511,10 +512,7 @@ fn describe(
         );
 
         std::fs::write(&rule_path, &cursor_content)?;
-        println!(
-            "✅ Cursor rule generated: {}",
-            rule_path.display()
-        );
+        println!("✅ Cursor rule generated: {}", rule_path.display());
         println!("   This will be automatically loaded by Cursor AI.");
     } else if let Some(out) = output {
         std::fs::write(&out, &md)?;
@@ -641,10 +639,7 @@ async fn plan(
                     short,
                     item.role,
                 );
-                println!(
-                    "       └─ {}",
-                    item.suggested_action,
-                );
+                println!("       └─ {}", item.suggested_action,);
             }
             println!();
         }
@@ -661,7 +656,10 @@ async fn plan(
 }
 
 /// Helper: load the source code graph, building it if needed.
-async fn load_or_build_graph(ctx: &OpsContext, path: &Path) -> Result<vibe_graph_core::SourceCodeGraph> {
+async fn load_or_build_graph(
+    ctx: &OpsContext,
+    path: &Path,
+) -> Result<vibe_graph_core::SourceCodeGraph> {
     let ops_store = Store::new(path);
     if ops_store.has_graph() {
         ops_store
@@ -777,7 +775,9 @@ mod tests {
         let tmp = TempDir::new().expect("failed to create temp dir");
         let desc = sample_description(name);
         let store = AutomatonStore::new(tmp.path());
-        store.save_description(&desc).expect("failed to save description");
+        store
+            .save_description(&desc)
+            .expect("failed to save description");
         (tmp, desc)
     }
 
@@ -836,14 +836,20 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         // No .self/automaton/ directory at all
         let result = show(tmp.path());
-        assert!(result.is_ok(), "show should return Ok even with no description");
+        assert!(
+            result.is_ok(),
+            "show should return Ok even with no description"
+        );
     }
 
     #[test]
     fn test_show_with_valid_description() {
         let (tmp, _desc) = setup_temp_store("test-show");
         let result = show(tmp.path());
-        assert!(result.is_ok(), "show should succeed with a valid description");
+        assert!(
+            result.is_ok(),
+            "show should succeed with a valid description"
+        );
     }
 
     #[test]
@@ -855,7 +861,10 @@ mod tests {
         store.save_description(&desc).unwrap();
 
         let result = show(tmp.path());
-        assert!(result.is_ok(), "show should handle empty node list gracefully");
+        assert!(
+            result.is_ok(),
+            "show should handle empty node list gracefully"
+        );
     }
 
     // ── describe tests ───────────────────────────────────────────────────
@@ -864,7 +873,10 @@ mod tests {
     fn test_describe_no_description() {
         let tmp = TempDir::new().unwrap();
         let result = describe(tmp.path(), None, false, false);
-        assert!(result.is_ok(), "describe should return Ok even with no description");
+        assert!(
+            result.is_ok(),
+            "describe should return Ok even with no description"
+        );
     }
 
     #[test]
@@ -894,13 +906,23 @@ mod tests {
         let result = describe(tmp.path(), None, false, true);
         assert!(result.is_ok());
 
-        let rule_path = tmp.path().join(".cursor").join("rules").join("automaton-contracts.mdc");
+        let rule_path = tmp
+            .path()
+            .join(".cursor")
+            .join("rules")
+            .join("automaton-contracts.mdc");
         assert!(rule_path.exists(), "cursor rule file should be created");
 
         let content = std::fs::read_to_string(&rule_path).unwrap();
         assert!(content.starts_with("---"), "should have frontmatter");
-        assert!(content.contains("test-cursor-rule"), "should contain project name");
-        assert!(content.contains("alwaysApply: true"), "should be always-applied");
+        assert!(
+            content.contains("test-cursor-rule"),
+            "should contain project name"
+        );
+        assert!(
+            content.contains("alwaysApply: true"),
+            "should be always-applied"
+        );
     }
 
     #[test]
@@ -943,7 +965,9 @@ mod tests {
         }
 
         // Entry point nodes should have high stability
-        let entry_points: Vec<_> = desc.nodes.iter()
+        let entry_points: Vec<_> = desc
+            .nodes
+            .iter()
             .filter(|n| n.rule.as_deref() == Some("entry_point"))
             .collect();
         assert_eq!(entry_points.len(), 2);

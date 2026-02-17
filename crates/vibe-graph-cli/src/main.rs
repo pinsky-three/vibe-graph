@@ -296,6 +296,26 @@ enum Commands {
         workspace: bool,
     },
 
+    /// Run a named script from vg.toml.
+    ///
+    /// Executes one of the scripts defined in the `[scripts]` section of
+    /// your `vg.toml`. Output streams directly to the terminal. If no
+    /// script name is given, lists all available scripts.
+    ///
+    /// Examples:
+    ///   vg exec test                   # run scripts.test
+    ///   vg exec lint                   # run scripts.lint
+    ///   vg exec build                  # run scripts.build
+    ///   vg exec                        # list available scripts
+    Exec {
+        /// Script name to run (omit to list available scripts).
+        name: Option<String>,
+
+        /// Path to project (defaults to current directory).
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+
     /// Work with automaton descriptions (generate, infer, run).
     #[command(subcommand)]
     Automaton(AutomatonCommands),
@@ -883,6 +903,51 @@ async fn main() -> Result<()> {
             eprintln!("✅ Generated {}", config_path.display());
             eprintln!();
             eprint!("{}", toml_content);
+        }
+
+        Commands::Exec { name, path } => {
+            let path = path.canonicalize().unwrap_or(path);
+            let config = vibe_graph_automaton::ProjectConfig::resolve(&path, None);
+
+            match name {
+                None => {
+                    // List available scripts
+                    if config.scripts.is_empty() {
+                        eprintln!("No scripts defined.");
+                        eprintln!("Create a vg.toml with a [scripts] section, or run `vg init`.");
+                        std::process::exit(1);
+                    }
+                    eprintln!("Available scripts:\n");
+                    let mut sorted: Vec<_> = config.scripts.iter().collect();
+                    sorted.sort_by_key(|(k, _)| (*k).clone());
+                    for (name, cmd) in sorted {
+                        eprintln!("  {:<12} {}", name, cmd);
+                    }
+                    if let Some(ref proc) = config.process {
+                        eprintln!("\nManaged process:");
+                        eprintln!("  {:<12} {} (restart: {})", "[process]", proc.cmd, proc.restart);
+                    }
+                }
+                Some(script_name) => {
+                    let cmd = config.scripts.get(&script_name).cloned().unwrap_or_else(|| {
+                        eprintln!("Unknown script: \"{}\"", script_name);
+                        if !config.scripts.is_empty() {
+                            let names: Vec<_> = config.scripts.keys().collect();
+                            eprintln!("Available: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+                        }
+                        std::process::exit(1);
+                    });
+
+                    // Spawn with inherited stdio for full terminal passthrough
+                    let status = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .current_dir(&path)
+                        .status()?;
+
+                    std::process::exit(status.code().unwrap_or(1));
+                }
+            }
         }
 
         Commands::Automaton(automaton_cmd) => {

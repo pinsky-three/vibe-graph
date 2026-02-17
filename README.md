@@ -81,6 +81,8 @@ make build
 | `vg run` | **Default.** Start the automaton runtime (interactive watch loop) |
 | `vg run --once` | Single-pass analysis + task generation (CI mode) |
 | `vg run --goal "..."` | Direct evolution toward a specific feature or goal |
+| `vg exec <name>` | Run a named script from `vg.toml` (like `npm run`) |
+| `vg exec` | List all available scripts |
 | `vg init` | Generate `vg.toml` project config from detected project type |
 | `vg sync` | Analyze workspace, save to `.self/` |
 | `vg graph` | Build SourceCodeGraph with reference detection |
@@ -155,11 +157,20 @@ patterns = ["*.lock"]
 [automaton]
 max_ticks = 30
 interval = 5
+
+[process]
+cmd = "cargo run -- serve --mcp"
+restart = "on-change"       # on-change | on-crash | always | never
+grace_period = 3            # seconds before SIGKILL after SIGTERM
+health_check = "http://localhost:3000/healthz"
+env = { RUST_LOG = "info" }
 ```
 
 **Config resolution chain:** explicit `vg.toml` > workspace defaults > auto-inferred from project markers (Cargo.toml, package.json, pyproject.toml, go.mod, Makefile, docker-compose.yml).
 
 **Script feedback loop:** During `vg run`, watch scripts execute on every file change. Script errors are parsed (Rust, GCC/ESLint, Python, Go, TypeScript patterns) and errored files receive a 5x priority boost in the evolution plan, with `suggested_action` set to the actual error message.
+
+**Process management:** When `[process]` is configured, `vg run` spawns the program as a managed child. On code changes it restarts the process (per restart policy). Crashes are captured and parsed for errors, which feed back into the evolution plan. Press `r` in the watch loop to manually restart. Use `vg exec <name>` to run any one-off script.
 
 ## 🧬 Automaton Runtime (`vg run`)
 
