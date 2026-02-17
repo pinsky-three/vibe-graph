@@ -40,8 +40,12 @@ pub async fn execute(
 ) -> Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-    // JSON implies single-pass (CI mode)
-    let once = once || json_output;
+    // JSON or managed-child implies single-pass.
+    // When VG_MANAGED=1, the outer `vg run` owns the watch loop — the child
+    // just does one analysis pass (health probe) and exits. Its output and
+    // exit code feed back into the outer automaton as perturbation.
+    let is_managed_child = std::env::var(super::process::VG_MANAGED_ENV).is_ok();
+    let once = once || json_output || is_managed_child;
 
     // ── Phase 1: Bootstrap ──────────────────────────────────────────────
     let (graph, description) = bootstrap(ctx, &path, force).await?;
@@ -121,19 +125,15 @@ pub async fn execute(
     }
 
     // ── Phase 3: Watch loop ─────────────────────────────────────────────
+    // (managed children never reach here — they exit in the `once` branch above)
     let project_config = ProjectConfig::resolve(&path, None);
-    let is_managed_child = std::env::var(super::process::VG_MANAGED_ENV).is_ok();
     if project_config.has_scripts() {
         eprintln!("   📄 Loaded vg.toml ({} scripts)", project_config.scripts.len());
     }
     if let Some(ref proc) = project_config.process {
-        if is_managed_child {
-            eprintln!("   ⚙ Running as managed child — [process] disabled");
-        } else {
-            eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
-        }
+        eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
     }
-    print_controls(project_config.has_process() && !is_managed_child);
+    print_controls(project_config.has_process());
     watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config).await
 }
 
@@ -401,20 +401,16 @@ async fn watch_loop(
     let objective = project_config.stability_objective();
     let mut last_script_feedback: Option<ScriptFeedback> = None;
 
-    // Spawn managed process if configured — but not if we're already a managed child
-    // (prevents infinite recursion when the project is vg itself)
-    let is_managed_child = std::env::var(super::process::VG_MANAGED_ENV).is_ok();
+    // Spawn managed process if configured.
+    // Note: managed children never reach watch_loop — they exit in the `once`
+    // branch of execute(), so no recursion guard is needed here.
     let mut managed_process: Option<ManagedProcess> = None;
     if let Some(ref proc_config) = project_config.process {
-        if is_managed_child {
-            eprintln!("   ⚙ Running as managed child — skipping [process] spawn");
-        } else {
-            let mut mp = ManagedProcess::new(proc_config, path);
-            if let Err(e) = mp.spawn() {
-                eprintln!("   ⚠ Failed to start process: {}", e);
-            }
-            managed_process = Some(mp);
+        let mut mp = ManagedProcess::new(proc_config, path);
+        if let Err(e) = mp.spawn() {
+            eprintln!("   ⚠ Failed to start process: {}", e);
         }
+        managed_process = Some(mp);
     }
 
     // Set terminal to raw mode for non-blocking key reads

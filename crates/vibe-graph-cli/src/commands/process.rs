@@ -4,6 +4,7 @@
 //! to `ManagedProcess` to keep the program running alongside the automaton.
 //! Captured stderr/stdout feeds back into the evolution plan.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -15,6 +16,15 @@ use tracing::{debug, info, warn};
 use vibe_graph_automaton::{
     parse_errors, ProcessFeedback, ProcessSection, RestartPolicy, ScriptResult,
 };
+
+/// Write to stderr without panicking on pipe errors (EAGAIN, broken pipe, etc.).
+/// `eprintln!` panics when stderr is temporarily unavailable — this is fatal
+/// inside tokio tasks that stream child-process output at high throughput.
+macro_rules! try_eprintln {
+    ($($arg:tt)*) => {{
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
 
 /// Maximum stderr lines kept in the ring buffer.
 const MAX_STDERR_LINES: usize = 200;
@@ -82,7 +92,7 @@ impl ManagedProcess {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    eprintln!("   [process] {}", line);
+                    try_eprintln!("   [process] {}", line);
                 }
             });
         }
@@ -93,7 +103,7 @@ impl ManagedProcess {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    eprintln!("   [process:err] {}", line);
+                    try_eprintln!("   [process:err] {}", line);
                     if let Ok(mut buf) = stderr_buf.lock() {
                         buf.push(line);
                         // Ring buffer: drop oldest if over limit
@@ -114,7 +124,7 @@ impl ManagedProcess {
             buf.clear();
         }
 
-        eprintln!("   ▶ Process started: {}", self.config.cmd);
+        try_eprintln!("   ▶ Process started: {}", self.config.cmd);
         Ok(())
     }
 
@@ -135,12 +145,12 @@ impl ManagedProcess {
 
                 if code != 0 {
                     self.crash_count += 1;
-                    eprintln!(
+                    try_eprintln!(
                         "   ✖ Process exited with code {} (crash #{})",
                         code, self.crash_count
                     );
                 } else {
-                    eprintln!("   ■ Process exited normally (code 0)");
+                    try_eprintln!("   ■ Process exited normally (code 0)");
                 }
                 false
             }
@@ -194,7 +204,7 @@ impl ManagedProcess {
     /// Restart the process: kill existing, then spawn fresh.
     pub async fn restart(&mut self) -> anyhow::Result<()> {
         if self.child.is_some() {
-            eprintln!("   ↻ Restarting process...");
+            try_eprintln!("   ↻ Restarting process...");
             self.kill().await;
         }
         self.spawn()
@@ -215,7 +225,7 @@ impl ManagedProcess {
     pub async fn on_crash(&mut self) -> anyhow::Result<()> {
         match self.config.restart {
             RestartPolicy::OnCrash | RestartPolicy::Always => {
-                eprintln!("   ↻ Auto-restarting crashed process...");
+                try_eprintln!("   ↻ Auto-restarting crashed process...");
                 self.spawn()
             }
             RestartPolicy::OnChange | RestartPolicy::Never => Ok(()),
