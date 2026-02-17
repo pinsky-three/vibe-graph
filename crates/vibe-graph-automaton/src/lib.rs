@@ -37,8 +37,11 @@ mod automaton;
 pub mod config;
 pub mod description;
 mod error;
+pub mod inference;
 pub mod persistence;
+pub mod project_config;
 mod rule;
+pub mod script;
 mod source_code;
 mod state;
 mod temporal;
@@ -104,6 +107,11 @@ pub use source_code::{
 
 // Re-export TemporalGraph implementation
 pub use temporal::SourceCodeTemporalGraph;
+
+// Project config (vg.toml)
+pub use inference::{detect_project_type, generate_toml, infer_config, ProjectType};
+pub use project_config::{ProjectConfig, CONFIG_FILENAME};
+pub use script::{run_script, run_watch_scripts, ScriptError, ScriptFeedback, ScriptResult, Severity};
 
 // LLM runner re-exports (when feature enabled)
 #[cfg(feature = "llm")]

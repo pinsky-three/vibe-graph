@@ -1,0 +1,12 @@
+[project]
+name = "vibe-graph"
+
+[scripts]
+build = "cargo build"
+check = "cargo check"
+lint = "cargo clippy -- -D warnings"
+test = "cargo test"
+
+[watch]
+run = ["check", "test"]
+

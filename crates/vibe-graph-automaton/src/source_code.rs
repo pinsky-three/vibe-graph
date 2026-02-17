@@ -1267,6 +1267,9 @@ pub struct EvolutionSummary {
     pub max_gap: f32,
     /// Overall "health score" = 1.0 - avg_gap (0..1, higher is better).
     pub health_score: f32,
+    /// Number of files with script errors (0 if no script feedback).
+    #[serde(default)]
+    pub script_errors: usize,
 }
 
 /// Run evolution planning: seed the automaton with stability gaps, propagate,
@@ -1276,6 +1279,7 @@ pub fn run_evolution_plan(
     description: &AutomatonDescription,
     objective: &StabilityObjective,
     perturbation: Option<&Perturbation>,
+    script_feedback: Option<&crate::script::ScriptFeedback>,
 ) -> AutomatonResult<EvolutionPlan> {
     let config = AutomatonConfig {
         max_ticks: 30,
@@ -1414,7 +1418,18 @@ pub fn run_evolution_plan(
             priority *= boost;
         }
 
-        let action = if goal_matched {
+        // Apply script feedback boost: files with errors get 5x priority
+        let script_error_msg = script_feedback.and_then(|fb| {
+            fb.first_error_for(&node_config.path).map(|m| m.to_string())
+        });
+        if script_error_msg.is_some() {
+            priority *= 5.0;
+        }
+
+        let action = if let Some(ref err_msg) = script_error_msg {
+            // Script error takes highest precedence
+            format!("fix: {}", err_msg)
+        } else if goal_matched {
             // Goal-aligned action overrides stability-gap suggestion
             perturbation
                 .map(|p| format!("{} (goal-directed)", p.goal))
@@ -1477,6 +1492,7 @@ pub fn run_evolution_plan(
             avg_gap,
             max_gap,
             health_score: health_score.clamp(0.0, 1.0),
+            script_errors: script_feedback.map(|fb| fb.errors.len()).unwrap_or(0),
         },
     })
 }
@@ -1522,13 +1538,20 @@ pub fn format_evolution_plan(plan: &EvolutionPlan) -> String {
          - At or above target: {} ✅\n\
          - Below target: {} ⬆️\n\
          - Average gap: {:.3}\n\
-         - Max gap: {:.3}\n\n",
+         - Max gap: {:.3}\n",
         plan.summary.total_nodes,
         plan.summary.at_target,
         plan.summary.below_target,
         plan.summary.avg_gap,
         plan.summary.max_gap,
     ));
+    if plan.summary.script_errors > 0 {
+        out.push_str(&format!(
+            " - Script errors: {} 🔴\n",
+            plan.summary.script_errors,
+        ));
+    }
+    out.push('\n');
 
     // Objective table
     out.push_str("## Stability Targets\n\n");

@@ -277,6 +277,25 @@ enum Commands {
         targets: Vec<String>,
     },
 
+    /// Initialize a vg.toml project config.
+    ///
+    /// Detects the project type (Rust, Node, Python, Go, etc.) from
+    /// filesystem markers and generates a default vg.toml with appropriate
+    /// build, test, and lint scripts.
+    ///
+    /// Examples:
+    ///   vg init                         # detect + generate vg.toml
+    ///   vg init --workspace             # generate workspace vg.toml
+    Init {
+        /// Path to project (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Generate a workspace-style vg.toml for multi-repo roots.
+        #[arg(long)]
+        workspace: bool,
+    },
+
     /// Work with automaton descriptions (generate, infer, run).
     #[command(subcommand)]
     Automaton(AutomatonCommands),
@@ -836,6 +855,34 @@ async fn main() -> Result<()> {
                 goal, targets,
             )
             .await?;
+        }
+
+        Commands::Init { path, workspace } => {
+            let path = path.canonicalize().unwrap_or(path);
+            let config_path = path.join(vibe_graph_automaton::CONFIG_FILENAME);
+
+            if config_path.exists() {
+                eprintln!("⚠ {} already exists at {}", vibe_graph_automaton::CONFIG_FILENAME, config_path.display());
+                eprintln!("  Delete it first if you want to regenerate.");
+                std::process::exit(1);
+            }
+
+            let project_type = vibe_graph_automaton::detect_project_type(&path);
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("project").to_string();
+
+            let toml_content = if workspace {
+                eprintln!("🔍 Generating workspace config for: {}", name);
+                vibe_graph_automaton::inference::generate_workspace_toml(&name, &project_type)
+            } else {
+                eprintln!("🔍 Detected project type: {}", project_type);
+                let config = vibe_graph_automaton::infer_config(&path);
+                vibe_graph_automaton::generate_toml(&config)
+            };
+
+            std::fs::write(&config_path, &toml_content)?;
+            eprintln!("✅ Generated {}", config_path.display());
+            eprintln!();
+            eprint!("{}", toml_content);
         }
 
         Commands::Automaton(automaton_cmd) => {

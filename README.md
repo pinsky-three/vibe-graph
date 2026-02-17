@@ -81,6 +81,7 @@ make build
 | `vg run` | **Default.** Start the automaton runtime (interactive watch loop) |
 | `vg run --once` | Single-pass analysis + task generation (CI mode) |
 | `vg run --goal "..."` | Direct evolution toward a specific feature or goal |
+| `vg init` | Generate `vg.toml` project config from detected project type |
 | `vg sync` | Analyze workspace, save to `.self/` |
 | `vg graph` | Build SourceCodeGraph with reference detection |
 | `vg serve` | Interactive visualization at localhost:3000 |
@@ -114,6 +115,51 @@ make build
 - `--snapshot` — Create timestamped snapshot
 
 Run `vg --help` for full command reference.
+
+## 📄 Project Configuration (`vg.toml`)
+
+`vg.toml` is the canonical project entrypoint that tells vg how to build, test, and lint your project. When present, script output (errors, warnings) feeds directly into the evolution plan as perturbation signals.
+
+**Generate with `vg init`:**
+
+```bash
+vg init                  # Detect project type, generate vg.toml
+vg init --workspace      # Generate workspace vg.toml for multi-repo roots
+```
+
+**Example `vg.toml`:**
+
+```toml
+[project]
+name = "my-service"
+
+[scripts]
+build = "cargo build"
+test = "cargo test"
+lint = "cargo clippy -- -D warnings"
+check = "cargo check"
+
+[watch]
+# Scripts auto-run when changes detected during `vg run`
+run = ["check", "test"]
+
+[stability]
+entry_point = 0.95
+hub = 0.85
+identity = 0.50
+
+[ignore]
+directories = ["node_modules", "target"]
+patterns = ["*.lock"]
+
+[automaton]
+max_ticks = 30
+interval = 5
+```
+
+**Config resolution chain:** explicit `vg.toml` > workspace defaults > auto-inferred from project markers (Cargo.toml, package.json, pyproject.toml, go.mod, Makefile, docker-compose.yml).
+
+**Script feedback loop:** During `vg run`, watch scripts execute on every file change. Script errors are parsed (Rust, GCC/ESLint, Python, Go, TypeScript patterns) and errored files receive a 5x priority boost in the evolution plan, with `suggested_action` set to the actual error message.
 
 ## 🧬 Automaton Runtime (`vg run`)
 

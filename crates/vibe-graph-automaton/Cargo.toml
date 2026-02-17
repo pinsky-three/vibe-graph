@@ -16,7 +16,7 @@ categories = ["data-structures", "simulation"]
 
 [features]
 default = []
-llm = ["rig-core", "tokio", "async-trait", "toml", "futures", "rand"]
+llm = ["rig-core", "tokio", "async-trait", "futures", "rand"]
 
 [dependencies]
 vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
@@ -25,12 +25,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 walkdir = "2.5"
+toml = "0.8"
+regex = "1"
 
 # LLM runner dependencies (optional)
 rig-core = { version = "0.11", optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { version = "0.1", optional = true }
-toml = { version = "0.8", optional = true }
 futures = { version = "0.3", optional = true }
 rand = { version = "0.9", optional = true }
 

@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 use vibe_graph_automaton::{
     format_behavioral_contracts, format_evolution_plan, format_impact_report, run_evolution_plan,
-    run_impact_analysis, AutomatonStore, DescriptionGenerator, GeneratorConfig, StabilityObjective,
+    run_impact_analysis, AutomatonStore, DescriptionGenerator, GeneratorConfig,
 };
 use vibe_graph_ops::{GraphRequest, OpsContext, Store};
 
@@ -561,8 +561,9 @@ async fn plan(
     // Load graph
     let graph = load_or_build_graph(ctx, &path).await?;
 
-    // Use default stability objective
-    let objective = StabilityObjective::default();
+    // Load stability objective from vg.toml (or defaults)
+    let project_config = vibe_graph_automaton::ProjectConfig::resolve(&path, None);
+    let objective = project_config.stability_objective();
 
     println!("🎯 Computing evolution plan...");
     println!("   Objective targets:");
@@ -573,7 +574,7 @@ async fn plan(
     }
     println!();
 
-    let plan = run_evolution_plan(graph, &description, &objective, None)
+    let plan = run_evolution_plan(graph, &description, &objective, None, None)
         .map_err(|e| anyhow::anyhow!("Automaton error: {}", e))?;
 
     if json_output {

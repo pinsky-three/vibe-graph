@@ -14,8 +14,8 @@ use anyhow::{Context, Result};
 
 use vibe_graph_automaton::{
     format_behavioral_contracts, format_evolution_plan, run_evolution_plan, run_impact_analysis,
-    AutomatonDescription, AutomatonStore, DescriptionGenerator, EvolutionItem, GeneratorConfig,
-    ImpactReport, Perturbation, StabilityObjective,
+    run_watch_scripts, AutomatonDescription, AutomatonStore, DescriptionGenerator, EvolutionItem,
+    GeneratorConfig, ImpactReport, Perturbation, ProjectConfig, ScriptFeedback,
 };
 use vibe_graph_core::{NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
@@ -93,7 +93,20 @@ pub async fn execute(
 
     if once {
         // Write a fresh next-task.md so it's never stale
-        match run_evolution_plan(graph.clone(), &description, &StabilityObjective::default(), perturbation.as_ref()) {
+        // Run watch scripts if configured
+        let project_config = ProjectConfig::resolve(&path, None);
+        let script_fb = if project_config.has_watch_scripts() {
+            let fb = run_watch_scripts(&project_config, &path);
+            if !fb.results.is_empty() {
+                eprintln!("   🔧 {}", fb.summary_line());
+            }
+            Some(fb)
+        } else {
+            None
+        };
+
+        let objective = project_config.stability_objective();
+        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), script_fb.as_ref()) {
             Ok(plan) if !plan.items.is_empty() => {
                 let task = &plan.items[0];
                 let prompt = build_task_prompt(task, &graph, &description, &plan.project_name, perturbation.as_ref());
@@ -107,8 +120,12 @@ pub async fn execute(
     }
 
     // ── Phase 3: Watch loop ─────────────────────────────────────────────
+    let project_config = ProjectConfig::resolve(&path, None);
+    if project_config.has_scripts() {
+        eprintln!("   📄 Loaded vg.toml ({} scripts)", project_config.scripts.len());
+    }
     print_controls();
-    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation).await
+    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config).await
 }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
@@ -364,10 +381,13 @@ async fn watch_loop(
     max_ticks: Option<usize>,
     snapshot: bool,
     initial_perturbation: Option<Perturbation>,
+    project_config: &ProjectConfig,
 ) -> Result<()> {
     let mut last_fingerprint = change_fingerprint(initial_changes);
     let mut perturbation: Option<Perturbation> = initial_perturbation;
     let store = AutomatonStore::new(path);
+    let objective = project_config.stability_objective();
+    let mut last_script_feedback: Option<ScriptFeedback> = None;
 
     // Set terminal to raw mode for non-blocking key reads
     let _raw_guard = RawModeGuard::enter();
@@ -410,7 +430,7 @@ async fn watch_loop(
                     b'p' => {
                         // Plan
                         eprintln!("   📋 Computing evolution plan...\n");
-                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default(), perturbation.as_ref()) {
+                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref()) {
                             Ok(plan) => {
                                 let md = format_evolution_plan(&plan);
                                 eprint!("{}", md);
@@ -423,7 +443,7 @@ async fn watch_loop(
                     b'n' => {
                         // Next task: compute plan and emit the top item as a task prompt
                         eprintln!("   🎯 Computing next task...\n");
-                        match run_evolution_plan(graph.clone(), description, &StabilityObjective::default(), perturbation.as_ref()) {
+                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref()) {
                             Ok(plan) if !plan.items.is_empty() => {
                                 let task = &plan.items[0];
                                 let prompt = build_task_prompt(task, graph, description, &plan.project_name, perturbation.as_ref());
@@ -523,6 +543,17 @@ async fn watch_loop(
             let now = chrono_now_short();
             let report = run_analysis(graph, description, &changed_files, max_ticks)?;
             print_delta(&report, top, &now);
+
+            // Run watch scripts on change
+            if project_config.has_watch_scripts() {
+                eprintln!("   🔧 Running watch scripts...");
+                let fb = run_watch_scripts(project_config, path);
+                eprintln!("   {}", fb.summary_line());
+                if !fb.errors.is_empty() {
+                    eprintln!("   📌 {} script errors in {} files", fb.errors.len(), fb.errored_files().len());
+                }
+                last_script_feedback = Some(fb);
+            }
 
             if snapshot {
                 save_snapshot(path, &report)?;
