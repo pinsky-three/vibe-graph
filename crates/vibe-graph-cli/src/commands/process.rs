@@ -147,7 +147,8 @@ impl ManagedProcess {
                     self.crash_count += 1;
                     try_eprintln!(
                         "   ✖ Process exited with code {} (crash #{})",
-                        code, self.crash_count
+                        code,
+                        self.crash_count
                     );
                 } else {
                     try_eprintln!("   ■ Process exited normally (code 0)");
@@ -248,10 +249,7 @@ impl ManagedProcess {
             exit_code: self.last_exit_code.unwrap_or(0),
             stdout: String::new(),
             stderr: combined,
-            duration: self
-                .started_at
-                .map(|s| s.elapsed())
-                .unwrap_or_default(),
+            duration: self.started_at.map(|s| s.elapsed()).unwrap_or_default(),
         };
         let errors = parse_errors(&fake_result);
 
@@ -260,10 +258,7 @@ impl ManagedProcess {
             stderr_lines,
             errors,
             crash_count: self.crash_count,
-            uptime: self
-                .started_at
-                .map(|s| s.elapsed())
-                .unwrap_or_default(),
+            uptime: self.started_at.map(|s| s.elapsed()).unwrap_or_default(),
         }
     }
 
