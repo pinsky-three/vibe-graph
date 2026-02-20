@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-layout-gpu"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 description = "GPU-accelerated force-directed graph layout using WebGPU/wgpu"
 license = "MIT"
