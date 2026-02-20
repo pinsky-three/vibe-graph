@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-api"
-version = "0.3.2"
+version = "0.3.3"
 edition.workspace = true
 description = "REST + WebSocket API service for Vibe-Graph"
 license = "MIT"
