@@ -19,7 +19,7 @@ automaton = ["vibe-graph-automaton"]
 gpu-layout = ["vibe-graph-layout-gpu"]
 
 [dependencies]
-vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.2.4", path = "../vibe-graph-core" }
 vibe-graph-automaton = { version = "0.2.0", path = "../vibe-graph-automaton", optional = true }
 vibe-graph-layout-gpu = { version = "0.1.0", path = "../vibe-graph-layout-gpu", optional = true }
 eframe = { workspace = true, features = ["glow"] }

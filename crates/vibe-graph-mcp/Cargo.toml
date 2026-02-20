@@ -12,7 +12,7 @@ default = ["http-server"]
 http-server = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-http", "dep:tokio-util"]
 
 [dependencies]
-vibe-graph-core = { version = "0.2.3", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.2.4", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.3", path = "../vibe-graph-ops" }
 vibe-graph-git = { version = "0.3.1", path = "../vibe-graph-git" }
 
