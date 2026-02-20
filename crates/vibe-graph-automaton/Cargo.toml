@@ -1,6 +1,6 @@
 [package]
 name = "vibe-graph-automaton"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 description = "Foundational graph automaton with temporal state evolution and rule-driven transitions"
 license = "MIT"
