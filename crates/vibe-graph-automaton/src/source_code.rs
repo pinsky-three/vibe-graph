@@ -1618,6 +1618,571 @@ pub fn format_evolution_plan(plan: &EvolutionPlan) -> String {
     out
 }
 
+// =============================================================================
+// Canonical Next-Task Object (benchmark-ready)
+// =============================================================================
+
+/// Canonical action vocabulary for task classification.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskAction {
+    AddTests,
+    AddDocs,
+    ReduceCoupling,
+    FixBug,
+    Refactor,
+    GoalDirected,
+    Fix,
+}
+
+impl TaskAction {
+    fn from_suggested(action: &str) -> Self {
+        let lower = action.to_lowercase();
+        if lower.contains("test") {
+            Self::AddTests
+        } else if lower.contains("documentation") || lower.contains("document") || lower.contains("docs") {
+            Self::AddDocs
+        } else if lower.contains("coupling") || lower.contains("interface") || lower.contains("extract") {
+            Self::ReduceCoupling
+        } else if lower.contains("goal-directed") {
+            Self::GoalDirected
+        } else if lower.contains("fix") {
+            Self::Fix
+        } else {
+            Self::Refactor
+        }
+    }
+}
+
+impl std::fmt::Display for TaskAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AddTests => write!(f, "add_tests"),
+            Self::AddDocs => write!(f, "add_docs"),
+            Self::ReduceCoupling => write!(f, "reduce_coupling"),
+            Self::FixBug => write!(f, "fix_bug"),
+            Self::Refactor => write!(f, "refactor"),
+            Self::GoalDirected => write!(f, "goal_directed"),
+            Self::Fix => write!(f, "fix"),
+        }
+    }
+}
+
+/// Evidence signals explaining why this file was selected.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskEvidence {
+    /// Impact signal: how many modules depend on this.
+    pub dependents: usize,
+    /// How many distinct crates are affected (blast radius).
+    pub affected_crates: usize,
+    /// Risk signal: whether the file has tests.
+    pub has_tests: bool,
+    /// Stability gap from current to target.
+    pub stability_gap: f32,
+    /// Node's structural role.
+    pub role: String,
+}
+
+/// Priority score with explainability.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskPriority {
+    /// Composite priority score (0.0 - unbounded, higher = more urgent).
+    pub score: f32,
+    /// Human-readable explanation of how the score was derived.
+    pub explanation: String,
+}
+
+/// A deduplicated neighbor entry (incoming or outgoing).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+pub struct TaskNeighbor {
+    pub path: String,
+    pub relationship: String,
+}
+
+/// Context pack: neighbors + blast radius.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskContext {
+    /// Deduplicated incoming edges (who depends on this).
+    pub incoming: Vec<TaskNeighbor>,
+    /// Deduplicated outgoing edges (what this depends on).
+    pub outgoing: Vec<TaskNeighbor>,
+    /// One-line blast radius summary.
+    pub blast_radius: String,
+}
+
+/// Scope control: what to touch and what not to touch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskScope {
+    /// Files the agent should focus on.
+    pub touch_only: Vec<String>,
+    /// Files the agent should NOT modify.
+    pub do_not_touch: Vec<String>,
+}
+
+/// Canonical next-task object — the benchmark artifact.
+///
+/// This is the structured representation of a single "best next task" for a
+/// codebase. Designed to be:
+/// - Machine-readable (`--json`)
+/// - Renderable to markdown (`next-task.md`)
+/// - Comparable across tools (benchmark-ready)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NextTask {
+    /// Schema version for forward compatibility.
+    pub schema_version: String,
+    /// Project name.
+    pub project: String,
+    /// Target file path.
+    pub target: String,
+    /// Classified action.
+    pub action: TaskAction,
+    /// Original suggested action text from the evolution plan.
+    pub action_detail: String,
+    /// One-line summary: "Why this file, why now?"
+    pub why: String,
+    /// Evidence signals.
+    pub evidence: TaskEvidence,
+    /// Priority with explanation.
+    pub priority: TaskPriority,
+    /// Concrete steps (3-8).
+    pub steps: Vec<String>,
+    /// Checkable acceptance criteria (3-6).
+    pub acceptance_criteria: Vec<String>,
+    /// Validation commands.
+    pub commands: Vec<String>,
+    /// Neighbor context (deduplicated).
+    pub context: TaskContext,
+    /// Scope control.
+    pub scope: TaskScope,
+    /// Current stability score.
+    pub current_stability: f32,
+    /// Target stability score.
+    pub target_stability: f32,
+    /// Active goal (if perturbation is active).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    /// Goal targets (if perturbation specifies files).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub goal_targets: Vec<String>,
+}
+
+/// Collect deduplicated neighbors from the graph for a given node.
+fn collect_neighbors(
+    graph: &SourceCodeGraph,
+    node_id: NodeId,
+    direction: NeighborDirection,
+    path_prefix: &str,
+    max: usize,
+) -> Vec<TaskNeighbor> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+
+    let edges: Box<dyn Iterator<Item = &vibe_graph_core::GraphEdge>> = match direction {
+        NeighborDirection::Incoming => Box::new(graph.edges.iter().filter(move |e| e.to == node_id)),
+        NeighborDirection::Outgoing => Box::new(graph.edges.iter().filter(move |e| e.from == node_id)),
+    };
+
+    for edge in edges {
+        let peer_id = match direction {
+            NeighborDirection::Incoming => edge.from,
+            NeighborDirection::Outgoing => edge.to,
+        };
+
+        if let Some(peer) = graph.nodes.iter().find(|n| n.id == peer_id) {
+            let p = peer.metadata.get("relative_path").unwrap_or(&peer.name);
+            let p = p.strip_prefix(path_prefix).unwrap_or(p).to_string();
+            let key = (p.clone(), edge.relationship.clone());
+
+            if seen.insert(key) {
+                result.push(TaskNeighbor {
+                    path: p,
+                    relationship: edge.relationship.clone(),
+                });
+                if result.len() >= max {
+                    break;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+#[derive(Clone, Copy)]
+enum NeighborDirection {
+    Incoming,
+    Outgoing,
+}
+
+/// Count distinct crates affected by dependents of a node.
+fn count_affected_crates(graph: &SourceCodeGraph, node_id: NodeId) -> usize {
+    let mut crate_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for edge in graph.edges.iter().filter(|e| e.to == node_id) {
+        if let Some(peer) = graph.nodes.iter().find(|n| n.id == edge.from) {
+            let path = peer.metadata.get("relative_path").unwrap_or(&peer.name);
+            // Extract crate name from paths like "crates/vibe-graph-foo/src/bar.rs"
+            if let Some(rest) = path.strip_prefix("crates/") {
+                if let Some(crate_name) = rest.split('/').next() {
+                    crate_names.insert(crate_name);
+                }
+            }
+        }
+    }
+
+    crate_names.len().max(1)
+}
+
+/// Build a canonical `NextTask` from an evolution plan item + graph context.
+pub fn build_next_task(
+    item: &EvolutionItem,
+    graph: &SourceCodeGraph,
+    project_name: &str,
+    perturbation: Option<&Perturbation>,
+) -> NextTask {
+    let prefix = shorten_prefix(project_name, &item.path);
+    let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path).to_string();
+    let node_id = NodeId(item.node_id);
+
+    let action = TaskAction::from_suggested(&item.suggested_action);
+    let affected_crates = count_affected_crates(graph, node_id);
+
+    // "Why this file" one-liner
+    let why = format!(
+        "{} file with {} dependents (across {} crate{}), {}, stability gap {:.2}",
+        item.role,
+        item.in_degree,
+        affected_crates,
+        if affected_crates != 1 { "s" } else { "" },
+        if item.has_test_neighbor { "has tests" } else { "no tests" },
+        item.gap,
+    );
+
+    // Priority explanation
+    let priority_explanation = format!(
+        "score = 0.6 * structural({:.3}) + 0.4 * propagated({:.3}); \
+         structural = gap({:.2}) * (1 + 3 * in_degree_norm); \
+         {} dependents amplify cascading impact{}",
+        item.priority * 0.6 / 0.6, // approximate structural component
+        item.priority * 0.4 / 0.4, // approximate propagated component
+        item.gap,
+        item.in_degree,
+        if perturbation.is_some() { "; goal boost 3x applied" } else { "" },
+    );
+
+    // Collect deduplicated neighbors
+    let incoming = collect_neighbors(graph, node_id, NeighborDirection::Incoming, &prefix, 10);
+    let outgoing = collect_neighbors(graph, node_id, NeighborDirection::Outgoing, &prefix, 10);
+
+    let blast_radius = format!(
+        "{} dependents across {} crate{}, {} direct dependencies",
+        item.in_degree,
+        affected_crates,
+        if affected_crates != 1 { "s" } else { "" },
+        outgoing.len(),
+    );
+
+    // Steps + acceptance criteria + commands based on action type
+    let (steps, acceptance, commands) = generate_task_instructions(&action, &short_path, perturbation);
+
+    // Scope control
+    let touch_only = vec![short_path.clone()];
+    let do_not_touch: Vec<String> = incoming
+        .iter()
+        .filter(|n| n.relationship == "contains")
+        .map(|n| n.path.clone())
+        .take(5)
+        .collect();
+
+    NextTask {
+        schema_version: "1.0.0".to_string(),
+        project: project_name.to_string(),
+        target: short_path,
+        action,
+        action_detail: item.suggested_action.clone(),
+        why,
+        evidence: TaskEvidence {
+            dependents: item.in_degree,
+            affected_crates,
+            has_tests: item.has_test_neighbor,
+            stability_gap: item.gap,
+            role: item.role.clone(),
+        },
+        priority: TaskPriority {
+            score: item.priority,
+            explanation: priority_explanation,
+        },
+        steps,
+        acceptance_criteria: acceptance,
+        commands,
+        context: TaskContext {
+            incoming,
+            outgoing,
+            blast_radius,
+        },
+        scope: TaskScope {
+            touch_only,
+            do_not_touch,
+        },
+        current_stability: item.current_stability,
+        target_stability: item.target_stability,
+        goal: perturbation.map(|p| p.goal.clone()),
+        goal_targets: perturbation
+            .map(|p| p.targets.clone())
+            .unwrap_or_default(),
+    }
+}
+
+fn generate_task_instructions(
+    action: &TaskAction,
+    target_path: &str,
+    perturbation: Option<&Perturbation>,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let read_step = format!("Read `{}` and understand its current implementation", target_path);
+
+    let (mut steps, mut acceptance) = match action {
+        TaskAction::AddTests => (
+            vec![
+                read_step,
+                "Identify untested public API surface".to_string(),
+                "Create or extend the test file for this module".to_string(),
+                "Write at least: one happy-path test, one edge-case test, one failure test".to_string(),
+                "Ensure tests cover error handling paths".to_string(),
+                "Run tests and verify all pass".to_string(),
+            ],
+            vec![
+                "New tests cover the public API surface".to_string(),
+                "At least 3 new test cases (happy, edge, failure)".to_string(),
+                "All existing tests continue to pass".to_string(),
+                "No new clippy warnings".to_string(),
+            ],
+        ),
+        TaskAction::AddDocs => (
+            vec![
+                read_step,
+                "Add module-level doc comments explaining purpose and usage".to_string(),
+                "Document all public functions with /// doc comments".to_string(),
+                "Add usage examples where helpful".to_string(),
+                "Add inline comments for non-obvious logic only".to_string(),
+                "Verify documentation builds without warnings".to_string(),
+            ],
+            vec![
+                "All public items have doc comments".to_string(),
+                "Module-level documentation explains purpose".to_string(),
+                "Documentation builds without warnings".to_string(),
+                "No new clippy warnings".to_string(),
+            ],
+        ),
+        TaskAction::ReduceCoupling => (
+            vec![
+                read_step,
+                "Identify the public API surface and its consumers".to_string(),
+                "Extract a trait or interface to decouple dependents".to_string(),
+                "Update dependents to use the trait instead of the concrete type".to_string(),
+                "Verify all dependents still compile and pass tests".to_string(),
+            ],
+            vec![
+                "Public API is narrower or behind a trait".to_string(),
+                "Dependents use the abstraction, not the concrete type".to_string(),
+                "All existing tests continue to pass".to_string(),
+                "No new clippy warnings".to_string(),
+            ],
+        ),
+        TaskAction::GoalDirected => {
+            let goal_text = perturbation.map(|p| p.goal.as_str()).unwrap_or("the stated goal");
+            (
+                vec![
+                    read_step,
+                    format!("Implement changes needed to support: {}", goal_text),
+                    "Update or add tests to cover new functionality".to_string(),
+                    "Ensure the change integrates with existing dependents".to_string(),
+                    "Run full test suite to verify nothing broke".to_string(),
+                ],
+                vec![
+                    format!("Changes support: {}", goal_text),
+                    "New functionality has test coverage".to_string(),
+                    "All existing tests continue to pass".to_string(),
+                    "No new clippy warnings".to_string(),
+                ],
+            )
+        }
+        TaskAction::Fix => (
+            vec![
+                read_step,
+                "Identify the root cause of the error".to_string(),
+                "Apply the minimal fix that resolves the issue".to_string(),
+                "Add a regression test for the fixed behavior".to_string(),
+                "Run the full test suite".to_string(),
+            ],
+            vec![
+                "The reported error is resolved".to_string(),
+                "Regression test covers the fix".to_string(),
+                "All existing tests continue to pass".to_string(),
+                "No new clippy warnings".to_string(),
+            ],
+        ),
+        _ => (
+            vec![
+                read_step,
+                "Apply the suggested improvement".to_string(),
+                "Verify the change doesn't break dependents".to_string(),
+                "Run tests to confirm".to_string(),
+            ],
+            vec![
+                "Applied improvement is correct".to_string(),
+                "All existing tests continue to pass".to_string(),
+                "No new clippy warnings".to_string(),
+            ],
+        ),
+    };
+
+    // Always add the feedback loop step
+    acceptance.push("Re-run `vg run --once` to verify health score improves".to_string());
+
+    if perturbation.is_some() && *action != TaskAction::GoalDirected {
+        steps.insert(1, "Consider how this change supports the active goal".to_string());
+    }
+
+    let commands = vec![
+        "cargo test".to_string(),
+        "cargo clippy -- -D warnings".to_string(),
+        "vg run --once".to_string(),
+    ];
+
+    (steps, acceptance, commands)
+}
+
+/// Render a `NextTask` as a markdown prompt (for next-task.md).
+pub fn format_next_task_markdown(task: &NextTask) -> String {
+    let mut out = String::new();
+
+    // Title
+    if let Some(ref goal) = task.goal {
+        out.push_str(&format!("# Task: {} — `{}`\n\n", goal, task.target));
+    } else {
+        out.push_str(&format!("# Task: Improve `{}`\n\n", task.target));
+    }
+
+    // Why this file (one-liner)
+    out.push_str(&format!("> **{}**\n\n", task.why));
+
+    // Goal section
+    if let Some(ref goal) = task.goal {
+        out.push_str("## Goal\n\n");
+        out.push_str(&format!("**{}**\n\n", goal));
+        if !task.goal_targets.is_empty() {
+            out.push_str("Targeted files:\n");
+            for t in &task.goal_targets {
+                out.push_str(&format!("- `{}`\n", t));
+            }
+            out.push('\n');
+        }
+    }
+
+    // Context
+    out.push_str("## Context\n\n");
+    out.push_str(&format!("- **File**: `{}`\n", task.target));
+    out.push_str(&format!("- **Action**: `{}`\n", task.action));
+    out.push_str(&format!("- **Role**: `{}`\n", task.evidence.role));
+    out.push_str(&format!(
+        "- **Stability**: {:.2} → target {:.2} (gap: {:.2})\n",
+        task.current_stability,
+        task.target_stability,
+        task.evidence.stability_gap,
+    ));
+    out.push_str(&format!(
+        "- **Priority**: {:.3} — {}\n",
+        task.priority.score, task.priority.explanation
+    ));
+    out.push_str(&format!(
+        "- **Blast radius**: {}\n",
+        task.context.blast_radius
+    ));
+    out.push_str(&format!(
+        "- **Has tests**: {}\n",
+        if task.evidence.has_tests { "yes" } else { "no" }
+    ));
+    out.push('\n');
+
+    // Incoming
+    if !task.context.incoming.is_empty() {
+        out.push_str("## Who depends on this (incoming)\n\n");
+        for n in &task.context.incoming {
+            out.push_str(&format!("  - `{}` ({})\n", n.path, n.relationship));
+        }
+        out.push('\n');
+    }
+
+    // Outgoing
+    if !task.context.outgoing.is_empty() {
+        out.push_str("## What this depends on (outgoing)\n\n");
+        for n in &task.context.outgoing {
+            out.push_str(&format!("  - `{}` ({})\n", n.path, n.relationship));
+        }
+        out.push('\n');
+    }
+
+    // Scope
+    out.push_str("## Scope\n\n");
+    if !task.scope.touch_only.is_empty() {
+        out.push_str("**Touch only:**\n");
+        for p in &task.scope.touch_only {
+            out.push_str(&format!("- `{}`\n", p));
+        }
+    }
+    if !task.scope.do_not_touch.is_empty() {
+        out.push_str("\n**Do not modify:**\n");
+        for p in &task.scope.do_not_touch {
+            out.push_str(&format!("- `{}`\n", p));
+        }
+    }
+    out.push('\n');
+
+    // Action + detail
+    out.push_str("## Action\n\n");
+    out.push_str(&format!("**{}**\n\n", task.action_detail));
+
+    // Steps
+    out.push_str("## Steps\n\n");
+    for (i, step) in task.steps.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n", i + 1, step));
+    }
+    out.push('\n');
+
+    // Acceptance criteria
+    out.push_str("## Acceptance Criteria\n\n");
+    for criterion in &task.acceptance_criteria {
+        out.push_str(&format!("- {}\n", criterion));
+    }
+    out.push('\n');
+
+    // Commands
+    out.push_str("## Validation Commands\n\n");
+    out.push_str("```bash\n");
+    for cmd in &task.commands {
+        out.push_str(cmd);
+        out.push('\n');
+    }
+    out.push_str("```\n");
+
+    out
+}
+
+/// Helper: compute the path prefix from project name for display purposes.
+fn shorten_prefix(project_name: &str, sample_path: &str) -> String {
+    sample_path
+        .find(project_name)
+        .map(|pos| {
+            let end = pos + project_name.len();
+            if sample_path.as_bytes().get(end) == Some(&b'/') {
+                sample_path[..=end].to_string()
+            } else {
+                sample_path[..end].to_string()
+            }
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

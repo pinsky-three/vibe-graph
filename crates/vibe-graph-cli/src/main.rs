@@ -272,6 +272,11 @@ enum Commands {
         #[arg(long)]
         goal: Option<String>,
 
+        /// Run watch scripts (check, test) before generating the task.
+        /// In --once mode, scripts are skipped by default for speed.
+        #[arg(long)]
+        scripts: bool,
+
         /// Target specific files/modules for the goal (repeatable).
         #[arg(long = "target", short = 't')]
         targets: Vec<String>,
@@ -653,6 +658,7 @@ async fn main() -> Result<()> {
         top: 20,
         max_ticks: None,
         goal: None,
+        scripts: false,
         targets: Vec::new(),
     });
 
@@ -868,11 +874,12 @@ async fn main() -> Result<()> {
             top,
             max_ticks,
             goal,
+            scripts,
             targets,
         } => {
             commands::run::execute(
                 &ctx, &path, force, once, interval, json, snapshot, top, max_ticks,
-                goal, targets,
+                goal, targets, scripts,
             )
             .await?;
         }

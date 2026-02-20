@@ -105,6 +105,12 @@ pub use source_code::{
     Perturbation,
 };
 
+// Canonical next-task object (benchmark-ready)
+pub use source_code::{
+    build_next_task, format_next_task_markdown, NextTask, TaskAction, TaskContext, TaskEvidence,
+    TaskNeighbor, TaskPriority, TaskScope,
+};
+
 // Re-export TemporalGraph implementation
 pub use temporal::SourceCodeTemporalGraph;
 

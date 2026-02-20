@@ -13,12 +13,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use vibe_graph_automaton::{
-    format_behavioral_contracts, format_evolution_plan, run_evolution_plan, run_impact_analysis,
-    run_watch_scripts, AutomatonDescription, AutomatonStore, DescriptionGenerator, EvolutionItem,
-    GeneratorConfig, ImpactReport, Perturbation, ProjectConfig, ScriptFeedback,
+    build_next_task, format_behavioral_contracts, format_evolution_plan,
+    format_next_task_markdown, run_evolution_plan, run_impact_analysis, run_watch_scripts,
+    AutomatonDescription, AutomatonStore, DescriptionGenerator, GeneratorConfig, ImpactReport,
+    Perturbation, ProjectConfig, ScriptFeedback,
 };
 use super::process::ManagedProcess;
-use vibe_graph_core::{NodeId, SourceCodeGraph};
+use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
 
 // ─── Public entry point ──────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ pub async fn execute(
     max_ticks: Option<usize>,
     goal: Option<String>,
     targets: Vec<String>,
+    run_scripts: bool,
 ) -> Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
@@ -81,11 +83,32 @@ pub async fn execute(
     let report = run_analysis(&graph, &description, &changed_files, max_ticks)?;
 
     if json_output {
-        let json = serde_json::to_string_pretty(&report)?;
-        println!("{}", json);
-        // Exit with non-zero if health is critically low
-        if report.stats.avg_activation > 0.7 {
-            std::process::exit(1);
+        // JSON mode: output the canonical NextTask object, not the raw ImpactReport.
+        // Skip watch scripts — JSON mode should be fast (CI-friendly).
+        let project_config = ProjectConfig::resolve(&path, None);
+        let objective = project_config.stability_objective();
+        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), None) {
+            Ok(plan) if !plan.items.is_empty() => {
+                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref());
+                let json = serde_json::to_string_pretty(&task)?;
+                println!("{}", json);
+            }
+            Ok(_) => {
+                // No items below target — emit empty object with a message
+                let msg = serde_json::json!({
+                    "status": "healthy",
+                    "message": "All nodes at target stability. Nothing to do."
+                });
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            }
+            Err(e) => {
+                let msg = serde_json::json!({
+                    "status": "error",
+                    "message": format!("{}", e)
+                });
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+                std::process::exit(1);
+            }
         }
         return Ok(());
     }
@@ -97,10 +120,12 @@ pub async fn execute(
     }
 
     if once {
-        // Write a fresh next-task.md so it's never stale
-        // Run watch scripts if configured
+        // Write a fresh next-task.md so it's never stale.
+        // Scripts are skipped by default in --once mode for speed;
+        // pass --scripts to opt in (runs cargo check/test before planning).
         let project_config = ProjectConfig::resolve(&path, None);
-        let script_fb = if project_config.has_watch_scripts() {
+        let script_fb = if run_scripts && project_config.has_watch_scripts() {
+            eprintln!("   🔧 Running watch scripts...");
             let fb = run_watch_scripts(&project_config, &path);
             if !fb.results.is_empty() {
                 eprintln!("   🔧 {}", fb.summary_line());
@@ -113,10 +138,15 @@ pub async fn execute(
         let objective = project_config.stability_objective();
         match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), script_fb.as_ref()) {
             Ok(plan) if !plan.items.is_empty() => {
-                let task = &plan.items[0];
-                let prompt = build_task_prompt(task, &graph, &description, &plan.project_name, perturbation.as_ref());
-                if let Ok(p) = write_task_file(&path, &prompt) {
+                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref());
+                let markdown = format_next_task_markdown(&task);
+                if let Ok(p) = write_task_file(&path, &markdown) {
                     eprintln!("\n   📋 Next task: {}", p.display());
+                }
+                // Also write JSON sidecar
+                if let Ok(json) = serde_json::to_string_pretty(&task) {
+                    let json_path = AutomatonStore::new(&path).automaton_dir().join("next-task.json");
+                    let _ = std::fs::write(&json_path, &json);
                 }
             }
             _ => {}
@@ -468,16 +498,18 @@ async fn watch_loop(
                         print_watching();
                     }
                     b'n' => {
-                        // Next task: compute plan and emit the top item as a task prompt
                         eprintln!("   🎯 Computing next task...\n");
                         match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref()) {
                             Ok(plan) if !plan.items.is_empty() => {
-                                let task = &plan.items[0];
-                                let prompt = build_task_prompt(task, graph, description, &plan.project_name, perturbation.as_ref());
-                                // Write to file for Cursor to pick up
-                                let task_path = write_task_file(path, &prompt)?;
-                                // Also print so user can copy-paste
-                                eprintln!("{}", prompt);
+                                let task = build_next_task(&plan.items[0], graph, &plan.project_name, perturbation.as_ref());
+                                let markdown = format_next_task_markdown(&task);
+                                let task_path = write_task_file(path, &markdown)?;
+                                // Write JSON sidecar
+                                if let Ok(json) = serde_json::to_string_pretty(&task) {
+                                    let json_path = AutomatonStore::new(path).automaton_dir().join("next-task.json");
+                                    let _ = std::fs::write(&json_path, &json);
+                                }
+                                eprintln!("{}", markdown);
                                 eprintln!("   💾 Task written to: {}", task_path.display());
                                 eprintln!("   💡 Open this file and ask Cursor Agent to execute it.\n");
                             }
@@ -650,172 +682,8 @@ fn save_snapshot(path: &Path, report: &ImpactReport) -> Result<()> {
 }
 
 // ─── Task prompt generation (auto-dev loop) ──────────────────────────────────
-
-/// Build a structured task prompt from an evolution plan item.
-///
-/// The prompt contains enough context for a Cursor Agent to execute
-/// the task autonomously: file path, role, stability gap, neighbors,
-/// and specific instructions.
-fn build_task_prompt(
-    item: &EvolutionItem,
-    graph: &SourceCodeGraph,
-    _description: &AutomatonDescription,
-    project_name: &str,
-    perturbation: Option<&Perturbation>,
-) -> String {
-    let prefix = find_path_prefix(project_name, &item.path);
-    let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path);
-
-    // Resolve neighbors from the graph
-    let node_id = NodeId(item.node_id);
-    let dependents: Vec<String> = graph
-        .edges
-        .iter()
-        .filter(|e| e.to == node_id)
-        .filter_map(|e| {
-            graph
-                .nodes
-                .iter()
-                .find(|n| n.id == e.from)
-                .map(|n| {
-                    let p = n.metadata.get("relative_path").unwrap_or(&n.name);
-                    let p = p.strip_prefix(&prefix).unwrap_or(p);
-                    format!("  - `{}` ({})", p, e.relationship)
-                })
-        })
-        .take(10)
-        .collect();
-
-    let dependencies: Vec<String> = graph
-        .edges
-        .iter()
-        .filter(|e| e.from == node_id)
-        .filter_map(|e| {
-            graph
-                .nodes
-                .iter()
-                .find(|n| n.id == e.to)
-                .map(|n| {
-                    let p = n.metadata.get("relative_path").unwrap_or(&n.name);
-                    let p = p.strip_prefix(&prefix).unwrap_or(p);
-                    format!("  - `{}` ({})", p, e.relationship)
-                })
-        })
-        .take(10)
-        .collect();
-
-    let mut prompt = String::new();
-
-    // Goal-aware title
-    if let Some(pert) = perturbation {
-        prompt.push_str(&format!(
-            "# Task: {} — `{}`\n\n",
-            pert.goal, short_path
-        ));
-    } else {
-        prompt.push_str(&format!("# Task: Improve `{}`\n\n", short_path));
-    }
-
-    // Goal section (only when perturbation is active)
-    if let Some(pert) = perturbation {
-        prompt.push_str("## Goal\n\n");
-        prompt.push_str(&format!("**{}**\n\n", pert.goal));
-        if !pert.targets.is_empty() {
-            prompt.push_str("Targeted files:\n");
-            for t in &pert.targets {
-                prompt.push_str(&format!("- `{}`\n", t));
-            }
-            prompt.push('\n');
-        }
-    }
-
-    prompt.push_str("## Context\n\n");
-    prompt.push_str(&format!("- **File**: `{}`\n", short_path));
-    prompt.push_str(&format!("- **Role**: `{}`\n", item.role));
-    prompt.push_str(&format!(
-        "- **Stability**: {:.2} → target {:.2} (gap: {:.2})\n",
-        item.current_stability, item.target_stability, item.gap
-    ));
-    prompt.push_str(&format!("- **Priority**: {:.3} (cascading impact score)\n", item.priority));
-    prompt.push_str(&format!("- **Dependents**: {} modules depend on this\n", item.in_degree));
-    prompt.push_str(&format!(
-        "- **Has tests**: {}\n",
-        if item.has_test_neighbor { "yes" } else { "no" }
-    ));
-    prompt.push('\n');
-
-    if !dependents.is_empty() {
-        prompt.push_str("## Who depends on this (incoming)\n\n");
-        for d in &dependents {
-            prompt.push_str(d);
-            prompt.push('\n');
-        }
-        prompt.push('\n');
-    }
-
-    if !dependencies.is_empty() {
-        prompt.push_str("## What this depends on (outgoing)\n\n");
-        for d in &dependencies {
-            prompt.push_str(d);
-            prompt.push('\n');
-        }
-        prompt.push('\n');
-    }
-
-    prompt.push_str("## Action\n\n");
-    prompt.push_str(&format!("**{}**\n\n", item.suggested_action));
-
-    prompt.push_str("## Instructions\n\n");
-    prompt.push_str(&format!(
-        "1. Read `{}` and understand its current implementation.\n",
-        short_path
-    ));
-
-    // Goal-directed instructions take precedence
-    if perturbation.is_some() && item.suggested_action.contains("goal-directed") {
-        prompt.push_str("2. Implement the changes needed to support the stated goal.\n");
-        prompt.push_str("3. Update or add tests to cover the new functionality.\n");
-        prompt.push_str("4. Ensure the change integrates with existing dependents.\n");
-        prompt.push_str("5. Run `cargo test` to verify all tests pass.\n");
-    } else {
-        match item.suggested_action.as_str() {
-            action if action.contains("test") => {
-                prompt.push_str("2. Create or extend the test file for this module.\n");
-                prompt.push_str("3. Write at least: one happy-path test, one edge-case test, one failure test.\n");
-                prompt.push_str("4. Ensure tests cover the public API surface.\n");
-                prompt.push_str("5. Run `cargo test` to verify all tests pass.\n");
-            }
-            action if action.contains("documentation") || action.contains("document") => {
-                prompt.push_str("2. Add module-level doc comments explaining purpose and usage.\n");
-                prompt.push_str("3. Document public functions with examples where helpful.\n");
-                prompt.push_str("4. Add inline comments for non-obvious logic.\n");
-                prompt.push_str("5. Run `cargo doc` to verify documentation builds.\n");
-            }
-            action if action.contains("interface") || action.contains("coupling") || action.contains("extract") => {
-                prompt.push_str("2. Identify the public API surface and its consumers.\n");
-                prompt.push_str("3. Extract a trait or interface to decouple dependents.\n");
-                prompt.push_str("4. Update dependents to use the trait instead of the concrete type.\n");
-                prompt.push_str("5. Run `cargo test` to verify nothing broke.\n");
-            }
-            _ => {
-                prompt.push_str("2. Apply the suggested improvement.\n");
-                prompt.push_str("3. Verify the change doesn't break dependents.\n");
-                prompt.push_str("4. Run `cargo test` to confirm.\n");
-            }
-        }
-    }
-
-    prompt.push_str("\n## Acceptance Criteria\n\n");
-    prompt.push_str(&format!(
-        "- Module stability should increase from {:.2} toward {:.2}\n",
-        item.current_stability, item.target_stability
-    ));
-    prompt.push_str("- All existing tests continue to pass\n");
-    prompt.push_str("- `cargo clippy` reports no new warnings\n");
-    prompt.push_str("- After this change, re-run `vg run --once` to verify health improves\n");
-
-    prompt
-}
+// The canonical NextTask struct and builder live in the automaton crate
+// (source_code.rs). The CLI uses build_next_task() + format_next_task_markdown().
 
 /// Write the task prompt to `.self/automaton/next-task.md`.
 fn write_task_file(path: &Path, prompt: &str) -> Result<PathBuf> {
