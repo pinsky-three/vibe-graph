@@ -1133,9 +1133,12 @@ pub struct EvolutionItem {
     pub target_stability: f32,
     /// Gap = target - current (clamped to >= 0).
     pub gap: f32,
-    /// Propagated priority (activation after automaton run).
-    /// Higher = more cascading impact from improving this node.
+    /// Composite priority (blended structural + propagated).
     pub priority: f32,
+    /// Structural component: gap * (1 + 3 * in_degree_norm).
+    pub structural_score: f32,
+    /// Propagated component: activation after automaton ticks.
+    pub propagated_score: f32,
     /// Role assigned by the description generator.
     pub role: String,
     /// In-degree (how many nodes depend on this one).
@@ -1403,13 +1406,11 @@ pub fn run_evolution_plan(
 
         let nd_in_f = in_degrees.get(&node_id).copied().unwrap_or(0) as f32;
         let structural = gap * (1.0 + 3.0 * nd_in_f / max_in);
-        // Blend: 60% structural (gap + degree), 40% propagated (cascading effect)
         let mut priority = 0.6 * structural + 0.4 * propagated;
 
         let nd_in = in_degrees.get(&node_id).copied().unwrap_or(0);
         let nd_test = has_test.get(&node_id).copied().unwrap_or(false);
 
-        // Apply perturbation boost: matched nodes get priority multiplied
         let goal_matched = perturbation
             .map(|p| p.matches_path(&node_config.path))
             .unwrap_or(false);
@@ -1418,7 +1419,6 @@ pub fn run_evolution_plan(
             priority *= boost;
         }
 
-        // Apply script feedback boost: files with errors get 5x priority
         let script_error_msg = script_feedback.and_then(|fb| {
             fb.first_error_for(&node_config.path).map(|m| m.to_string())
         });
@@ -1427,10 +1427,8 @@ pub fn run_evolution_plan(
         }
 
         let action = if let Some(ref err_msg) = script_error_msg {
-            // Script error takes highest precedence
             format!("fix: {}", err_msg)
         } else if goal_matched {
-            // Goal-aligned action overrides stability-gap suggestion
             perturbation
                 .map(|p| format!("{} (goal-directed)", p.goal))
                 .unwrap_or_default()
@@ -1449,6 +1447,8 @@ pub fn run_evolution_plan(
             target_stability: target,
             gap,
             priority,
+            structural_score: structural,
+            propagated_score: propagated,
             role: role.to_string(),
             in_degree: nd_in,
             has_test_neighbor: nd_test,
@@ -1710,13 +1710,13 @@ pub struct TaskContext {
     pub blast_radius: String,
 }
 
-/// Scope control: what to touch and what not to touch.
+/// Scope control: what the agent should focus on.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskScope {
     /// Files the agent should focus on.
     pub touch_only: Vec<String>,
-    /// Files the agent should NOT modify.
-    pub do_not_touch: Vec<String>,
+    /// Human-readable scope boundary rule.
+    pub scope_rule: String,
 }
 
 /// Canonical next-task object — the benchmark artifact.
@@ -1732,6 +1732,15 @@ pub struct NextTask {
     pub schema_version: String,
     /// Project name.
     pub project: String,
+    /// ISO 8601 timestamp of when this task was generated.
+    pub generated_at: String,
+    /// Git commit SHA at generation time (if available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// Rank within the full evolution plan (1-based).
+    pub rank: usize,
+    /// Total candidates considered in the evolution plan.
+    pub total_candidates: usize,
     /// Target file path.
     pub target: String,
     /// Classified action.
@@ -1833,16 +1842,62 @@ fn count_affected_crates(graph: &SourceCodeGraph, node_id: NodeId) -> usize {
     crate_names.len().max(1)
 }
 
+/// Minimal UTC epoch-to-ISO-8601 without pulling in chrono.
+fn epoch_to_iso(epoch_secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = epoch_secs % 60;
+    let total_min = epoch_secs / 60;
+    let min = total_min % 60;
+    let total_hr = total_min / 60;
+    let h = total_hr % 24;
+    let mut days = total_hr / 24;
+
+    fn is_leap(y: u64) -> bool {
+        y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400))
+    }
+
+    let mut y = 1970u64;
+    loop {
+        let ydays = if is_leap(y) { 366 } else { 365 };
+        if days < ydays { break; }
+        days -= ydays;
+        y += 1;
+    }
+    let mdays = [31, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut m = 0u64;
+    for md in mdays {
+        if days < md { break; }
+        days -= md;
+        m += 1;
+    }
+    (y, m + 1, days + 1, h, min, s)
+}
+
 /// Build a canonical `NextTask` from an evolution plan item + graph context.
+///
+/// `rank` is 1-based position within the plan; `total_candidates` is the plan
+/// length. `commit` is the git HEAD SHA (pass `None` if unavailable).
 pub fn build_next_task(
     item: &EvolutionItem,
     graph: &SourceCodeGraph,
     project_name: &str,
     perturbation: Option<&Perturbation>,
+    rank: usize,
+    total_candidates: usize,
+    commit: Option<String>,
 ) -> NextTask {
     let prefix = shorten_prefix(project_name, &item.path);
     let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path).to_string();
     let node_id = NodeId(item.node_id);
+
+    let generated_at = {
+        use std::time::SystemTime;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = now.as_secs();
+        let (y, m, d, h, min, s) = epoch_to_iso(secs);
+        format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, min, s)
+    };
 
     let action = TaskAction::from_suggested(&item.suggested_action);
     let affected_crates = count_affected_crates(graph, node_id);
@@ -1858,13 +1913,12 @@ pub fn build_next_task(
         item.gap,
     );
 
-    // Priority explanation
     let priority_explanation = format!(
         "score = 0.6 * structural({:.3}) + 0.4 * propagated({:.3}); \
          structural = gap({:.2}) * (1 + 3 * in_degree_norm); \
          {} dependents amplify cascading impact{}",
-        item.priority * 0.6 / 0.6, // approximate structural component
-        item.priority * 0.4 / 0.4, // approximate propagated component
+        item.structural_score,
+        item.propagated_score,
         item.gap,
         item.in_degree,
         if perturbation.is_some() { "; goal boost 3x applied" } else { "" },
@@ -1885,18 +1939,15 @@ pub fn build_next_task(
     // Steps + acceptance criteria + commands based on action type
     let (steps, acceptance, commands) = generate_task_instructions(&action, &short_path, perturbation);
 
-    // Scope control
     let touch_only = vec![short_path.clone()];
-    let do_not_touch: Vec<String> = incoming
-        .iter()
-        .filter(|n| n.relationship == "contains")
-        .map(|n| n.path.clone())
-        .take(5)
-        .collect();
 
     NextTask {
         schema_version: "1.0.0".to_string(),
         project: project_name.to_string(),
+        generated_at,
+        commit,
+        rank,
+        total_candidates,
         target: short_path,
         action,
         action_detail: item.suggested_action.clone(),
@@ -1922,7 +1973,7 @@ pub fn build_next_task(
         },
         scope: TaskScope {
             touch_only,
-            do_not_touch,
+            scope_rule: "Only modify the target file and its test file".to_string(),
         },
         current_stability: item.current_stability,
         target_stability: item.target_stability,
@@ -2081,6 +2132,7 @@ pub fn format_next_task_markdown(task: &NextTask) -> String {
 
     // Context
     out.push_str("## Context\n\n");
+    out.push_str(&format!("- **Rank**: #{} of {} candidates\n", task.rank, task.total_candidates));
     out.push_str(&format!("- **File**: `{}`\n", task.target));
     out.push_str(&format!("- **Action**: `{}`\n", task.action));
     out.push_str(&format!("- **Role**: `{}`\n", task.evidence.role));
@@ -2130,12 +2182,7 @@ pub fn format_next_task_markdown(task: &NextTask) -> String {
             out.push_str(&format!("- `{}`\n", p));
         }
     }
-    if !task.scope.do_not_touch.is_empty() {
-        out.push_str("\n**Do not modify:**\n");
-        for p in &task.scope.do_not_touch {
-            out.push_str(&format!("- `{}`\n", p));
-        }
-    }
+    out.push_str(&format!("\n> {}\n", task.scope.scope_rule));
     out.push('\n');
 
     // Action + detail

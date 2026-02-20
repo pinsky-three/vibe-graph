@@ -89,7 +89,9 @@ pub async fn execute(
         let objective = project_config.stability_objective();
         match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), None) {
             Ok(plan) if !plan.items.is_empty() => {
-                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref());
+                let commit = git_head_sha(&path);
+                let total = plan.items.len();
+                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit);
                 let json = serde_json::to_string_pretty(&task)?;
                 println!("{}", json);
             }
@@ -138,12 +140,13 @@ pub async fn execute(
         let objective = project_config.stability_objective();
         match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), script_fb.as_ref()) {
             Ok(plan) if !plan.items.is_empty() => {
-                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref());
+                let commit = git_head_sha(&path);
+                let total = plan.items.len();
+                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit);
                 let markdown = format_next_task_markdown(&task);
                 if let Ok(p) = write_task_file(&path, &markdown) {
                     eprintln!("\n   📋 Next task: {}", p.display());
                 }
-                // Also write JSON sidecar
                 if let Ok(json) = serde_json::to_string_pretty(&task) {
                     let json_path = AutomatonStore::new(&path).automaton_dir().join("next-task.json");
                     let _ = std::fs::write(&json_path, &json);
@@ -501,10 +504,11 @@ async fn watch_loop(
                         eprintln!("   🎯 Computing next task...\n");
                         match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref()) {
                             Ok(plan) if !plan.items.is_empty() => {
-                                let task = build_next_task(&plan.items[0], graph, &plan.project_name, perturbation.as_ref());
+                                let commit = git_head_sha(path);
+                                let total = plan.items.len();
+                                let task = build_next_task(&plan.items[0], graph, &plan.project_name, perturbation.as_ref(), 1, total, commit);
                                 let markdown = format_next_task_markdown(&task);
                                 let task_path = write_task_file(path, &markdown)?;
-                                // Write JSON sidecar
                                 if let Ok(json) = serde_json::to_string_pretty(&task) {
                                     let json_path = AutomatonStore::new(path).automaton_dir().join("next-task.json");
                                     let _ = std::fs::write(&json_path, &json);
@@ -684,6 +688,14 @@ fn save_snapshot(path: &Path, report: &ImpactReport) -> Result<()> {
 // ─── Task prompt generation (auto-dev loop) ──────────────────────────────────
 // The canonical NextTask struct and builder live in the automaton crate
 // (source_code.rs). The CLI uses build_next_task() + format_next_task_markdown().
+
+/// Get the HEAD commit short SHA, or None if not in a git repo.
+fn git_head_sha(path: &Path) -> Option<String> {
+    let repo = git2::Repository::discover(path).ok()?;
+    let head = repo.head().ok()?;
+    let oid = head.target()?;
+    Some(oid.to_string()[..8].to_string())
+}
 
 /// Write the task prompt to `.self/automaton/next-task.md`.
 fn write_task_file(path: &Path, prompt: &str) -> Result<PathBuf> {

@@ -540,13 +540,12 @@ pub fn detect_rust_references(content: &str, source_path: &Path) -> Vec<SourceRe
             if !mod_part.is_empty() && !mod_part.contains('{') {
                 refs.push(SourceReference {
                     source_path: source_path.to_path_buf(),
-                    kind: ReferenceKind::Contains, // Treating modules as containment for graph connectivity
+                    kind: ReferenceKind::Uses,
                     target_route: PathBuf::from(format!("{}.rs", mod_part)),
                 });
-                // Also try module directory structure
                 refs.push(SourceReference {
                     source_path: source_path.to_path_buf(),
-                    kind: ReferenceKind::Contains,
+                    kind: ReferenceKind::Uses,
                     target_route: PathBuf::from(format!("{}/mod.rs", mod_part)),
                 });
             }
