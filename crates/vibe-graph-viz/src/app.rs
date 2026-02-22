@@ -74,6 +74,172 @@ const AUTO_PAUSE_DISPLACEMENT: f32 = 0.05;
 /// Number of consecutive stable frames before auto-pausing.
 const AUTO_PAUSE_STABLE_FRAMES: u32 = 10;
 
+// =============================================================================
+// Frame Timing
+// =============================================================================
+
+const FRAME_TIMER_WINDOW: usize = 120;
+
+/// Rolling-window FPS measurement with percentile breakdown.
+#[derive(Debug, Clone)]
+pub struct FrameTimer {
+    frame_times_ms: Vec<f32>,
+    head: usize,
+    count: usize,
+    total_frames: u64,
+    /// Whether the FPS overlay is shown.
+    pub show_overlay: bool,
+}
+
+impl Default for FrameTimer {
+    fn default() -> Self {
+        Self {
+            frame_times_ms: vec![0.0; FRAME_TIMER_WINDOW],
+            head: 0,
+            count: 0,
+            total_frames: 0,
+            show_overlay: true,
+        }
+    }
+}
+
+impl FrameTimer {
+    pub fn record(&mut self, dt_seconds: f32) {
+        let ms = dt_seconds * 1000.0;
+        self.frame_times_ms[self.head] = ms;
+        self.head = (self.head + 1) % FRAME_TIMER_WINDOW;
+        if self.count < FRAME_TIMER_WINDOW {
+            self.count += 1;
+        }
+        self.total_frames += 1;
+    }
+
+    fn sorted_window(&self) -> Vec<f32> {
+        let mut buf: Vec<f32> = if self.count < FRAME_TIMER_WINDOW {
+            self.frame_times_ms[..self.count].to_vec()
+        } else {
+            self.frame_times_ms.clone()
+        };
+        buf.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        buf
+    }
+
+    pub fn avg_fps(&self) -> f32 {
+        if self.count == 0 {
+            return 0.0;
+        }
+        let avg_ms: f32 =
+            self.frame_times_ms[..self.count.min(FRAME_TIMER_WINDOW)].iter().sum::<f32>()
+                / self.count as f32;
+        if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
+    }
+
+    pub fn p50_ms(&self) -> f32 {
+        let s = self.sorted_window();
+        if s.is_empty() { return 0.0; }
+        s[s.len() / 2]
+    }
+
+    pub fn p95_ms(&self) -> f32 {
+        let s = self.sorted_window();
+        if s.is_empty() { return 0.0; }
+        s[(s.len() as f32 * 0.95) as usize]
+    }
+
+    pub fn p99_ms(&self) -> f32 {
+        let s = self.sorted_window();
+        if s.is_empty() { return 0.0; }
+        s[((s.len() as f32 * 0.99) as usize).min(s.len() - 1)]
+    }
+
+    #[allow(dead_code)]
+    pub fn max_ms(&self) -> f32 {
+        let s = self.sorted_window();
+        s.last().copied().unwrap_or(0.0)
+    }
+
+    #[allow(dead_code)]
+    pub fn total_frames(&self) -> u64 {
+        self.total_frames
+    }
+
+    pub fn draw_overlay(&self, ui: &mut egui::Ui, visible_nodes: usize, total_nodes: usize, visible_edges: usize, total_edges: usize) {
+        let rect = ui.max_rect();
+        let painter = ui.painter();
+
+        let fps = self.avg_fps();
+        let fps_color = if fps >= 55.0 {
+            egui::Color32::from_rgb(0, 255, 136)
+        } else if fps >= 30.0 {
+            egui::Color32::from_rgb(255, 204, 0)
+        } else {
+            egui::Color32::from_rgb(255, 60, 60)
+        };
+
+        let lines = [
+            (format!("{:.0} FPS", fps), fps_color),
+            (format!("p50 {:.1}ms  p95 {:.1}ms  p99 {:.1}ms", self.p50_ms(), self.p95_ms(), self.p99_ms()), egui::Color32::from_rgb(160, 160, 180)),
+            (format!("nodes {}/{} edges {}/{}", visible_nodes, total_nodes, visible_edges, total_edges), egui::Color32::from_rgb(120, 120, 140)),
+            (format!("frame #{}", self.total_frames), egui::Color32::from_rgb(100, 100, 120)),
+        ];
+
+        let font = egui::FontId::monospace(11.0);
+        let line_height = 15.0;
+        let pad = 8.0;
+        let bg_height = lines.len() as f32 * line_height + pad * 2.0;
+        let bg_width = 280.0;
+        let bg_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 8.0, rect.bottom() - bg_height - 8.0),
+            egui::vec2(bg_width, bg_height),
+        );
+
+        painter.rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+
+        for (i, (text, color)) in lines.iter().enumerate() {
+            painter.text(
+                egui::pos2(bg_rect.left() + pad, bg_rect.top() + pad + i as f32 * line_height),
+                egui::Align2::LEFT_TOP,
+                text,
+                font.clone(),
+                *color,
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Cached Graph Stats (avoid recomputing every frame)
+// =============================================================================
+
+#[derive(Debug, Clone, Default)]
+struct CachedGraphStats {
+    degrees: HashMap<NodeIndex, usize>,
+    max_degree: usize,
+    pageranks: HashMap<NodeIndex, f32>,
+    max_pagerank: f32,
+    /// Incremented when graph structure changes to invalidate caches.
+    generation: u64,
+    /// Generation at which degrees were last computed.
+    degree_gen: u64,
+    /// Generation at which pagerank was last computed.
+    pagerank_gen: u64,
+    /// Settings hash for pagerank (damping + iterations) to detect changes.
+    pagerank_settings_hash: u64,
+}
+
+impl CachedGraphStats {
+    #[allow(dead_code)]
+    fn invalidate(&mut self) {
+        self.generation += 1;
+    }
+
+    fn pagerank_settings_hash(damping: f32, iterations: usize) -> u64 {
+        let d = (damping * 10000.0) as u64;
+        let i = iterations as u64;
+        d ^ (i << 32)
+    }
+}
+
 /// A single search result mapping back to a graph node.
 #[derive(Clone)]
 struct SearchHit {
@@ -221,6 +387,16 @@ pub struct VibeGraphApp {
     viewport_zoom: f32,
     /// Current viewport pan offset (in canvas coordinates)
     viewport_pan: egui::Vec2,
+
+    // ==========================================================================
+    // Performance Instrumentation
+    // ==========================================================================
+    frame_timer: FrameTimer,
+    cached_stats: CachedGraphStats,
+    /// Pre-built edge endpoint pairs for fast iteration (source_pos, target_pos).
+    /// Rebuilt when graph generation changes.
+    edge_positions_gen: u64,
+    edge_positions: Vec<(NodeIndex, NodeIndex)>,
 
     // ==========================================================================
     // GPU Layout (optional feature)
@@ -508,6 +684,12 @@ impl VibeGraphApp {
             viewport_zoom: 0.1, // Start zoomed out for large graphs
             viewport_pan: egui::Vec2::ZERO,
 
+            // Performance instrumentation
+            frame_timer: FrameTimer::default(),
+            cached_stats: CachedGraphStats::default(),
+            edge_positions_gen: u64::MAX,
+            edge_positions: Vec::new(),
+
             // GPU layout manager
             #[cfg(feature = "gpu-layout")]
             gpu_layout: GpuLayoutManager::new(),
@@ -773,28 +955,48 @@ impl VibeGraphApp {
         }
     }
 
+    #[allow(dead_code)]
     fn node_degree_stats(&self) -> (HashMap<NodeIndex, usize>, usize) {
-        let mut degrees: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut max_degree = 0;
-
-        for (edge_idx, _) in self.g.edges_iter() {
-            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
-                let source_degree = degrees.entry(source).or_insert(0);
-                *source_degree += 1;
-                max_degree = max_degree.max(*source_degree);
-
-                let target_degree = degrees.entry(target).or_insert(0);
-                *target_degree += 1;
-                max_degree = max_degree.max(*target_degree);
-            }
-        }
-
-        (degrees, max_degree)
+        (self.cached_stats.degrees.clone(), self.cached_stats.max_degree)
     }
 
+    #[allow(dead_code)]
     fn node_pagerank_stats(&self) -> (HashMap<NodeIndex, f32>, f32) {
+        (self.cached_stats.pageranks.clone(), self.cached_stats.max_pagerank)
+    }
+
+    fn ensure_degree_cache(&mut self) {
+        if self.cached_stats.degree_gen == self.cached_stats.generation {
+            return;
+        }
+        let mut degrees: HashMap<NodeIndex, usize> = HashMap::with_capacity(self.g.node_count());
+        let mut max_degree = 0;
+        for (edge_idx, _) in self.g.edges_iter() {
+            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
+                let sd = degrees.entry(source).or_insert(0);
+                *sd += 1;
+                max_degree = max_degree.max(*sd);
+                let td = degrees.entry(target).or_insert(0);
+                *td += 1;
+                max_degree = max_degree.max(*td);
+            }
+        }
+        self.cached_stats.degrees = degrees;
+        self.cached_stats.max_degree = max_degree;
+        self.cached_stats.degree_gen = self.cached_stats.generation;
+    }
+
+    fn ensure_pagerank_cache(&mut self) {
         let damping = self.settings_style.page_rank_damping.clamp(0.0, 1.0);
         let iterations = self.settings_style.page_rank_iterations.max(1);
+        let settings_hash = CachedGraphStats::pagerank_settings_hash(damping, iterations);
+
+        if self.cached_stats.pagerank_gen == self.cached_stats.generation
+            && self.cached_stats.pagerank_settings_hash == settings_hash
+        {
+            return;
+        }
+
         let mut index_map: HashMap<NodeIndex, usize> = HashMap::new();
         let mut ordered_nodes: Vec<NodeIndex> = Vec::new();
         for (node_idx, _) in self.g.nodes_iter() {
@@ -810,25 +1012,17 @@ impl VibeGraphApp {
         for _ in 0..ordered_nodes.len() {
             graph.add_node(());
         }
-
         for (edge_idx, _) in self.g.edges_iter() {
             if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
-                if let (Some(&source_pos), Some(&target_pos)) =
-                    (index_map.get(&source), index_map.get(&target))
-                {
-                    graph.add_edge(
-                        GraphNodeIndex::new(source_pos),
-                        GraphNodeIndex::new(target_pos),
-                        (),
-                    );
+                if let (Some(&sp), Some(&tp)) = (index_map.get(&source), index_map.get(&target)) {
+                    graph.add_edge(GraphNodeIndex::new(sp), GraphNodeIndex::new(tp), ());
                 }
             }
         }
 
         let ranks = page_rank(&graph, damping, iterations);
-        let mut map: HashMap<NodeIndex, f32> = HashMap::new();
+        let mut map: HashMap<NodeIndex, f32> = HashMap::with_capacity(ordered_nodes.len());
         let mut max_rank = 0.0_f32;
-
         for (node_idx, position) in index_map {
             if let Some(&rank) = ranks.get(position) {
                 map.insert(node_idx, rank);
@@ -838,7 +1032,30 @@ impl VibeGraphApp {
             }
         }
 
-        (map, max_rank)
+        self.cached_stats.pageranks = map;
+        self.cached_stats.max_pagerank = max_rank;
+        self.cached_stats.pagerank_gen = self.cached_stats.generation;
+        self.cached_stats.pagerank_settings_hash = settings_hash;
+    }
+
+    fn ensure_edge_positions(&mut self) {
+        if self.edge_positions_gen == self.cached_stats.generation {
+            return;
+        }
+        self.edge_positions.clear();
+        self.edge_positions.reserve(self.g.edge_count());
+        for (edge_idx, _) in self.g.edges_iter() {
+            if let Some((source, target)) = self.g.edge_endpoints(edge_idx) {
+                self.edge_positions.push((source, target));
+            }
+        }
+        self.edge_positions_gen = self.cached_stats.generation;
+    }
+
+    /// Call when graph structure changes (load, reload, add/remove nodes/edges).
+    #[allow(dead_code)]
+    fn invalidate_graph_caches(&mut self) {
+        self.cached_stats.invalidate();
     }
 
     /// Initialize layout with custom default parameters.
@@ -903,20 +1120,17 @@ impl VibeGraphApp {
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
 
-        // Handle pan (drag)
         if response.dragged() {
             let delta = response.drag_delta();
             self.viewport_pan += delta / self.viewport_zoom;
         }
 
-        // Handle zoom (scroll)
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
         if scroll_delta != 0.0 {
             let zoom_factor = 1.0 + scroll_delta * 0.001;
             let old_zoom = self.viewport_zoom;
             self.viewport_zoom = (self.viewport_zoom * zoom_factor).clamp(0.01, 10.0);
 
-            // Zoom toward mouse position
             if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
                 let mouse_canvas =
                     (mouse_pos - rect.center().to_vec2()) / old_zoom - self.viewport_pan;
@@ -931,30 +1145,23 @@ impl VibeGraphApp {
         let zoom = self.viewport_zoom;
         let pan = self.viewport_pan;
 
-        let (degree_map, max_degree, pagerank_map, max_pagerank) =
-            match self.settings_style.node_size_mode {
-                NodeSizeMode::Degree => {
-                    let (degree_map, max_degree) = self.node_degree_stats();
-                    (degree_map, max_degree, HashMap::new(), 0.0)
-                }
-                NodeSizeMode::PageRank => {
-                    let (pagerank_map, max_pagerank) = self.node_pagerank_stats();
-                    (HashMap::new(), 0, pagerank_map, max_pagerank)
-                }
-                NodeSizeMode::Fixed => (HashMap::new(), 0, HashMap::new(), 0.0),
-            };
+        // Use cached stats instead of recomputing every frame
+        match self.settings_style.node_size_mode {
+            NodeSizeMode::Degree => self.ensure_degree_cache(),
+            NodeSizeMode::PageRank => self.ensure_pagerank_cache(),
+            NodeSizeMode::Fixed => {}
+        }
+        let max_degree = self.cached_stats.max_degree;
+        let max_pagerank = self.cached_stats.max_pagerank;
 
-        // Calculate viewport bounds in canvas space
         let half_size = rect.size() / (2.0 * zoom);
         let viewport_min = egui::pos2(-half_size.x - pan.x, -half_size.y - pan.y);
         let viewport_max = egui::pos2(half_size.x - pan.x, half_size.y - pan.y);
         let viewport_rect = egui::Rect::from_min_max(viewport_min, viewport_max);
 
-        // Expand viewport slightly for edge visibility
         let margin = 50.0 / zoom;
         let expanded_viewport = viewport_rect.expand(margin);
 
-        // Helper to convert canvas to screen coordinates
         let to_screen = |canvas_pos: egui::Pos2| -> egui::Pos2 {
             egui::pos2(
                 center.x + (canvas_pos.x + pan.x) * zoom,
@@ -962,134 +1169,123 @@ impl VibeGraphApp {
             )
         };
 
-        // Count visible for stats
-        let mut visible_nodes = 0;
-        let mut visible_edges = 0;
+        let mut visible_nodes = 0usize;
+        let mut visible_edges = 0usize;
 
-        // First pass: draw edges (only if both endpoints visible)
-        // Skip edges entirely if we have too many - they're the main bottleneck
+        // Edge rendering with LOD: skip entirely for very large counts, or use
+        // pre-built endpoint pairs for faster iteration.
         let total_edges = self.g.edge_count();
-        let draw_edges = total_edges < 5000; // Skip edges for very large graphs
+        let draw_edges = total_edges < 10_000;
 
         if draw_edges {
-            for (edge_idx, _) in self.g.edges_iter() {
-                if let Some((source_idx, target_idx)) = self.g.edge_endpoints(edge_idx) {
-                    let source_pos = self.g.node(source_idx).map(|n| n.location());
-                    let target_pos = self.g.node(target_idx).map(|n| n.location());
+            self.ensure_edge_positions();
+            let edge_base_stroke = resolve_edge_visuals(EdgeRenderContext {
+                dark_mode: self.dark_mode,
+                selected: false,
+                selection_emphasis: false,
+            })
+            .stroke;
 
-                    if let (Some(sp), Some(tp)) = (source_pos, target_pos) {
-                        // Skip if both endpoints are outside viewport
-                        if !expanded_viewport.contains(sp) && !expanded_viewport.contains(tp) {
-                            continue;
-                        }
+            for &(source_idx, target_idx) in &self.edge_positions {
+                let sp = match self.g.node(source_idx) {
+                    Some(n) => n.location(),
+                    None => continue,
+                };
+                let tp = match self.g.node(target_idx) {
+                    Some(n) => n.location(),
+                    None => continue,
+                };
 
-                        let screen_source = to_screen(sp);
-                        let screen_target = to_screen(tp);
+                if !expanded_viewport.contains(sp) && !expanded_viewport.contains(tp) {
+                    continue;
+                }
 
-                        // Only draw if the line would be visible
-                        if rect.intersects(egui::Rect::from_two_pos(screen_source, screen_target)) {
-                            let edge_selected = self
-                                .g
-                                .edge(edge_idx)
-                                .map(|edge| edge.selected())
-                                .unwrap_or(false);
-                            let edge_visuals = resolve_edge_visuals(EdgeRenderContext {
-                                dark_mode: self.dark_mode,
-                                selected: edge_selected,
-                                selection_emphasis: self.settings_style.edge_selection_emphasis,
-                            });
-                            painter
-                                .line_segment([screen_source, screen_target], edge_visuals.stroke);
-                            visible_edges += 1;
-                        }
-                    }
+                let screen_source = to_screen(sp);
+                let screen_target = to_screen(tp);
+
+                if rect.intersects(egui::Rect::from_two_pos(screen_source, screen_target)) {
+                    painter.line_segment([screen_source, screen_target], edge_base_stroke);
+                    visible_edges += 1;
                 }
             }
         }
 
-        // Second pass: draw nodes
+        // Single-pass node rendering: draw circle + optional halo together.
+        let dark_mode = self.dark_mode;
+        let node_color_mode = self.settings_style.node_color_mode;
+        let node_size_mode = self.settings_style.node_size_mode;
+        let show_change_halo = self.settings_style.change_indicators;
+
         for (node_idx, _) in self.g.nodes_iter() {
-            if let Some(node) = self.g.node(node_idx) {
-                let pos = node.location();
+            let node = match self.g.node(node_idx) {
+                Some(n) => n,
+                None => continue,
+            };
+            let pos = node.location();
 
-                // Viewport culling - skip if outside viewport
-                if !expanded_viewport.contains(pos) {
-                    continue;
-                }
+            if !expanded_viewport.contains(pos) {
+                continue;
+            }
 
-                let screen_pos = to_screen(pos);
+            let screen_pos = to_screen(pos);
+            if !rect.contains(screen_pos) {
+                continue;
+            }
 
-                // Double-check screen bounds
-                if !rect.contains(screen_pos) {
-                    continue;
-                }
+            visible_nodes += 1;
 
-                visible_nodes += 1;
+            let degree = self.cached_stats.degrees.get(&node_idx).copied().unwrap_or(0);
+            let page_rank = self.cached_stats.pageranks.get(&node_idx).copied().unwrap_or(0.0);
+            let kind = self.node_kinds.get(&node_idx).map(|v| v.as_str());
+            let change_kind = self.changed_nodes.get(&node_idx).copied();
 
-                let degree = degree_map.get(&node_idx).copied().unwrap_or(0);
-                let page_rank = pagerank_map.get(&node_idx).copied().unwrap_or(0.0);
-                let kind = self.node_kinds.get(&node_idx).map(|value| value.as_str());
-                let change_kind = self.changed_nodes.get(&node_idx).copied();
-                let visuals = resolve_node_visuals(NodeRenderContext {
-                    dark_mode: self.dark_mode,
-                    zoom,
-                    selected: node.selected(),
-                    change_kind,
-                    kind,
-                    degree,
-                    max_degree,
-                    page_rank,
-                    max_page_rank: max_pagerank,
-                    show_change_halo: self.settings_style.change_indicators,
-                    node_color_mode: self.settings_style.node_color_mode,
-                    node_size_mode: self.settings_style.node_size_mode,
-                });
+            let visuals = resolve_node_visuals(NodeRenderContext {
+                dark_mode,
+                zoom,
+                selected: node.selected(),
+                change_kind,
+                kind,
+                degree,
+                max_degree,
+                page_rank,
+                max_page_rank: max_pagerank,
+                show_change_halo,
+                node_color_mode,
+                node_size_mode,
+            });
 
-                painter.circle_filled(screen_pos, visuals.radius, visuals.fill);
-                if visuals.stroke.width > 0.0 {
-                    painter.circle_stroke(screen_pos, visuals.radius, visuals.stroke);
-                }
+            painter.circle_filled(screen_pos, visuals.radius, visuals.fill);
+            if visuals.stroke.width > 0.0 {
+                painter.circle_stroke(screen_pos, visuals.radius, visuals.stroke);
+            }
 
-                if let Some(halo) = visuals.change_halo {
-                    draw_change_halo(
-                        &painter,
-                        screen_pos,
-                        halo.base_radius,
-                        halo.kind,
-                        &self.change_anim,
-                        self.dark_mode,
-                    );
-                }
+            if let Some(halo) = visuals.change_halo {
+                draw_change_halo(
+                    &painter,
+                    screen_pos,
+                    halo.base_radius,
+                    halo.kind,
+                    &self.change_anim,
+                    dark_mode,
+                );
             }
         }
 
-        // Draw stats overlay
-        let stats_text = format!(
-            "Visible: {} / {} nodes{}",
-            visible_nodes,
-            self.g.node_count(),
-            if draw_edges {
-                format!(", {} / {} edges", visible_edges, total_edges)
-            } else {
-                " (edges hidden)".to_string()
-            }
-        );
+        // Draw zoom indicator
         painter.text(
             rect.left_top() + egui::vec2(10.0, 10.0),
-            egui::Align2::LEFT_TOP,
-            stats_text,
-            egui::FontId::proportional(12.0),
-            egui::Color32::from_rgb(100, 100, 120),
-        );
-
-        // Draw zoom level
-        painter.text(
-            rect.left_top() + egui::vec2(10.0, 28.0),
             egui::Align2::LEFT_TOP,
             format!("Zoom: {:.0}%", zoom * 100.0),
             egui::FontId::proportional(12.0),
             egui::Color32::from_rgb(100, 100, 120),
         );
+
+        // Draw FPS overlay (uses ui.max_rect, not painter_at)
+        if self.frame_timer.show_overlay {
+            let total_nodes = self.g.node_count();
+            let total_edges_count = self.g.edge_count();
+            self.frame_timer.draw_overlay(ui, visible_nodes, total_nodes, visible_edges, total_edges_count);
+        }
 
         response
     }
@@ -1417,6 +1613,28 @@ impl VibeGraphApp {
 
     fn ui_style(&mut self, ui: &mut egui::Ui) {
         CollapsingHeader::new("Style").show(ui, |ui| {
+            // FPS overlay toggle
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.frame_timer.show_overlay, "📊 FPS Overlay");
+                Self::info_icon(ui, "Show frame time stats: avg FPS, p50/p95/p99 latency");
+            });
+
+            if self.frame_timer.show_overlay {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{:.0} FPS  p95={:.1}ms",
+                            self.frame_timer.avg_fps(),
+                            self.frame_timer.p95_ms()
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 180, 120)),
+                    );
+                });
+            }
+
+            ui.separator();
+
             // Performance mode toggle at the top for large graphs
             if self.graph_size_category != GraphSizeCategory::Small {
                 ui.horizontal(|ui| {
@@ -2641,6 +2859,10 @@ impl App for VibeGraphApp {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let mut needs_neighborhood_update = false;
 
+        // Record frame time for FPS measurement
+        let dt = ctx.input(|i| i.stable_dt);
+        self.frame_timer.record(dt);
+
         // Render top bar with operations controls
         self.top_bar.show(ctx);
 
@@ -2655,7 +2877,6 @@ impl App for VibeGraphApp {
         self.try_load_git_changes_from_window();
 
         // Advance change indicator animation (only if enabled)
-        let dt = ctx.input(|i| i.stable_dt);
         if self.settings_style.change_indicators {
             self.change_anim.speed = self.settings_style.change_indicator_speed;
             self.change_anim.enabled = true;
@@ -2949,67 +3170,134 @@ impl App for VibeGraphApp {
                     .with_styles(&settings_style),
             );
 
+            // ==========================================================================
+            // Overlay passes: merged into a single iteration with shared MetadataFrame
+            // ==========================================================================
             let overlay_enabled = !self.settings_style.performance_mode
                 && (self.settings_style.node_color_mode != NodeColorMode::Default
                     || self.settings_style.node_size_mode != NodeSizeMode::Fixed);
-            let use_degree = self.settings_style.node_size_mode == NodeSizeMode::Degree;
-            let use_pagerank = self.settings_style.node_size_mode == NodeSizeMode::PageRank;
-            let (degree_map, max_degree) = if use_degree
-                && (overlay_enabled || self.settings_style.change_indicators)
-            {
-                self.node_degree_stats()
-            } else {
-                (HashMap::new(), 0)
-            };
-            let (pagerank_map, max_pagerank) = if use_pagerank
-                && (overlay_enabled || self.settings_style.change_indicators)
-            {
-                self.node_pagerank_stats()
-            } else {
-                (HashMap::new(), 0.0)
-            };
+            let draw_change_indicators =
+                self.settings_style.change_indicators && !self.changed_nodes.is_empty();
+            #[cfg(feature = "automaton")]
+            let draw_automaton =
+                self.automaton_mode.enabled && !self.automaton_mode.activations.is_empty();
 
-            if overlay_enabled {
+            let needs_overlay_pass = overlay_enabled
+                || draw_change_indicators
+                || {
+                    #[cfg(feature = "automaton")]
+                    { draw_automaton }
+                    #[cfg(not(feature = "automaton"))]
+                    { false }
+                };
+
+            if needs_overlay_pass {
+                // Ensure cached stats before the single overlay pass
+                if self.settings_style.node_size_mode == NodeSizeMode::Degree {
+                    self.ensure_degree_cache();
+                }
+                if self.settings_style.node_size_mode == NodeSizeMode::PageRank {
+                    self.ensure_pagerank_cache();
+                }
+                let max_degree = self.cached_stats.max_degree;
+                let max_pagerank = self.cached_stats.max_pagerank;
+
                 let painter = ui.painter();
                 let meta = MetadataFrame::new(None).load(ui);
                 let graph_rect = graph_response.rect;
+                let dark_mode = self.dark_mode;
+                let node_color_mode = self.settings_style.node_color_mode;
+                let node_size_mode = self.settings_style.node_size_mode;
+                let show_change_halo = self.settings_style.change_indicators;
 
                 for (node_idx, _) in self.g.nodes_iter() {
-                    if let Some(node) = self.g.node(node_idx) {
-                        let canvas_pos = node.location();
-                        let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
-                        let screen_pos = egui::pos2(
-                            widget_relative.x + graph_rect.min.x,
-                            widget_relative.y + graph_rect.min.y,
-                        );
+                    let node = match self.g.node(node_idx) {
+                        Some(n) => n,
+                        None => continue,
+                    };
 
-                        if graph_rect.contains(screen_pos) {
-                            let degree = degree_map.get(&node_idx).copied().unwrap_or(0);
-                            let page_rank = pagerank_map.get(&node_idx).copied().unwrap_or(0.0);
-                            let kind = self.node_kinds.get(&node_idx).map(|value| value.as_str());
-                            let change_kind = self.changed_nodes.get(&node_idx).copied();
+                    let canvas_pos = node.location();
+                    let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
+                    let screen_pos = egui::pos2(
+                        widget_relative.x + graph_rect.min.x,
+                        widget_relative.y + graph_rect.min.y,
+                    );
+
+                    if !graph_rect.contains(screen_pos) {
+                        continue;
+                    }
+
+                    let change_kind = self.changed_nodes.get(&node_idx).copied();
+
+                    // Custom color/size overlay
+                    if overlay_enabled {
+                        let degree = self.cached_stats.degrees.get(&node_idx).copied().unwrap_or(0);
+                        let page_rank = self.cached_stats.pageranks.get(&node_idx).copied().unwrap_or(0.0);
+                        let kind = self.node_kinds.get(&node_idx).map(|v| v.as_str());
+                        let visuals = resolve_node_visuals(NodeRenderContext {
+                            dark_mode,
+                            zoom: 1.0,
+                            selected: node.selected(),
+                            change_kind,
+                            kind,
+                            degree,
+                            max_degree,
+                            page_rank,
+                            max_page_rank: max_pagerank,
+                            show_change_halo,
+                            node_color_mode,
+                            node_size_mode,
+                        });
+
+                        painter.circle_filled(screen_pos, visuals.radius, visuals.fill);
+                        if visuals.stroke.width > 0.0 {
+                            painter.circle_stroke(screen_pos, visuals.radius, visuals.stroke);
+                        }
+                    }
+
+                    // Change indicator halo
+                    if draw_change_indicators {
+                        if let Some(ck) = change_kind {
+                            let degree = self.cached_stats.degrees.get(&node_idx).copied().unwrap_or(0);
+                            let page_rank = self.cached_stats.pageranks.get(&node_idx).copied().unwrap_or(0.0);
+                            let kind = self.node_kinds.get(&node_idx).map(|v| v.as_str());
                             let visuals = resolve_node_visuals(NodeRenderContext {
-                                dark_mode: self.dark_mode,
+                                dark_mode,
                                 zoom: 1.0,
                                 selected: node.selected(),
-                                change_kind,
+                                change_kind: Some(ck),
                                 kind,
                                 degree,
                                 max_degree,
                                 page_rank,
                                 max_page_rank: max_pagerank,
-                                show_change_halo: self.settings_style.change_indicators,
-                                node_color_mode: self.settings_style.node_color_mode,
-                                node_size_mode: self.settings_style.node_size_mode,
+                                show_change_halo: true,
+                                node_color_mode,
+                                node_size_mode,
                             });
 
-                            painter.circle_filled(screen_pos, visuals.radius, visuals.fill);
-                            if visuals.stroke.width > 0.0 {
-                                painter.circle_stroke(
+                            if let Some(halo) = visuals.change_halo {
+                                draw_change_halo(
+                                    painter,
                                     screen_pos,
-                                    visuals.radius,
-                                    visuals.stroke,
+                                    halo.base_radius,
+                                    halo.kind,
+                                    &self.change_anim,
+                                    dark_mode,
                                 );
+                            }
+                        }
+                    }
+
+                    // Automaton activation overlay
+                    #[cfg(feature = "automaton")]
+                    if draw_automaton {
+                        for (&node_id, &activation) in &self.automaton_mode.activations {
+                            if self._node_id_to_egui.get(&node_id) == Some(&node_idx) {
+                                let radius = 10.0 + activation as f32 * 4.0;
+                                let color = AutomatonMode::activation_color(activation, dark_mode);
+                                painter.circle_filled(screen_pos, radius, color);
+                                break;
                             }
                         }
                     }
@@ -3027,20 +3315,18 @@ impl App for VibeGraphApp {
                     egui_graphs::get_layout_state::<FruchtermanReingoldWithCenterGravityState>(
                         ui, None,
                     );
-                state.base.is_running = false; // Disable CPU layout when GPU is active
+                state.base.is_running = false;
                 egui_graphs::set_layout_state::<FruchtermanReingoldWithCenterGravityState>(
                     ui, state, None,
                 );
             }
 
-            // Check layout state for auto-pause (convergence detection)
             if self.layout_skip_frames > 0 || self.graph_size_category != GraphSizeCategory::Small {
                 let mut state =
                     egui_graphs::get_layout_state::<FruchtermanReingoldWithCenterGravityState>(
                         ui, None,
                     );
 
-                // Auto-pause when layout has stabilized
                 if state.base.is_running && !self.user_resumed_layout {
                     if let Some(avg_displacement) = state.base.last_avg_displacement {
                         if avg_displacement < AUTO_PAUSE_DISPLACEMENT {
@@ -3065,13 +3351,10 @@ impl App for VibeGraphApp {
                     }
                 }
 
-                // Frame throttling: only run layout every N frames for large graphs
                 if state.base.is_running && self.layout_skip_frames > 0 {
                     self.layout_frame_counter += 1;
                     if self.layout_frame_counter < self.layout_skip_frames {
-                        // Skip this frame's layout by temporarily pausing
-                        // Note: This is a workaround since egui_graphs doesn't have built-in throttling
-                        // The layout will still request repaint, but we reduce computation frequency
+                        // Skip this frame's layout iteration
                     } else {
                         self.layout_frame_counter = 0;
                     }
@@ -3080,85 +3363,6 @@ impl App for VibeGraphApp {
                 egui_graphs::set_layout_state::<FruchtermanReingoldWithCenterGravityState>(
                     ui, state, None,
                 );
-            }
-
-            // Draw change indicators (halos) around changed nodes
-            if self.settings_style.change_indicators && !self.changed_nodes.is_empty() {
-                let painter = ui.painter();
-                let meta = MetadataFrame::new(None).load(ui);
-                let graph_rect = graph_response.rect;
-
-                for (node_idx, change_kind) in &self.changed_nodes {
-                    if let Some(node) = self.g.node(*node_idx) {
-                        // Convert node position from canvas to screen coordinates
-                        let canvas_pos = node.location();
-                        let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
-                        let screen_pos = egui::pos2(
-                            widget_relative.x + graph_rect.min.x,
-                            widget_relative.y + graph_rect.min.y,
-                        );
-
-                        // Only draw if visible in viewport
-                        if graph_rect.contains(screen_pos) {
-                            let degree = degree_map.get(node_idx).copied().unwrap_or(0);
-                            let page_rank = pagerank_map.get(node_idx).copied().unwrap_or(0.0);
-                            let kind = self.node_kinds.get(node_idx).map(|value| value.as_str());
-                            let visuals = resolve_node_visuals(NodeRenderContext {
-                                dark_mode: self.dark_mode,
-                                zoom: 1.0,
-                                selected: node.selected(),
-                                change_kind: Some(*change_kind),
-                                kind,
-                                degree,
-                                max_degree,
-                                page_rank,
-                                max_page_rank: max_pagerank,
-                                show_change_halo: true,
-                                node_color_mode: self.settings_style.node_color_mode,
-                                node_size_mode: self.settings_style.node_size_mode,
-                            });
-
-                            if let Some(halo) = visuals.change_halo {
-                                draw_change_halo(
-                                    painter,
-                                    screen_pos,
-                                    halo.base_radius,
-                                    halo.kind,
-                                    &self.change_anim,
-                                    self.dark_mode,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Draw automaton activation overlays when enabled
-            #[cfg(feature = "automaton")]
-            if self.automaton_mode.enabled && !self.automaton_mode.activations.is_empty() {
-                let painter = ui.painter();
-                let meta = MetadataFrame::new(None).load(ui);
-                let graph_rect = graph_response.rect;
-
-                for (&node_id, &activation) in &self.automaton_mode.activations {
-                    if let Some(&egui_idx) = self._node_id_to_egui.get(&node_id) {
-                        if let Some(node) = self.g.node(egui_idx) {
-                            let canvas_pos = node.location();
-                            let widget_relative = meta.canvas_to_screen_pos(canvas_pos);
-                            let screen_pos = egui::pos2(
-                                widget_relative.x + graph_rect.min.x,
-                                widget_relative.y + graph_rect.min.y,
-                            );
-
-                            if graph_rect.contains(screen_pos) {
-                                let radius = 10.0 + activation as f32 * 4.0;
-                                let color =
-                                    AutomatonMode::activation_color(activation, self.dark_mode);
-                                painter.circle_filled(screen_pos, radius, color);
-                            }
-                        }
-                    }
-                }
             }
 
             // Sync selection when not in lasso mode and depth is 0
@@ -3200,6 +3404,13 @@ impl App for VibeGraphApp {
 
             draw_mode_indicator(ui, self.lasso.active);
             draw_sidebar_toggle(ui, &mut self.show_sidebar);
+
+            // FPS overlay for standard render path
+            if self.frame_timer.show_overlay {
+                let total_nodes = self.g.node_count();
+                let total_edges = self.g.edge_count();
+                self.frame_timer.draw_overlay(ui, total_nodes, total_nodes, total_edges, total_edges);
+            }
         });
     }
 }
