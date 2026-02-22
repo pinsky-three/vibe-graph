@@ -493,7 +493,12 @@ impl SourceCodeGraphBuilder {
     }
 
     /// Set a metadata key on an existing node.
-    pub fn set_node_metadata(&mut self, node_id: NodeId, key: impl Into<String>, value: impl Into<String>) {
+    pub fn set_node_metadata(
+        &mut self,
+        node_id: NodeId,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
             node.metadata.insert(key.into(), value.into());
         }
@@ -796,10 +801,7 @@ pub enum LayoutStrategy {
     #[default]
     Flat,
     /// Spatial organization for lattice-like graphs (rows/cols).
-    Lattice { 
-        width: usize, 
-        group_by_row: bool 
-    },
+    Lattice { width: usize, group_by_row: bool },
     /// Direct mapping (trusts existing paths or uses heuristics).
     Direct,
     /// Preserves existing directory structure (Identity).
@@ -891,8 +893,10 @@ impl SampleResult {
 }
 
 /// Determines which nodes a sampler should operate on.
+#[derive(Default)]
 pub enum NodeSelector {
     /// Sample every node in the graph.
+    #[default]
     All,
     /// Only nodes whose kind matches.
     ByKind(GraphNodeKind),
@@ -902,12 +906,6 @@ pub enum NodeSelector {
     HasMetadata(String),
     /// Custom predicate (not serializable — use for in-process composition).
     Predicate(Box<dyn Fn(&GraphNode) -> bool + Send + Sync>),
-}
-
-impl Default for NodeSelector {
-    fn default() -> Self {
-        NodeSelector::All
-    }
 }
 
 impl std::fmt::Debug for NodeSelector {
@@ -934,6 +932,9 @@ impl NodeSelector {
         }
     }
 }
+
+/// Per-node annotation map produced and consumed by [`Sampler`] stages.
+pub type AnnotationMap = HashMap<NodeId, HashMap<String, Value>>;
 
 /// The core sampling primitive.
 ///
@@ -962,14 +963,11 @@ pub trait Sampler: Send + Sync {
     fn sample(
         &self,
         graph: &SourceCodeGraph,
-        annotations: &HashMap<NodeId, HashMap<String, Value>>,
+        annotations: &AnnotationMap,
     ) -> Result<SampleResult, SamplerError> {
         let selector = self.selector();
-        let selected: Vec<&GraphNode> = graph
-            .nodes
-            .iter()
-            .filter(|n| selector.matches(n))
-            .collect();
+        let selected: Vec<&GraphNode> =
+            graph.nodes.iter().filter(|n| selector.matches(n)).collect();
 
         let mut artifacts = Vec::with_capacity(selected.len());
 
@@ -1038,7 +1036,7 @@ impl SamplerPipeline {
     }
 
     /// Append a sampler stage to the pipeline.
-    pub fn add(mut self, sampler: Box<dyn Sampler>) -> Self {
+    pub fn with_stage(mut self, sampler: Box<dyn Sampler>) -> Self {
         self.stages.push(sampler);
         self
     }
@@ -1048,8 +1046,8 @@ impl SamplerPipeline {
     pub fn run(
         &self,
         graph: &SourceCodeGraph,
-    ) -> Result<(Vec<SampleResult>, HashMap<NodeId, HashMap<String, Value>>), SamplerError> {
-        let mut annotations: HashMap<NodeId, HashMap<String, Value>> = HashMap::new();
+    ) -> Result<(Vec<SampleResult>, AnnotationMap), SamplerError> {
+        let mut annotations: AnnotationMap = HashMap::new();
         let mut results = Vec::with_capacity(self.stages.len());
 
         for stage in &self.stages {
@@ -1080,8 +1078,7 @@ impl Default for SamplerPipeline {
 impl SourceCodeGraph {
     /// Collect direct neighbors of a node (both directions) with their edges.
     pub fn neighbors(&self, node_id: NodeId) -> Vec<NeighborRef<'_>> {
-        let node_map: HashMap<NodeId, &GraphNode> =
-            self.nodes.iter().map(|n| (n.id, n)).collect();
+        let node_map: HashMap<NodeId, &GraphNode> = self.nodes.iter().map(|n| (n.id, n)).collect();
 
         self.edges
             .iter()
@@ -1422,8 +1419,8 @@ mod tests {
     fn test_pipeline_threads_annotations() {
         let graph = test_graph();
         let pipeline = SamplerPipeline::new()
-            .add(Box::new(MetadataSampler::all()))
-            .add(Box::new(DegreeSampler));
+            .with_stage(Box::new(MetadataSampler::all()))
+            .with_stage(Box::new(DegreeSampler));
 
         let (results, annotations) = pipeline.run(&graph).unwrap();
         assert_eq!(results.len(), 2);
