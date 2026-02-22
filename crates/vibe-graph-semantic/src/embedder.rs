@@ -84,10 +84,14 @@ pub use self::fastembed_backend::FastEmbedBackend;
 mod fastembed_backend {
     use super::*;
     use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+    use std::sync::Mutex;
 
     /// Wraps `fastembed::TextEmbedding` behind the [`Embedder`] trait.
+    ///
+    /// `TextEmbedding::embed` takes `&mut self`, so we use interior mutability
+    /// via `Mutex` to keep the `Embedder` trait `&self`-safe (required for `Arc`).
     pub struct FastEmbedBackend {
-        model: TextEmbedding,
+        model: Mutex<TextEmbedding>,
         model_name: String,
         dim: usize,
     }
@@ -116,7 +120,7 @@ mod fastembed_backend {
                 .map_err(|e| EmbedError::new(format!("fastembed init: {e}")))?;
 
             Ok(Self {
-                model,
+                model: Mutex::new(model),
                 model_name: name,
                 dim,
             })
@@ -126,7 +130,10 @@ mod fastembed_backend {
     impl Embedder for FastEmbedBackend {
         fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
             let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-            self.model
+            let mut model = self.model.lock().map_err(|e| {
+                EmbedError::new(format!("fastembed lock poisoned: {e}"))
+            })?;
+            model
                 .embed(owned, None)
                 .map_err(|e| EmbedError::new(format!("fastembed embed: {e}")))
         }
