@@ -807,3 +807,668 @@ pub enum LayoutStrategy {
     /// Modular clustering (auto-detected modules).
     Modular,
 }
+
+// =============================================================================
+// Sampler Abstraction
+// =============================================================================
+//
+// A Sampler generalizes the pattern of:  Select(nodes) → Compute(local_fn) → Emit(artifact)
+//
+// Existing operations (automaton Rules, impact_analysis, evolution planning)
+// are all special cases. The Sampler trait makes the pattern explicit, composable,
+// and reusable across native and WASM targets.
+
+/// Local context provided to a [`Sampler`] during computation.
+///
+/// Gathers everything known about a single node at the time of sampling:
+/// structural position, optional content, previously-computed annotations,
+/// and the edges connecting it to its neighbors.
+#[derive(Debug, Clone)]
+pub struct SampleContext<'a> {
+    /// The node being sampled.
+    pub node: &'a GraphNode,
+    /// Direct neighbors (both incoming and outgoing edges resolved to nodes).
+    pub neighbors: Vec<NeighborRef<'a>>,
+    /// Source file content, when available and requested.
+    pub content: Option<&'a str>,
+    /// Previously-computed artifacts attached to this node (keyed by sampler id).
+    /// Enables sampler composition: earlier samplers deposit artifacts that
+    /// later samplers can read.
+    pub annotations: &'a HashMap<String, Value>,
+    /// Graph-level metadata (project name, workspace root, etc.).
+    pub graph_metadata: &'a HashMap<String, String>,
+}
+
+/// A neighbor node together with the edge that connects it.
+#[derive(Debug, Clone)]
+pub struct NeighborRef<'a> {
+    /// The neighboring node.
+    pub node: &'a GraphNode,
+    /// The connecting edge (direction implied by the edge's from/to fields).
+    pub edge: &'a GraphEdge,
+}
+
+/// Typed output produced by a sampler for one node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleArtifact {
+    /// Which node this artifact belongs to.
+    pub node_id: NodeId,
+    /// Structured payload (schema depends on the sampler).
+    pub value: Value,
+}
+
+/// Collected output of a full sampling pass.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleResult {
+    /// Identifier of the sampler that produced these artifacts.
+    pub sampler_id: String,
+    /// Per-node artifacts, ordered by the sampler's iteration order.
+    pub artifacts: Vec<SampleArtifact>,
+    /// Aggregate / summary metadata for the entire pass.
+    pub metadata: HashMap<String, Value>,
+}
+
+impl SampleResult {
+    /// Look up the artifact for a specific node.
+    pub fn get(&self, node_id: NodeId) -> Option<&SampleArtifact> {
+        self.artifacts.iter().find(|a| a.node_id == node_id)
+    }
+
+    /// Number of artifacts produced.
+    pub fn len(&self) -> usize {
+        self.artifacts.len()
+    }
+
+    /// Whether no artifacts were produced.
+    pub fn is_empty(&self) -> bool {
+        self.artifacts.is_empty()
+    }
+
+    /// Iterate over (NodeId, &Value) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (NodeId, &Value)> {
+        self.artifacts.iter().map(|a| (a.node_id, &a.value))
+    }
+}
+
+/// Determines which nodes a sampler should operate on.
+pub enum NodeSelector {
+    /// Sample every node in the graph.
+    All,
+    /// Only nodes whose kind matches.
+    ByKind(GraphNodeKind),
+    /// Only nodes with these specific IDs.
+    Explicit(Vec<NodeId>),
+    /// Only nodes whose metadata contains the given key.
+    HasMetadata(String),
+    /// Custom predicate (not serializable — use for in-process composition).
+    Predicate(Box<dyn Fn(&GraphNode) -> bool + Send + Sync>),
+}
+
+impl Default for NodeSelector {
+    fn default() -> Self {
+        NodeSelector::All
+    }
+}
+
+impl std::fmt::Debug for NodeSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeSelector::All => write!(f, "All"),
+            NodeSelector::ByKind(k) => write!(f, "ByKind({:?})", k),
+            NodeSelector::Explicit(ids) => write!(f, "Explicit({:?})", ids),
+            NodeSelector::HasMetadata(key) => write!(f, "HasMetadata({:?})", key),
+            NodeSelector::Predicate(_) => write!(f, "Predicate(<fn>)"),
+        }
+    }
+}
+
+impl NodeSelector {
+    /// Test whether a node passes this selector.
+    pub fn matches(&self, node: &GraphNode) -> bool {
+        match self {
+            NodeSelector::All => true,
+            NodeSelector::ByKind(kind) => node.kind == *kind,
+            NodeSelector::Explicit(ids) => ids.contains(&node.id),
+            NodeSelector::HasMetadata(key) => node.metadata.contains_key(key),
+            NodeSelector::Predicate(f) => f(node),
+        }
+    }
+}
+
+/// The core sampling primitive.
+///
+/// A sampler selects nodes from a graph, computes a local function for each,
+/// and collects the results into a [`SampleResult`]. Samplers are composable:
+/// the output of one can be fed into the `annotations` of the next via
+/// [`SamplerPipeline`].
+pub trait Sampler: Send + Sync {
+    /// Stable identifier (used as key in annotation maps and persistence).
+    fn id(&self) -> &str;
+
+    /// Which nodes this sampler operates on.
+    fn selector(&self) -> NodeSelector {
+        NodeSelector::All
+    }
+
+    /// Compute the artifact for a single node.
+    /// Return `Ok(None)` to skip a node without error.
+    fn compute(&self, ctx: &SampleContext<'_>) -> Result<Option<Value>, SamplerError>;
+
+    /// Run the full sampling pass over a graph.
+    ///
+    /// Default implementation: select → build context → compute → collect.
+    /// Override only when the sampler needs batch-level optimizations
+    /// (e.g. batched embedding inference).
+    fn sample(
+        &self,
+        graph: &SourceCodeGraph,
+        annotations: &HashMap<NodeId, HashMap<String, Value>>,
+    ) -> Result<SampleResult, SamplerError> {
+        let selector = self.selector();
+        let selected: Vec<&GraphNode> = graph
+            .nodes
+            .iter()
+            .filter(|n| selector.matches(n))
+            .collect();
+
+        let mut artifacts = Vec::with_capacity(selected.len());
+
+        for node in &selected {
+            let neighbors = graph.neighbors(node.id);
+            let empty = HashMap::new();
+            let node_annotations = annotations.get(&node.id).unwrap_or(&empty);
+
+            let ctx = SampleContext {
+                node,
+                neighbors,
+                content: None,
+                annotations: node_annotations,
+                graph_metadata: &graph.metadata,
+            };
+
+            if let Some(value) = self.compute(&ctx)? {
+                artifacts.push(SampleArtifact {
+                    node_id: node.id,
+                    value,
+                });
+            }
+        }
+
+        Ok(SampleResult {
+            sampler_id: self.id().to_string(),
+            artifacts,
+            metadata: HashMap::new(),
+        })
+    }
+}
+
+/// Errors that can occur during sampling.
+#[derive(Debug, Clone)]
+pub struct SamplerError {
+    pub sampler_id: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for SamplerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sampler '{}': {}", self.sampler_id, self.message)
+    }
+}
+
+impl std::error::Error for SamplerError {}
+
+impl SamplerError {
+    pub fn new(sampler_id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            sampler_id: sampler_id.into(),
+            message: message.into(),
+        }
+    }
+}
+
+/// Chains multiple samplers so each one's output enriches the annotations
+/// available to the next.
+pub struct SamplerPipeline {
+    stages: Vec<Box<dyn Sampler>>,
+}
+
+impl SamplerPipeline {
+    pub fn new() -> Self {
+        Self { stages: Vec::new() }
+    }
+
+    /// Append a sampler stage to the pipeline.
+    pub fn add(mut self, sampler: Box<dyn Sampler>) -> Self {
+        self.stages.push(sampler);
+        self
+    }
+
+    /// Execute all stages in order, threading annotations forward.
+    /// Returns the per-stage results and the accumulated annotation map.
+    pub fn run(
+        &self,
+        graph: &SourceCodeGraph,
+    ) -> Result<(Vec<SampleResult>, HashMap<NodeId, HashMap<String, Value>>), SamplerError> {
+        let mut annotations: HashMap<NodeId, HashMap<String, Value>> = HashMap::new();
+        let mut results = Vec::with_capacity(self.stages.len());
+
+        for stage in &self.stages {
+            let result = stage.sample(graph, &annotations)?;
+
+            for artifact in &result.artifacts {
+                annotations
+                    .entry(artifact.node_id)
+                    .or_default()
+                    .insert(result.sampler_id.clone(), artifact.value.clone());
+            }
+
+            results.push(result);
+        }
+
+        Ok((results, annotations))
+    }
+}
+
+impl Default for SamplerPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// -- Helper: graph neighborhood lookup used by the default Sampler::sample --
+
+impl SourceCodeGraph {
+    /// Collect direct neighbors of a node (both directions) with their edges.
+    pub fn neighbors(&self, node_id: NodeId) -> Vec<NeighborRef<'_>> {
+        let node_map: HashMap<NodeId, &GraphNode> =
+            self.nodes.iter().map(|n| (n.id, n)).collect();
+
+        self.edges
+            .iter()
+            .filter_map(|edge| {
+                let peer_id = if edge.from == node_id {
+                    Some(edge.to)
+                } else if edge.to == node_id {
+                    Some(edge.from)
+                } else {
+                    None
+                };
+                peer_id.and_then(|pid| {
+                    node_map.get(&pid).map(|peer_node| NeighborRef {
+                        node: peer_node,
+                        edge,
+                    })
+                })
+            })
+            .collect()
+    }
+}
+
+/// A sampler that produces no artifacts — useful as a pipeline placeholder
+/// and for testing.
+pub struct NoOpSampler;
+
+impl Sampler for NoOpSampler {
+    fn id(&self) -> &str {
+        "noop"
+    }
+
+    fn compute(&self, _ctx: &SampleContext<'_>) -> Result<Option<Value>, SamplerError> {
+        Ok(None)
+    }
+}
+
+/// A sampler that counts each node's direct neighbors (degree centrality).
+/// Demonstrates the pattern and is useful as a lightweight structural signal.
+pub struct DegreeSampler;
+
+impl Sampler for DegreeSampler {
+    fn id(&self) -> &str {
+        "degree"
+    }
+
+    fn selector(&self) -> NodeSelector {
+        NodeSelector::ByKind(GraphNodeKind::File)
+    }
+
+    fn compute(&self, ctx: &SampleContext<'_>) -> Result<Option<Value>, SamplerError> {
+        let incoming = ctx
+            .neighbors
+            .iter()
+            .filter(|n| n.edge.to == ctx.node.id)
+            .count();
+        let outgoing = ctx
+            .neighbors
+            .iter()
+            .filter(|n| n.edge.from == ctx.node.id)
+            .count();
+
+        Ok(Some(serde_json::json!({
+            "in": incoming,
+            "out": outgoing,
+            "total": incoming + outgoing,
+        })))
+    }
+}
+
+/// A sampler that extracts metadata from nodes as-is, useful for exposing
+/// node properties (language, extension, has_tests) into the annotation
+/// pipeline without transformation.
+pub struct MetadataSampler {
+    keys: Vec<String>,
+}
+
+impl MetadataSampler {
+    /// Create a sampler that extracts the specified metadata keys.
+    pub fn new(keys: Vec<String>) -> Self {
+        Self { keys }
+    }
+
+    /// Extract all available metadata.
+    pub fn all() -> Self {
+        Self { keys: Vec::new() }
+    }
+}
+
+impl Sampler for MetadataSampler {
+    fn id(&self) -> &str {
+        "metadata"
+    }
+
+    fn compute(&self, ctx: &SampleContext<'_>) -> Result<Option<Value>, SamplerError> {
+        let extracted: serde_json::Map<String, Value> = if self.keys.is_empty() {
+            ctx.node
+                .metadata
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect()
+        } else {
+            self.keys
+                .iter()
+                .filter_map(|key| {
+                    ctx.node
+                        .metadata
+                        .get(key)
+                        .map(|v| (key.clone(), Value::String(v.clone())))
+                })
+                .collect()
+        };
+
+        if extracted.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Value::Object(extracted)))
+        }
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_graph() -> SourceCodeGraph {
+        let mut meta_a = HashMap::new();
+        meta_a.insert("relative_path".to_string(), "src/main.rs".to_string());
+        meta_a.insert("extension".to_string(), "rs".to_string());
+        meta_a.insert("language".to_string(), "rust".to_string());
+
+        let mut meta_b = HashMap::new();
+        meta_b.insert("relative_path".to_string(), "src/lib.rs".to_string());
+        meta_b.insert("extension".to_string(), "rs".to_string());
+        meta_b.insert("language".to_string(), "rust".to_string());
+
+        let mut meta_dir = HashMap::new();
+        meta_dir.insert("relative_path".to_string(), "src".to_string());
+
+        SourceCodeGraph {
+            nodes: vec![
+                GraphNode {
+                    id: NodeId(0),
+                    name: "src".to_string(),
+                    kind: GraphNodeKind::Directory,
+                    metadata: meta_dir,
+                },
+                GraphNode {
+                    id: NodeId(1),
+                    name: "main.rs".to_string(),
+                    kind: GraphNodeKind::File,
+                    metadata: meta_a,
+                },
+                GraphNode {
+                    id: NodeId(2),
+                    name: "lib.rs".to_string(),
+                    kind: GraphNodeKind::Module,
+                    metadata: meta_b,
+                },
+            ],
+            edges: vec![
+                GraphEdge {
+                    id: EdgeId(0),
+                    from: NodeId(0),
+                    to: NodeId(1),
+                    relationship: "contains".to_string(),
+                    metadata: HashMap::new(),
+                },
+                GraphEdge {
+                    id: EdgeId(1),
+                    from: NodeId(0),
+                    to: NodeId(2),
+                    relationship: "contains".to_string(),
+                    metadata: HashMap::new(),
+                },
+                GraphEdge {
+                    id: EdgeId(2),
+                    from: NodeId(1),
+                    to: NodeId(2),
+                    relationship: "uses".to_string(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("name".to_string(), "test-project".to_string());
+                m
+            },
+        }
+    }
+
+    // -- SourceCodeGraph::neighbors --
+
+    #[test]
+    fn test_neighbors_returns_both_directions() {
+        let graph = test_graph();
+        // Node 2 (lib.rs): contained by src (edge 1), used by main.rs (edge 2)
+        let neighbors = graph.neighbors(NodeId(2));
+        assert_eq!(neighbors.len(), 2);
+
+        let peer_ids: Vec<NodeId> = neighbors.iter().map(|n| n.node.id).collect();
+        assert!(peer_ids.contains(&NodeId(0))); // src dir
+        assert!(peer_ids.contains(&NodeId(1))); // main.rs
+    }
+
+    #[test]
+    fn test_neighbors_empty_for_unknown_node() {
+        let graph = test_graph();
+        let neighbors = graph.neighbors(NodeId(999));
+        assert!(neighbors.is_empty());
+    }
+
+    // -- NodeSelector --
+
+    #[test]
+    fn test_selector_all() {
+        let graph = test_graph();
+        let sel = NodeSelector::All;
+        assert!(graph.nodes.iter().all(|n| sel.matches(n)));
+    }
+
+    #[test]
+    fn test_selector_by_kind() {
+        let graph = test_graph();
+        let sel = NodeSelector::ByKind(GraphNodeKind::File);
+        let matched: Vec<_> = graph.nodes.iter().filter(|n| sel.matches(n)).collect();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].name, "main.rs");
+    }
+
+    #[test]
+    fn test_selector_explicit() {
+        let graph = test_graph();
+        let sel = NodeSelector::Explicit(vec![NodeId(0), NodeId(2)]);
+        let matched: Vec<_> = graph.nodes.iter().filter(|n| sel.matches(n)).collect();
+        assert_eq!(matched.len(), 2);
+    }
+
+    #[test]
+    fn test_selector_has_metadata() {
+        let graph = test_graph();
+        let sel = NodeSelector::HasMetadata("language".to_string());
+        let matched: Vec<_> = graph.nodes.iter().filter(|n| sel.matches(n)).collect();
+        assert_eq!(matched.len(), 2); // main.rs and lib.rs, not src dir
+    }
+
+    #[test]
+    fn test_selector_predicate() {
+        let graph = test_graph();
+        let sel = NodeSelector::Predicate(Box::new(|n| n.name.ends_with(".rs")));
+        let matched: Vec<_> = graph.nodes.iter().filter(|n| sel.matches(n)).collect();
+        assert_eq!(matched.len(), 2);
+    }
+
+    // -- NoOpSampler --
+
+    #[test]
+    fn test_noop_sampler_produces_nothing() {
+        let graph = test_graph();
+        let sampler = NoOpSampler;
+        let result = sampler.sample(&graph, &HashMap::new()).unwrap();
+        assert!(result.is_empty());
+        assert_eq!(result.sampler_id, "noop");
+    }
+
+    // -- DegreeSampler --
+
+    #[test]
+    fn test_degree_sampler() {
+        let graph = test_graph();
+        let sampler = DegreeSampler;
+        let result = sampler.sample(&graph, &HashMap::new()).unwrap();
+        assert_eq!(result.sampler_id, "degree");
+
+        // Only File-kind nodes are selected (main.rs = NodeId(1))
+        assert_eq!(result.len(), 1);
+        let artifact = result.get(NodeId(1)).unwrap();
+        // main.rs: contained by src (in=1), uses lib.rs (out=1)
+        assert_eq!(artifact.value["in"], 1);
+        assert_eq!(artifact.value["out"], 1);
+        assert_eq!(artifact.value["total"], 2);
+    }
+
+    // -- MetadataSampler --
+
+    #[test]
+    fn test_metadata_sampler_specific_keys() {
+        let graph = test_graph();
+        let sampler = MetadataSampler::new(vec!["language".to_string()]);
+        let result = sampler.sample(&graph, &HashMap::new()).unwrap();
+        // src dir has no "language" key → skipped
+        assert_eq!(result.len(), 2);
+        for (_, val) in result.iter() {
+            assert_eq!(val["language"], "rust");
+        }
+    }
+
+    #[test]
+    fn test_metadata_sampler_all_keys() {
+        let graph = test_graph();
+        let sampler = MetadataSampler::all();
+        let result = sampler.sample(&graph, &HashMap::new()).unwrap();
+        assert_eq!(result.len(), 3); // all nodes have at least relative_path
+    }
+
+    // -- SampleResult --
+
+    #[test]
+    fn test_sample_result_get_and_iter() {
+        let result = SampleResult {
+            sampler_id: "test".to_string(),
+            artifacts: vec![
+                SampleArtifact {
+                    node_id: NodeId(1),
+                    value: json!({"score": 0.9}),
+                },
+                SampleArtifact {
+                    node_id: NodeId(2),
+                    value: json!({"score": 0.5}),
+                },
+            ],
+            metadata: HashMap::new(),
+        };
+        assert_eq!(result.len(), 2);
+        assert!(!result.is_empty());
+        assert_eq!(result.get(NodeId(1)).unwrap().value["score"], 0.9);
+        assert!(result.get(NodeId(99)).is_none());
+        assert_eq!(result.iter().count(), 2);
+    }
+
+    // -- SamplerPipeline --
+
+    #[test]
+    fn test_pipeline_threads_annotations() {
+        let graph = test_graph();
+        let pipeline = SamplerPipeline::new()
+            .add(Box::new(MetadataSampler::all()))
+            .add(Box::new(DegreeSampler));
+
+        let (results, annotations) = pipeline.run(&graph).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // main.rs (NodeId 1) should have annotations from both stages
+        let main_annot = annotations.get(&NodeId(1)).unwrap();
+        assert!(main_annot.contains_key("metadata"));
+        assert!(main_annot.contains_key("degree"));
+    }
+
+    #[test]
+    fn test_pipeline_empty() {
+        let graph = test_graph();
+        let pipeline = SamplerPipeline::new();
+        let (results, annotations) = pipeline.run(&graph).unwrap();
+        assert!(results.is_empty());
+        assert!(annotations.is_empty());
+    }
+
+    // -- SamplerError --
+
+    #[test]
+    fn test_sampler_error_display() {
+        let err = SamplerError::new("embed", "model not loaded");
+        assert_eq!(err.to_string(), "sampler 'embed': model not loaded");
+    }
+
+    // -- Failing sampler --
+
+    struct FailingSampler;
+    impl Sampler for FailingSampler {
+        fn id(&self) -> &str {
+            "failing"
+        }
+        fn compute(&self, _ctx: &SampleContext<'_>) -> Result<Option<Value>, SamplerError> {
+            Err(SamplerError::new("failing", "intentional test failure"))
+        }
+    }
+
+    #[test]
+    fn test_sampler_propagates_error() {
+        let graph = test_graph();
+        let sampler = FailingSampler;
+        let result = sampler.sample(&graph, &HashMap::new());
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().sampler_id, "failing");
+    }
+}
