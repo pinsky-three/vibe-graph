@@ -84,6 +84,7 @@ pub use self::fastembed_backend::FastEmbedBackend;
 mod fastembed_backend {
     use super::*;
     use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     /// Wraps `fastembed::TextEmbedding` behind the [`Embedder`] trait.
@@ -100,15 +101,15 @@ mod fastembed_backend {
 
     impl FastEmbedBackend {
         /// Initialise with the default BGE-Small model (384-d, ~33 MB).
-        pub fn default_model() -> Result<Self, EmbedError> {
-            Self::with_model(EmbeddingModel::BGESmallENV15)
+        pub fn default_model(cache_dir: Option<PathBuf>) -> Result<Self, EmbedError> {
+            Self::with_model(EmbeddingModel::BGESmallENV15, cache_dir)
         }
 
         /// Initialise from `VG_EMBED_MODEL` env var, falling back to the default.
         ///
         /// The env var value is matched against the HuggingFace model code
         /// (case-insensitive), e.g. `Xenova/bge-base-en-v1.5`.
-        pub fn from_env() -> Result<Self, EmbedError> {
+        pub fn from_env(cache_dir: Option<PathBuf>) -> Result<Self, EmbedError> {
             match std::env::var(ENV_MODEL) {
                 Ok(val) if !val.is_empty() => {
                     let model_id: EmbeddingModel = val.parse().map_err(|e: String| {
@@ -117,9 +118,9 @@ mod fastembed_backend {
                              (run `vg semantic models` to list them)."
                         ))
                     })?;
-                    Self::with_model(model_id)
+                    Self::with_model(model_id, cache_dir)
                 }
-                _ => Self::default_model(),
+                _ => Self::default_model(cache_dir),
             }
         }
 
@@ -132,7 +133,13 @@ mod fastembed_backend {
         }
 
         /// Initialise with a specific fastembed model variant.
-        pub fn with_model(model_id: EmbeddingModel) -> Result<Self, EmbedError> {
+        ///
+        /// `cache_dir` controls where model weights are downloaded. When `None`,
+        /// fastembed uses its own default (`$HF_HOME` or `.fastembed_cache`).
+        pub fn with_model(
+            model_id: EmbeddingModel,
+            cache_dir: Option<PathBuf>,
+        ) -> Result<Self, EmbedError> {
             let info = TextEmbedding::list_supported_models()
                 .into_iter()
                 .find(|m| m.model == model_id);
@@ -143,7 +150,10 @@ mod fastembed_backend {
                 .map(|m| m.model_code.clone())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let opts = InitOptions::new(model_id).with_show_download_progress(true);
+            let mut opts = InitOptions::new(model_id).with_show_download_progress(true);
+            if let Some(dir) = cache_dir {
+                opts = opts.with_cache_dir(dir);
+            }
 
             let model = TextEmbedding::try_new(opts)
                 .map_err(|e| EmbedError::new(format!("fastembed init: {e}")))?;

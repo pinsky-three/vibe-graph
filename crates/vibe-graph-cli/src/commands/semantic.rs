@@ -12,13 +12,21 @@ use vibe_graph_semantic::{
     EmbeddingSampler, NoOpEmbedder, SearchQuery, SemanticSearch, SemanticStore, VectorIndex,
 };
 
+/// Resolve the model cache directory inside `.self/semantic/cache`.
+#[cfg(feature = "semantic")]
+fn model_cache_dir(workspace: &Path) -> std::path::PathBuf {
+    workspace.join(".self").join("semantic").join("cache")
+}
+
 /// Build the embedder appropriate for the current feature set.
 /// Reads `VG_EMBED_MODEL` to select a model; falls back to BGE-Small-EN v1.5.
+/// Model weights are cached in `.self/semantic/cache/`.
 /// Returns `(embedder, is_real)` — `is_real` is false when fastembed is unavailable.
-fn make_embedder() -> (Arc<dyn vibe_graph_semantic::Embedder>, bool) {
+fn make_embedder(workspace: &Path) -> (Arc<dyn vibe_graph_semantic::Embedder>, bool) {
     #[cfg(feature = "semantic")]
     {
-        match vibe_graph_semantic::FastEmbedBackend::from_env() {
+        let cache = model_cache_dir(workspace);
+        match vibe_graph_semantic::FastEmbedBackend::from_env(Some(cache)) {
             Ok(backend) => return (Arc::new(backend), true),
             Err(e) => {
                 eprintln!("   ⚠ fastembed init failed: {e}");
@@ -29,6 +37,7 @@ fn make_embedder() -> (Arc<dyn vibe_graph_semantic::Embedder>, bool) {
 
     #[cfg(not(feature = "semantic"))]
     {
+        let _ = workspace;
         eprintln!(
             "   ℹ Built without `semantic` feature. Using no-op embedder."
         );
@@ -72,7 +81,7 @@ pub fn index(path: &Path, force: bool) -> Result<()> {
     }
 
     let graph = load_graph(&path)?;
-    let (embedder, _is_real) = make_embedder();
+    let (embedder, _is_real) = make_embedder(&path);
 
     eprintln!(
         "🔍 Indexing {} nodes with model \"{}\" (dim={})...",
@@ -123,7 +132,7 @@ pub fn search(
         .context("No semantic index found. Run `vg semantic index` first.")?;
 
     let graph = load_graph(&path)?;
-    let (embedder, _) = make_embedder();
+    let (embedder, _) = make_embedder(&path);
 
     if embedder.model_name() != meta.model_name {
         eprintln!(
@@ -293,7 +302,7 @@ pub fn bootstrap_semantic(
         }
     }
 
-    let (embedder, is_real) = make_embedder();
+    let (embedder, is_real) = make_embedder(path);
 
     if !is_real {
         eprintln!("   ⏭ semantic index (skipped — no embedding backend)");
