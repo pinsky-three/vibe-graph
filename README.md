@@ -104,6 +104,7 @@ make build FEATURES=semantic      # With embedding search
 | `vg serve --mcp` | Start Model Context Protocol server for AI agents |
 | `vg semantic index` | Build or rebuild the local embedding index |
 | `vg semantic search <query>` | Search the codebase by meaning |
+| `vg semantic models` | List available embedding models |
 | `vg semantic status` | Show semantic index info (model, entries) |
 | `vg semantic clean` | Remove the semantic index |
 | `vg automaton generate` | Generate automaton description from graph |
@@ -452,6 +453,7 @@ Add `.self/` to your `.gitignore`.
 |---------------------|-------------|
 | `GITHUB_TOKEN` | GitHub PAT for org commands |
 | `GITHUB_USERNAME` | GitHub username (for authenticated clones) |
+| `VG_EMBED_MODEL` | Embedding model code (default: `Xenova/bge-small-en-v1.5`). Run `vg semantic models` to list options. |
 | `VG_MAX_CONTENT_SIZE_KB` | Max file size to include content (default: 50) |
 | `RUST_LOG` | Log level (e.g., `info`, `tower_http=info`) |
 

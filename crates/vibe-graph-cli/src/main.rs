@@ -326,9 +326,13 @@ enum Commands {
     /// Build a local embedding index over your codebase and search by meaning.
     /// Requires `--features semantic` for real embeddings (fastembed/ONNX).
     ///
+    /// Set VG_EMBED_MODEL to change the model (default: BGE-Small-EN v1.5).
+    /// Run `vg semantic models` to list all available models.
+    ///
     /// Examples:
     ///   vg semantic index                    # build the embedding index
     ///   vg semantic search "error handling"   # search by concept
+    ///   vg semantic models                   # list available models
     ///   vg semantic status                    # show index info
     ///   vg semantic clean                     # remove the index
     #[command(subcommand)]
@@ -600,6 +604,12 @@ enum SemanticCommands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+
+    /// List available embedding models.
+    ///
+    /// Set `VG_EMBED_MODEL` to one of the listed model codes to override
+    /// the default (BGE-Small-EN v1.5).
+    Models,
 }
 
 /// Remote repository commands.
@@ -1049,6 +1059,9 @@ async fn main() -> Result<()> {
             }
             SemanticCommands::Clean { path } => {
                 commands::semantic::clean(&path)?;
+            }
+            SemanticCommands::Models => {
+                commands::semantic::models()?;
             }
         },
 

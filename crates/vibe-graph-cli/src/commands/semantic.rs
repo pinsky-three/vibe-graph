@@ -13,11 +13,12 @@ use vibe_graph_semantic::{
 };
 
 /// Build the embedder appropriate for the current feature set.
+/// Reads `VG_EMBED_MODEL` to select a model; falls back to BGE-Small-EN v1.5.
 /// Returns `(embedder, is_real)` — `is_real` is false when fastembed is unavailable.
 fn make_embedder() -> (Arc<dyn vibe_graph_semantic::Embedder>, bool) {
     #[cfg(feature = "semantic")]
     {
-        match vibe_graph_semantic::FastEmbedBackend::default_model() {
+        match vibe_graph_semantic::FastEmbedBackend::from_env() {
             Ok(backend) => return (Arc::new(backend), true),
             Err(e) => {
                 eprintln!("   ⚠ fastembed init failed: {e}");
@@ -224,6 +225,48 @@ pub fn clean(path: &Path) -> Result<()> {
         println!("🧹 Semantic index removed.");
     } else {
         println!("No semantic index to clean.");
+    }
+
+    Ok(())
+}
+
+// ─── vg semantic models ─────────────────────────────────────────────────────
+
+/// List available embedding models.
+pub fn models() -> Result<()> {
+    #[cfg(feature = "semantic")]
+    {
+        let current_env = std::env::var("VG_EMBED_MODEL").unwrap_or_default();
+        let models = vibe_graph_semantic::FastEmbedBackend::available_models();
+
+        println!("📦 Available embedding models ({} total):", models.len());
+        println!("   Set VG_EMBED_MODEL=<model_code> to use a different model.\n");
+        println!(
+            "   {code:<50} {dim:>5}  {desc}",
+            code = "MODEL CODE",
+            dim = "DIM",
+            desc = "DESCRIPTION",
+        );
+        println!("   {}", "─".repeat(100));
+
+        for (code, dim, desc) in &models {
+            let marker = if code == &current_env {
+                " ◀ active"
+            } else if code == "Xenova/bge-small-en-v1.5" && current_env.is_empty() {
+                " ◀ default"
+            } else {
+                ""
+            };
+            println!(
+                "   {code:<50} {dim:>5}  {desc}{marker}",
+            );
+        }
+    }
+
+    #[cfg(not(feature = "semantic"))]
+    {
+        eprintln!("Built without `semantic` feature — no models available.");
+        eprintln!("Rebuild with: cargo build --features semantic");
     }
 
     Ok(())

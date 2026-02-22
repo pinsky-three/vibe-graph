@@ -96,10 +96,39 @@ mod fastembed_backend {
         dim: usize,
     }
 
+    pub const ENV_MODEL: &str = "VG_EMBED_MODEL";
+
     impl FastEmbedBackend {
         /// Initialise with the default BGE-Small model (384-d, ~33 MB).
         pub fn default_model() -> Result<Self, EmbedError> {
             Self::with_model(EmbeddingModel::BGESmallENV15)
+        }
+
+        /// Initialise from `VG_EMBED_MODEL` env var, falling back to the default.
+        ///
+        /// The env var value is matched against the HuggingFace model code
+        /// (case-insensitive), e.g. `Xenova/bge-base-en-v1.5`.
+        pub fn from_env() -> Result<Self, EmbedError> {
+            match std::env::var(ENV_MODEL) {
+                Ok(val) if !val.is_empty() => {
+                    let model_id: EmbeddingModel = val.parse().map_err(|e: String| {
+                        EmbedError::new(format!(
+                            "{e}. Set {ENV_MODEL} to one of the supported model codes \
+                             (run `vg semantic models` to list them)."
+                        ))
+                    })?;
+                    Self::with_model(model_id)
+                }
+                _ => Self::default_model(),
+            }
+        }
+
+        /// Return all supported model codes (for `vg semantic models`).
+        pub fn available_models() -> Vec<(String, usize, String)> {
+            TextEmbedding::list_supported_models()
+                .into_iter()
+                .map(|m| (m.model_code, m.dim, m.description))
+                .collect()
         }
 
         /// Initialise with a specific fastembed model variant.
