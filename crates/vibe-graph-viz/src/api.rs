@@ -18,6 +18,28 @@ pub struct ApiResponse<T> {
     pub data: T,
 }
 
+// =============================================================================
+// Semantic Search Types
+// =============================================================================
+
+/// A single hit from the semantic search API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SemanticSearchHit {
+    pub node_id: u64,
+    pub score: f32,
+    pub name: String,
+    pub path: Option<String>,
+    pub kind: String,
+}
+
+/// Response from /api/semantic/search.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SemanticSearchResponse {
+    pub query: String,
+    pub model: String,
+    pub hits: Vec<SemanticSearchHit>,
+}
+
 /// Status response from /api/ops/status.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StatusResponse {
@@ -904,6 +926,34 @@ mod wasm_impl {
 
         Ok(body.data)
     }
+
+    /// Semantic search via GET /api/semantic/search?q=...&top=N.
+    pub async fn fetch_semantic_search(
+        query: &str,
+        top: usize,
+    ) -> Result<SemanticSearchResponse, String> {
+        let url = format!(
+            "/api/semantic/search?q={}&top={}",
+            urlencoding(query),
+            top
+        );
+
+        let resp = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.ok() {
+            return Err(format!("HTTP {}: {}", resp.status(), resp.status_text()));
+        }
+
+        let body: ApiResponse<SemanticSearchResponse> = resp
+            .json()
+            .await
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        Ok(body.data)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -991,6 +1041,14 @@ pub async fn git_log(_repo: Option<&str>, _limit: usize) -> Result<GitLogRespons
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn git_diff(_repo: Option<&str>, _staged: bool) -> Result<GitDiffResponse, String> {
     Err("Not implemented for native".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn fetch_semantic_search(
+    _query: &str,
+    _top: usize,
+) -> Result<SemanticSearchResponse, String> {
+    Err("Not implemented for native (use local search)".to_string())
 }
 
 /// Fetch file content — native implementation reads directly from filesystem.

@@ -22,7 +22,7 @@ fn model_cache_dir(workspace: &Path) -> std::path::PathBuf {
 /// Reads `VG_EMBED_MODEL` to select a model; falls back to BGE-Small-EN v1.5.
 /// Model weights are cached in `.self/semantic/cache/`.
 /// Returns `(embedder, is_real)` — `is_real` is false when fastembed is unavailable.
-fn make_embedder(workspace: &Path) -> (Arc<dyn vibe_graph_semantic::Embedder>, bool) {
+pub(crate) fn make_embedder(workspace: &Path) -> (Arc<dyn vibe_graph_semantic::Embedder>, bool) {
     #[cfg(feature = "semantic")]
     {
         let cache = model_cache_dir(workspace);

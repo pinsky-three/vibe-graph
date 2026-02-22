@@ -87,7 +87,8 @@ fn main() -> eframe::Result<()> {
         "Vibe Graph Viz",
         options,
         Box::new(move |cc| {
-            let app = VibeGraphApp::new(cc);
+            #[allow(unused_mut)]
+            let mut app = VibeGraphApp::new(cc);
 
             #[cfg(feature = "automaton")]
             {
@@ -106,6 +107,21 @@ fn main() -> eframe::Result<()> {
             {
                 if enable_automaton_flag {
                     eprintln!("Warning: automaton feature not enabled. Recompile with --features automaton");
+                }
+            }
+
+            #[cfg(feature = "semantic")]
+            {
+                let self_dir = std::path::PathBuf::from(".self");
+                let store = vibe_graph_semantic::SemanticStore::new(&self_dir);
+                if let Ok(Some((index, _meta))) = store.load() {
+                    match vibe_graph_semantic::FastEmbedBackend::from_env(None) {
+                        Ok(embedder) => {
+                            app.set_semantic_search(index, std::sync::Arc::new(embedder));
+                            eprintln!("[viz] Semantic search loaded");
+                        }
+                        Err(e) => eprintln!("[viz] Semantic search unavailable: {e}"),
+                    }
                 }
             }
 

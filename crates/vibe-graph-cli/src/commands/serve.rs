@@ -17,12 +17,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{
+    extract::{Query, State},
     http::header,
     response::{Html, IntoResponse, Response},
     routing::get,
-    Router,
+    Json, Router,
 };
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
@@ -33,12 +36,130 @@ use vibe_graph_api::{
 };
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
+use vibe_graph_semantic::{SearchQuery as SemSearchQuery, SemanticSearch, SemanticStore, VectorIndex};
 
 use crate::config::Config;
 
 // Embedded WASM assets (always included)
 static EMBEDDED_WASM: &[u8] = include_bytes!("../../assets/vibe_graph_viz_bg.wasm");
 static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_viz.js");
+
+// ─── Semantic search API ────────────────────────────────────────────────────
+
+/// Shared state for the semantic search endpoint.
+struct SemanticApiState {
+    index: RwLock<VectorIndex>,
+    graph: Arc<RwLock<vibe_graph_core::SourceCodeGraph>>,
+    embedder: Arc<dyn vibe_graph_semantic::Embedder>,
+}
+
+#[derive(Deserialize)]
+struct SemanticSearchParams {
+    q: String,
+    #[serde(default = "default_top")]
+    top: usize,
+    #[serde(default)]
+    threshold: f32,
+}
+
+fn default_top() -> usize {
+    20
+}
+
+#[derive(Serialize)]
+struct SemanticSearchHit {
+    node_id: u64,
+    score: f32,
+    name: String,
+    path: Option<String>,
+    kind: String,
+}
+
+#[derive(Serialize)]
+struct SemanticSearchResponse {
+    query: String,
+    model: String,
+    hits: Vec<SemanticSearchHit>,
+}
+
+async fn semantic_search_handler(
+    State(state): State<Arc<SemanticApiState>>,
+    Query(params): Query<SemanticSearchParams>,
+) -> impl IntoResponse {
+    let graph = state.graph.read().await;
+    let index = state.index.read().await;
+
+    let search_engine = SemanticSearch::new(state.embedder.clone());
+    let sq = SemSearchQuery::new(&params.q)
+        .with_top_k(params.top)
+        .with_threshold(params.threshold);
+
+    match search_engine.search(&sq, &index, &graph) {
+        Ok(results) => {
+            let hits: Vec<SemanticSearchHit> = results
+                .into_iter()
+                .map(|r| SemanticSearchHit {
+                    node_id: r.node_id.0,
+                    score: r.score,
+                    name: r.name.clone(),
+                    path: r.path,
+                    kind: String::new(),
+                })
+                .collect();
+            let resp = SemanticSearchResponse {
+                query: params.q,
+                model: state.embedder.model_name().to_string(),
+                hits,
+            };
+            (
+                axum::http::StatusCode::OK,
+                Json(vibe_graph_api::ApiResponse::new(resp)),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            warn!(error = %e, "semantic_search_failed");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(vibe_graph_api::ApiResponse::new(
+                    serde_json::json!({"error": e.to_string()}),
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Build a semantic search subrouter. Returns `None` if no index exists.
+fn build_semantic_router(
+    workspace_path: &Path,
+    graph: Arc<RwLock<vibe_graph_core::SourceCodeGraph>>,
+) -> Option<Router> {
+    let self_dir = workspace_path.join(".self");
+    let store = SemanticStore::new(&self_dir);
+
+    let (index, _meta) = match store.load() {
+        Ok(Some(pair)) => pair,
+        _ => return None,
+    };
+
+    let (embedder, is_real) = super::semantic::make_embedder(workspace_path);
+    if !is_real {
+        return None;
+    }
+
+    let state = Arc::new(SemanticApiState {
+        index: RwLock::new(index),
+        graph,
+        embedder,
+    });
+
+    let router = Router::new()
+        .route("/search", get(semantic_search_handler))
+        .with_state(state);
+
+    Some(router)
+}
 
 /// Minimal HTML shell for WASM visualization.
 const INDEX_HTML: &str = r#"<!DOCTYPE html>
@@ -218,16 +339,27 @@ pub async fn execute(
         create_full_api_router_with_git(api_state.clone(), ctx, path.clone())
     };
 
+    // Build semantic search subrouter (if index exists and embedder is available)
+    let semantic_router = build_semantic_router(&path, api_state.graph.clone());
+    if semantic_router.is_some() {
+        println!("   🔍 Semantic search: /api/semantic/search?q=...");
+    }
+
     // Build main router with embedded assets
     // Serve WASM from both root and /wasm/ for backwards compatibility
-    let app = Router::new()
+    let mut app = Router::new()
         .nest("/api", api_router)
         .route("/", get(index_handler))
         .route("/vibe_graph_viz_bg.wasm", get(wasm_handler))
         .route("/vibe_graph_viz.js", get(js_handler))
         .route("/wasm/vibe_graph_viz_bg.wasm", get(wasm_handler))
-        .route("/wasm/vibe_graph_viz.js", get(js_handler))
-        .layer(cors);
+        .route("/wasm/vibe_graph_viz.js", get(js_handler));
+
+    if let Some(sem_router) = semantic_router {
+        app = app.nest("/api/semantic", sem_router);
+    }
+
+    let app = app.layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 

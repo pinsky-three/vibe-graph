@@ -39,6 +39,9 @@ use crate::automaton_mode::AutomatonMode;
 #[cfg(feature = "gpu-layout")]
 use crate::gpu_layout::GpuLayoutManager;
 
+#[cfg(feature = "semantic")]
+use vibe_graph_semantic::{Embedder, VectorIndex};
+
 // Type aliases for Force-Directed layout with Center Gravity
 type ForceLayout = LayoutForceDirected<FruchtermanReingoldWithCenterGravity>;
 type ForceState = FruchtermanReingoldWithCenterGravityState;
@@ -70,6 +73,36 @@ const AUTO_PAUSE_DISPLACEMENT: f32 = 0.05;
 
 /// Number of consecutive stable frames before auto-pausing.
 const AUTO_PAUSE_STABLE_FRAMES: u32 = 10;
+
+/// A single search result mapping back to a graph node.
+#[derive(Clone)]
+struct SearchHit {
+    node_idx: NodeIndex,
+    score: f32,
+    label: String,
+    path: Option<String>,
+}
+
+/// Whether to search by text substring or semantic embeddings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchMode {
+    Text,
+    /// Semantic search via local embedder (native with `semantic` feature).
+    #[cfg(feature = "semantic")]
+    Semantic,
+    /// Semantic search via /api/semantic/search (WASM).
+    SemanticApi,
+}
+
+impl Default for SearchMode {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+/// Pending async search result channel (for WASM API calls).
+#[cfg(target_arch = "wasm32")]
+type PendingSearchResult = std::rc::Rc<std::cell::RefCell<Option<Vec<SearchHit>>>>;
 
 /// The main visualization application.
 pub struct VibeGraphApp {
@@ -128,6 +161,42 @@ pub struct VibeGraphApp {
     /// Automaton mode state (temporal evolution visualization)
     #[cfg(feature = "automaton")]
     automaton_mode: AutomatonMode,
+
+    // ==========================================================================
+    // Search State
+    // ==========================================================================
+    /// Current search query text.
+    search_query: String,
+    /// Cached previous query (to detect changes).
+    search_last_query: String,
+    /// Current search hits.
+    search_results: Vec<SearchHit>,
+    /// Active search mode.
+    search_mode: SearchMode,
+    /// Whether to auto-select search results.
+    search_auto_select: bool,
+    /// egui Id for the search text input (for focus control).
+    search_input_id: egui::Id,
+    /// Whether to request focus on the search input next frame.
+    search_focus_requested: bool,
+    /// Whether the search panel is expanded.
+    search_panel_open: bool,
+
+    /// Semantic vector index (loaded from `.self/semantic/`).
+    #[cfg(feature = "semantic")]
+    semantic_index: Option<VectorIndex>,
+    /// Embedding model for query encoding.
+    #[cfg(feature = "semantic")]
+    semantic_embedder: Option<std::sync::Arc<dyn Embedder>>,
+
+    /// Async search result channel (WASM API mode).
+    #[cfg(target_arch = "wasm32")]
+    pending_search: PendingSearchResult,
+    /// Whether an API search is in flight.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    search_api_loading: bool,
+    /// Whether the server has semantic search (probed on first use).
+    search_api_available: Option<bool>,
 
     // ==========================================================================
     // Layout Performance Optimization State
@@ -405,6 +474,28 @@ impl VibeGraphApp {
             #[cfg(feature = "automaton")]
             automaton_mode,
 
+            // Search state
+            search_query: String::new(),
+            search_last_query: String::new(),
+            search_results: Vec::new(),
+            search_mode: if cfg!(target_arch = "wasm32") {
+                SearchMode::SemanticApi
+            } else {
+                SearchMode::default()
+            },
+            search_auto_select: true,
+            search_input_id: egui::Id::new("search_input"),
+            search_focus_requested: false,
+            search_panel_open: true,
+            #[cfg(feature = "semantic")]
+            semantic_index: None,
+            #[cfg(feature = "semantic")]
+            semantic_embedder: None,
+            #[cfg(target_arch = "wasm32")]
+            pending_search: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            search_api_loading: false,
+            search_api_available: None,
+
             // Layout performance optimization state
             layout_frame_counter: 0,
             layout_skip_frames: graph_size_category.frame_skip(),
@@ -581,6 +672,18 @@ impl VibeGraphApp {
     /// Set the project root path for file viewer (resolves relative paths).
     pub fn set_project_root(&mut self, path: PathBuf) {
         self.file_viewer.set_root_path(path);
+    }
+
+    /// Inject a pre-built semantic index and embedder for semantic search.
+    #[cfg(feature = "semantic")]
+    pub fn set_semantic_search(
+        &mut self,
+        index: VectorIndex,
+        embedder: std::sync::Arc<dyn Embedder>,
+    ) {
+        self.semantic_index = Some(index);
+        self.semantic_embedder = Some(embedder);
+        self.search_mode = SearchMode::Semantic;
     }
 
     /// Open a file in the syntax-highlighted viewer.
@@ -2034,6 +2137,308 @@ impl VibeGraphApp {
             .collect()
     }
 
+    // =========================================================================
+    // Search
+    // =========================================================================
+
+    /// Text-based search: case-insensitive substring match on node labels/paths.
+    fn find_by_text(&self, query: &str) -> Vec<SearchHit> {
+        let q = query.to_lowercase();
+        let mut hits: Vec<SearchHit> = Vec::new();
+
+        for (idx, label) in &self.original_node_labels {
+            let label_lower = label.to_lowercase();
+            let path_str = self.node_paths.get(idx).map(|p| p.display().to_string());
+            let path_lower = path_str.as_deref().map(|s| s.to_lowercase());
+
+            let label_match = label_lower.contains(&q);
+            let path_match = path_lower.as_deref().map_or(false, |p| p.contains(&q));
+
+            if label_match || path_match {
+                let score = if label_lower == q {
+                    1.0
+                } else if label_lower.starts_with(&q) {
+                    0.9
+                } else if label_match {
+                    0.7
+                } else {
+                    0.5
+                };
+                hits.push(SearchHit {
+                    node_idx: *idx,
+                    score,
+                    label: label.clone(),
+                    path: path_str,
+                });
+            }
+        }
+
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(30);
+        hits
+    }
+
+    /// Semantic search: embed the query and find nearest nodes by cosine similarity.
+    #[cfg(feature = "semantic")]
+    fn find_by_semantic(&self, query: &str) -> Vec<SearchHit> {
+        let (Some(index), Some(embedder)) = (&self.semantic_index, &self.semantic_embedder) else {
+            return Vec::new();
+        };
+
+        let query_embedding = match embedder.embed(&[query]) {
+            Ok(mut vecs) if !vecs.is_empty() => vecs.remove(0),
+            _ => return Vec::new(),
+        };
+
+        let raw_hits = index.search(&query_embedding, 30);
+
+        let node_id_to_idx: HashMap<u64, NodeIndex> = self._node_id_to_egui.clone();
+
+        raw_hits
+            .into_iter()
+            .filter_map(|hit| {
+                let egui_idx = node_id_to_idx.get(&hit.node_id.0)?;
+                let label = self
+                    .original_node_labels
+                    .get(egui_idx)
+                    .cloned()
+                    .unwrap_or_default();
+                let path = self.node_paths.get(egui_idx).map(|p| p.display().to_string());
+                Some(SearchHit {
+                    node_idx: *egui_idx,
+                    score: hit.score,
+                    label,
+                    path,
+                })
+            })
+            .collect()
+    }
+
+    /// Run the appropriate search based on the current mode and update results.
+    fn run_search(&mut self) {
+        if self.search_query.len() < 2 {
+            self.search_results.clear();
+            return;
+        }
+
+        match self.search_mode {
+            SearchMode::Text => {
+                let results = self.find_by_text(&self.search_query.clone());
+                self.apply_search_results(results);
+            }
+            #[cfg(feature = "semantic")]
+            SearchMode::Semantic => {
+                let sem = self.find_by_semantic(&self.search_query.clone());
+                let results = if sem.is_empty() {
+                    self.find_by_text(&self.search_query.clone())
+                } else {
+                    sem
+                };
+                self.apply_search_results(results);
+            }
+            SearchMode::SemanticApi => {
+                self.run_api_search();
+            }
+        }
+    }
+
+    /// Apply search results and optionally select matching nodes.
+    fn apply_search_results(&mut self, results: Vec<SearchHit>) {
+        self.search_results = results;
+        if self.search_auto_select && !self.search_results.is_empty() {
+            let nodes: Vec<NodeIndex> = self.search_results.iter().map(|h| h.node_idx).collect();
+            self.apply_programmatic_selection(nodes);
+        }
+    }
+
+    /// Trigger an async semantic search via the API (used in WASM).
+    fn run_api_search(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.search_api_loading {
+                return;
+            }
+            self.search_api_loading = true;
+
+            let query = self.search_query.clone();
+            let node_id_map = self._node_id_to_egui.clone();
+            let labels = self.original_node_labels.clone();
+            let paths = self.node_paths.clone();
+            let channel = self.pending_search.clone();
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = crate::api::fetch_semantic_search(&query, 30).await;
+                let hits = match result {
+                    Ok(resp) => resp
+                        .hits
+                        .into_iter()
+                        .filter_map(|h| {
+                            let egui_idx = node_id_map.get(&h.node_id)?;
+                            let label = labels.get(egui_idx).cloned().unwrap_or_default();
+                            let path = paths.get(egui_idx).map(|p| p.display().to_string());
+                            Some(SearchHit {
+                                node_idx: *egui_idx,
+                                score: h.score,
+                                label,
+                                path,
+                            })
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+                *channel.borrow_mut() = Some(hits);
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let results = self.find_by_text(&self.search_query.clone());
+            self.apply_search_results(results);
+        }
+    }
+
+    /// Poll for async search results (called each frame in WASM).
+    fn poll_search_results(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result = self.pending_search.borrow_mut().take();
+            if let Some(hits) = result {
+                self.search_api_loading = false;
+                if self.search_api_available.is_none() {
+                    self.search_api_available = Some(!hits.is_empty());
+                }
+                self.apply_search_results(hits);
+            }
+        }
+    }
+
+    /// Search panel — text input + mode toggle + result list.
+    fn ui_search(&mut self, ui: &mut egui::Ui) {
+        CollapsingHeader::new("Search  (press /)")
+            .default_open(self.search_panel_open)
+            .show(ui, |ui| {
+                // Mode toggle
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.search_mode, SearchMode::Text, "Text");
+
+                    #[cfg(feature = "semantic")]
+                    {
+                        let has_semantic = self.semantic_index.is_some();
+                        ui.add_enabled_ui(has_semantic, |ui| {
+                            ui.selectable_value(
+                                &mut self.search_mode,
+                                SearchMode::Semantic,
+                                "Semantic",
+                            );
+                        });
+                    }
+
+                    // Show API mode when available or in WASM
+                    let api_available = self.search_api_available.unwrap_or(cfg!(target_arch = "wasm32"));
+                    if api_available {
+                        ui.selectable_value(
+                            &mut self.search_mode,
+                            SearchMode::SemanticApi,
+                            "API",
+                        );
+                    }
+                });
+
+                // Search input
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.search_query)
+                        .id(self.search_input_id)
+                        .hint_text("Search nodes...")
+                        .desired_width(ui.available_width()),
+                );
+
+                // Handle focus request from keyboard shortcut
+                if self.search_focus_requested {
+                    ui.memory_mut(|m| m.request_focus(self.search_input_id));
+                    self.search_focus_requested = false;
+                    self.search_panel_open = true;
+                }
+
+                // Run search on change
+                if self.search_query != self.search_last_query {
+                    self.search_last_query = self.search_query.clone();
+                    self.run_search();
+                }
+
+                // Enter key confirms selection
+                if response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && !self.search_results.is_empty()
+                {
+                    let nodes: Vec<NodeIndex> =
+                        self.search_results.iter().map(|h| h.node_idx).collect();
+                    self.apply_programmatic_selection(nodes);
+                }
+
+                // Escape clears search
+                if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.search_query.clear();
+                    self.search_last_query.clear();
+                    self.search_results.clear();
+                    response.surrender_focus();
+                }
+
+                // Auto-select toggle
+                ui.checkbox(&mut self.search_auto_select, "Auto-select results");
+
+                // Result count + loading indicator
+                if !self.search_query.is_empty() {
+                    let mode_label = match self.search_mode {
+                        SearchMode::Text => "text",
+                        #[cfg(feature = "semantic")]
+                        SearchMode::Semantic => "semantic",
+                        SearchMode::SemanticApi => "api",
+                    };
+
+                    let loading = if self.search_api_loading { " ..." } else { "" };
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} hits ({}){loading}",
+                            self.search_results.len(),
+                            mode_label,
+                        ))
+                        .small()
+                        .color(egui::Color32::LIGHT_GRAY),
+                    );
+                }
+
+                // Results list
+                if !self.search_results.is_empty() {
+                    let results_snapshot: Vec<_> = self.search_results.clone();
+                    ScrollArea::vertical()
+                        .max_height(200.0)
+                        .show(ui, |ui| {
+                            for hit in &results_snapshot {
+                                let display = hit
+                                    .path
+                                    .as_deref()
+                                    .and_then(|p| p.rsplit('/').next())
+                                    .unwrap_or(&hit.label);
+
+                                let text = format!("[{:.2}] {}", hit.score, display);
+                                let btn = ui.selectable_label(false, text).on_hover_text(
+                                    hit.path.as_deref().unwrap_or(&hit.label),
+                                );
+                                if btn.clicked() {
+                                    self.apply_programmatic_selection(vec![hit.node_idx]);
+                                }
+                            }
+                        });
+
+                    if ui.small_button("Clear").clicked() {
+                        self.search_query.clear();
+                        self.search_last_query.clear();
+                        self.search_results.clear();
+                    }
+                }
+            });
+    }
+
     /// Graph Operations panel — quick-select buttons for common queries.
     fn ui_graph_operations(&mut self, ui: &mut egui::Ui) {
         CollapsingHeader::new("Operations")
@@ -2291,6 +2696,22 @@ impl App for VibeGraphApp {
             self.layout_initialized = true;
         }
 
+        // Poll async search results (WASM)
+        self.poll_search_results();
+
+        // "/" key opens search (when no text widget has focus).
+        // egui doesn't expose Key::Slash, so detect it via text events.
+        let nothing_focused = ctx.memory(|m| m.focused().is_none());
+        let slash_typed = ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Text(t) if t == "/"))
+        });
+        if slash_typed && nothing_focused {
+            self.search_focus_requested = true;
+            self.show_sidebar = true;
+        }
+
         // Handle keyboard shortcuts
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Tab) {
@@ -2383,6 +2804,9 @@ impl App for VibeGraphApp {
                         ui.separator();
 
                         self.ui_info(ui);
+                        ui.separator();
+
+                        self.ui_search(ui);
                         ui.separator();
 
                         self.ui_git_changes(ui);

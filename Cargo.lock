@@ -7026,6 +7026,7 @@ dependencies = [
  "vibe-graph-automaton",
  "vibe-graph-core",
  "vibe-graph-layout-gpu",
+ "vibe-graph-semantic",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
