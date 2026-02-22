@@ -18,6 +18,9 @@ Vibe-Graph maintains a living **SourceCodeGraph** that captures structure, relat
 # Install
 cargo install vibe-graph-cli
 
+# Install with semantic search (local embeddings via fastembed/ONNX)
+cargo install vibe-graph-cli --features semantic
+
 # Analyze your codebase
 cd your-project
 vg sync
@@ -35,6 +38,11 @@ vg run --once
 # Direct the evolution toward a feature
 vg run --goal "add WebSocket support" --target src/ws.rs
 
+# Semantic search — find code by meaning
+vg semantic index                          # build embedding index
+vg semantic search "error handling"        # search by concept
+vg semantic search "auth" --top 5 --json   # JSON output
+
 # Launch interactive visualization
 vg serve
 # Open http://localhost:3000
@@ -47,6 +55,8 @@ vg serve --mcp
 
 - **🧬 Automaton Runtime** — Self-improving development loop with evolution planning and directed perturbation
 - **🎯 Directed Evolution** — Set goals to bias the evolution plan toward specific features or improvements
+- **🔍 Semantic Search** — Local embedding-based code search: find files by meaning, not just keywords
+- **🧩 Sampler Framework** — Composable graph-local computation: Select → Context → Compute → Artifact
 - **🤖 AI Agent Integration** — Generates structured task prompts for Cursor, Claude, or any AI agent
 - **🤖 Model Context Protocol (MCP)** — Native MCP server for AI agents to semantically explore code
 - **⚡ GPU Acceleration** — WebGPU-powered Barnes-Hut layout for large graphs (>10k nodes)
@@ -63,6 +73,9 @@ vg serve --mcp
 
 ```bash
 cargo install vibe-graph-cli
+
+# With semantic search (adds ~33 MB model on first run)
+cargo install vibe-graph-cli --features semantic
 ```
 
 ### From source
@@ -70,7 +83,8 @@ cargo install vibe-graph-cli
 ```bash
 git clone https://github.com/pinsky-three/vibe-graph
 cd vibe-graph
-make build
+make build                        # Minimal CLI
+make build FEATURES=semantic      # With embedding search
 # Binary at: target/release/vg
 ```
 
@@ -88,6 +102,10 @@ make build
 | `vg graph` | Build SourceCodeGraph with reference detection |
 | `vg serve` | Interactive visualization at localhost:3000 |
 | `vg serve --mcp` | Start Model Context Protocol server for AI agents |
+| `vg semantic index` | Build or rebuild the local embedding index |
+| `vg semantic search <query>` | Search the codebase by meaning |
+| `vg semantic status` | Show semantic index info (model, entries) |
+| `vg semantic clean` | Remove the semantic index |
 | `vg automaton generate` | Generate automaton description from graph |
 | `vg automaton plan` | Show the evolution plan (prioritized work items) |
 | `vg automaton describe` | Export behavioral contracts (markdown) |
@@ -110,6 +128,12 @@ make build
 - `--interval <secs>` — Poll interval for change detection (default: 5)
 - `--snapshot` — Save snapshot after each analysis pass
 - `--top <N>` — Show top N impacted files (default: 20)
+
+**Semantic Options:**
+- `--top <N>` — Number of results to return (default: 10)
+- `--threshold <f32>` — Minimum cosine similarity (default: 0.0)
+- `--json` — Output results as JSON
+- `--force` — Rebuild index from scratch (ignore cache)
 
 **Sync Options:**
 - `--cache` — Clone to global cache instead of current directory
@@ -260,6 +284,52 @@ Vibe-Graph acts as a **Semantic Intelligence Layer** for your AI agents (Claude,
 *   **Semantic Search**: Find files by concept/module rather than just regex.
 *   **Context Awareness**: Get the "neighborhood" of a file (imports + usage) in one shot.
 
+## 🔍 Semantic Search (`vg semantic`)
+
+Search your codebase by meaning using local embeddings — no external APIs, fully offline.
+
+```bash
+# Build the embedding index (requires --features semantic)
+vg semantic index
+
+# Search by concept
+vg semantic search "error handling"
+vg semantic search "database connection pooling" --top 5
+vg semantic search "authentication" --threshold 0.3 --json
+
+# Manage the index
+vg semantic status    # model, dimension, entry count
+vg semantic clean     # remove and rebuild
+```
+
+**How it works:** Each source file is embedded into a 384-dimensional vector (BGE-Small-EN via [fastembed](https://docs.rs/fastembed)). Queries are embedded with the same model and matched via cosine similarity against the index. The index is persisted in `.self/semantic/` and cached across runs.
+
+**Feature flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--features semantic` | Enable real embeddings (fastembed/ONNX, ~33 MB model download on first use) |
+| *(default)* | No-op embedder — commands work but produce no results. Useful for CI or machines without ONNX support. |
+
+**Bootstrap integration:** When `vg run` bootstraps (sync → graph → description), the semantic index is built automatically as step 4 if the `semantic` feature is enabled. Cached indexes are reused.
+
+### Sampler Framework
+
+The semantic layer is built on a general-purpose **Sampler** abstraction in `vibe-graph-core`. A sampler selects nodes from the graph, computes a local function for each, and emits typed artifacts:
+
+```rust
+use vibe_graph_core::{Sampler, SampleContext, SamplerPipeline, DegreeSampler, MetadataSampler};
+
+// Chain samplers: each stage's output enriches the next
+let pipeline = SamplerPipeline::new()
+    .add(Box::new(MetadataSampler::all()))
+    .add(Box::new(DegreeSampler));
+
+let (results, annotations) = pipeline.run(&graph)?;
+```
+
+Built-in samplers: `NoOpSampler`, `DegreeSampler` (neighbor count), `MetadataSampler` (extract node metadata). The `EmbeddingSampler` in `vibe-graph-semantic` implements the same trait for embedding computation.
+
 ## Graph Visualization
 
 The `serve` command provides an interactive force-directed graph with REST + WebSocket API:
@@ -298,16 +368,16 @@ vg sync && vg serve
 ```
 vibe-graph/
 ├── crates/
-│   ├── vibe-graph-core        # Domain model: graphs, nodes, edges, references
+│   ├── vibe-graph-core        # Domain model: graphs, nodes, edges, Sampler trait
 │   ├── vibe-graph-automaton   # Temporal state evolution, evolution planning, perturbation
 │   ├── vibe-graph-cli         # CLI entry point (vg command) + automaton runtime
 │   ├── vibe-graph-ops         # Graph building, scanning, sync operations
 │   ├── vibe-graph-api         # REST + WebSocket API (Axum-based)
 │   ├── vibe-graph-mcp         # Model Context Protocol server implementation
+│   ├── vibe-graph-semantic    # Embeddings, vector index, semantic search (fastembed)
 │   ├── vibe-graph-viz         # egui/WASM visualization
 │   ├── vibe-graph-git         # Git status and fossilization
 │   ├── vibe-graph-llmca       # LLM-powered cellular automaton rules
-│   ├── vibe-graph-semantic    # Semantic analysis
 │   └── ...                    # Additional crates (ssot, sync, materializer, etc.)
 └── frontend/                  # TypeScript/Vite host for WASM visualization
 ```
@@ -362,6 +432,9 @@ Analysis results persist in `.self/`:
 ├── project.json                   # Full analysis data
 ├── graph.json                     # SourceCodeGraph with references
 ├── snapshots/                     # Historical snapshots
+├── semantic/
+│   ├── index.bin                  # Serialized vector index (bincode)
+│   └── meta.json                 # Model name, dimension, entry count, timestamp
 └── automaton/
     ├── description.json           # Automaton description (roles, rules, stability)
     ├── state.json                 # Current temporal graph state
