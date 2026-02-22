@@ -237,6 +237,9 @@ async fn bootstrap(
         desc
     };
 
+    // 4. Semantic index (optional — best-effort, non-blocking)
+    let _ = super::semantic::bootstrap_semantic(path, &graph, force);
+
     let elapsed = started.elapsed();
     eprintln!("   Ready in {:.0?}\n", elapsed);
 

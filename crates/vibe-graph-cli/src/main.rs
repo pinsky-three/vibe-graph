@@ -321,6 +321,19 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Semantic search and embedding management.
+    ///
+    /// Build a local embedding index over your codebase and search by meaning.
+    /// Requires `--features semantic` for real embeddings (fastembed/ONNX).
+    ///
+    /// Examples:
+    ///   vg semantic index                    # build the embedding index
+    ///   vg semantic search "error handling"   # search by concept
+    ///   vg semantic status                    # show index info
+    ///   vg semantic clean                     # remove the index
+    #[command(subcommand)]
+    Semantic(SemanticCommands),
+
     /// Work with automaton descriptions (generate, infer, run).
     #[command(subcommand)]
     Automaton(AutomatonCommands),
@@ -525,6 +538,67 @@ enum AutomatonCommands {
         /// Save the plan to a file.
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+}
+
+/// Semantic search commands.
+#[derive(Subcommand, Debug)]
+enum SemanticCommands {
+    /// Build or rebuild the semantic embedding index.
+    ///
+    /// Embeds all source files using the configured model and persists
+    /// the index to `.self/semantic/`.
+    Index {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Force rebuild even if an index already exists.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Search the codebase by meaning.
+    ///
+    /// Embeds the query text and finds the most semantically similar files.
+    ///
+    /// Examples:
+    ///   vg semantic search "error handling"
+    ///   vg semantic search "database connection" --top 5
+    ///   vg semantic search "auth" --threshold 0.3 --json
+    Search {
+        /// Natural language query.
+        query: String,
+
+        /// Path to workspace (defaults to current directory).
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+
+        /// Maximum number of results.
+        #[arg(long, default_value = "10")]
+        top: usize,
+
+        /// Minimum similarity score (0.0–1.0).
+        #[arg(long, default_value = "0.0")]
+        threshold: f32,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show semantic index status.
+    Status {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+
+    /// Remove the semantic index.
+    Clean {
+        /// Path to workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
 }
 
@@ -956,6 +1030,27 @@ async fn main() -> Result<()> {
                 }
             }
         }
+
+        Commands::Semantic(semantic_cmd) => match semantic_cmd {
+            SemanticCommands::Index { path, force } => {
+                commands::semantic::index(&path, force)?;
+            }
+            SemanticCommands::Search {
+                query,
+                path,
+                top,
+                threshold,
+                json,
+            } => {
+                commands::semantic::search(&path, &query, top, threshold, json)?;
+            }
+            SemanticCommands::Status { path } => {
+                commands::semantic::status(&path)?;
+            }
+            SemanticCommands::Clean { path } => {
+                commands::semantic::clean(&path)?;
+            }
+        },
 
         Commands::Automaton(automaton_cmd) => {
             commands::automaton::execute(&ctx, automaton_cmd).await?;

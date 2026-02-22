@@ -7,6 +7,7 @@ pub mod config;
 pub mod process;
 pub mod remote;
 pub mod run;
+pub mod semantic;
 pub mod serve;
 
 #[cfg(feature = "native-viz")]

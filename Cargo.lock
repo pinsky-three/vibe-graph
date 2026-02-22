@@ -6838,6 +6838,7 @@ dependencies = [
  "vibe-graph-git",
  "vibe-graph-mcp",
  "vibe-graph-ops",
+ "vibe-graph-semantic",
  "vibe-graph-viz",
  "walkdir",
 ]
