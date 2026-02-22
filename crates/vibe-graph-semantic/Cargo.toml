@@ -8,6 +8,15 @@ publish = false
 [package.metadata.release]
 release = false
 
+[features]
+default = []
+fastembed = ["dep:fastembed"]
+
 [dependencies]
-serde = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# Native-only embedding backend (not WASM-compatible due to ort/ONNX)
+fastembed = { version = "5", optional = true }
