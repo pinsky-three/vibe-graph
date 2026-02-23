@@ -281,6 +281,63 @@ pub fn models() -> Result<()> {
     Ok(())
 }
 
+// ─── Goal scoring + neighbor helpers (used by `vg run`) ─────────────────────
+
+/// Build a `HashMap<NodeId, f32>` of cosine-similarity scores between the goal
+/// text and every indexed node. Returns `None` when no real embedder is
+/// available (built without `semantic` feature).
+pub fn compute_goal_scores(
+    goal: &str,
+    index: &VectorIndex,
+    embedder: &dyn vibe_graph_semantic::Embedder,
+) -> Option<std::collections::HashMap<vibe_graph_core::NodeId, f32>> {
+    if index.is_empty() || goal.is_empty() {
+        return None;
+    }
+
+    let query_emb = embedder.embed(&[goal]).ok()?.into_iter().next()?;
+    let hits = index.search(&query_emb, index.len());
+
+    let map: std::collections::HashMap<vibe_graph_core::NodeId, f32> =
+        hits.into_iter().map(|h| (h.node_id, h.score)).collect();
+
+    Some(map)
+}
+
+/// Find the `top_k` semantically similar files to a given node, excluding
+/// itself. Returns `(path, "semantic(score)")` pairs suitable for
+/// `TaskNeighbor`.
+pub fn find_semantic_neighbors(
+    node_id: vibe_graph_core::NodeId,
+    index: &VectorIndex,
+    graph: &vibe_graph_core::SourceCodeGraph,
+    top_k: usize,
+) -> Vec<vibe_graph_automaton::TaskNeighbor> {
+    let node_emb = match index.get(node_id) {
+        Some(emb) => emb.clone(),
+        None => return Vec::new(),
+    };
+
+    let hits = index.search(&node_emb, top_k + 1);
+
+    hits.into_iter()
+        .filter(|h| h.node_id != node_id && h.score > 0.1)
+        .take(top_k)
+        .filter_map(|h| {
+            let node = graph.nodes.iter().find(|n| n.id == h.node_id)?;
+            let path = node
+                .metadata
+                .get("relative_path")
+                .unwrap_or(&node.name)
+                .clone();
+            Some(vibe_graph_automaton::TaskNeighbor {
+                path,
+                relationship: format!("semantic({:.2})", h.score),
+            })
+        })
+        .collect()
+}
+
 // ─── Bootstrap integration helper ───────────────────────────────────────────
 
 /// Run semantic indexing as part of the bootstrap pipeline.

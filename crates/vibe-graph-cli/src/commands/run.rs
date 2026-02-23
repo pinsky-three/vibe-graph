@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use vibe_graph_automaton::{
     build_next_task, format_behavioral_contracts, format_evolution_plan,
     format_next_task_markdown, run_evolution_plan, run_impact_analysis, run_watch_scripts,
@@ -19,8 +22,9 @@ use vibe_graph_automaton::{
     Perturbation, ProjectConfig, ScriptFeedback,
 };
 use super::process::ManagedProcess;
-use vibe_graph_core::SourceCodeGraph;
+use vibe_graph_core::{NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
+use vibe_graph_semantic::VectorIndex;
 
 // ─── Public entry point ──────────────────────────────────────────────────────
 
@@ -50,7 +54,14 @@ pub async fn execute(
     let once = once || json_output || is_managed_child;
 
     // ── Phase 1: Bootstrap ──────────────────────────────────────────────
-    let (graph, description) = bootstrap(ctx, &path, force).await?;
+    let (graph, description, semantic_index) = bootstrap(ctx, &path, force).await?;
+
+    // Load semantic context once (embedder + index) for reuse across the session.
+    let semantic_ctx: Option<(VectorIndex, Arc<dyn vibe_graph_semantic::Embedder>)> =
+        semantic_index.and_then(|idx| {
+            let (embedder, is_real) = super::semantic::make_embedder(&path);
+            if is_real { Some((idx, embedder)) } else { None }
+        });
 
     // ── Perturbation: resolve from CLI flags or persisted state ──────────
     let store = AutomatonStore::new(&path);
@@ -87,11 +98,13 @@ pub async fn execute(
         // Skip watch scripts — JSON mode should be fast (CI-friendly).
         let project_config = ProjectConfig::resolve(&path, None);
         let objective = project_config.stability_objective();
-        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), None) {
+        let goal_scores = goal_semantic_scores(&semantic_ctx, perturbation.as_ref());
+        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), None, goal_scores.as_ref()) {
             Ok(plan) if !plan.items.is_empty() => {
                 let commit = git_head_sha(&path);
                 let total = plan.items.len();
-                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit);
+                let sem_neighbors = semantic_neighbors_for(&semantic_ctx, &graph, plan.items[0].node_id);
+                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit, sem_neighbors);
                 let json = serde_json::to_string_pretty(&task)?;
                 println!("{}", json);
             }
@@ -138,11 +151,13 @@ pub async fn execute(
         };
 
         let objective = project_config.stability_objective();
-        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), script_fb.as_ref()) {
+        let goal_scores = goal_semantic_scores(&semantic_ctx, perturbation.as_ref());
+        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), script_fb.as_ref(), goal_scores.as_ref()) {
             Ok(plan) if !plan.items.is_empty() => {
                 let commit = git_head_sha(&path);
                 let total = plan.items.len();
-                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit);
+                let sem_neighbors = semantic_neighbors_for(&semantic_ctx, &graph, plan.items[0].node_id);
+                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit, sem_neighbors);
                 let markdown = format_next_task_markdown(&task);
                 if let Ok(p) = write_task_file(&path, &markdown) {
                     eprintln!("\n   📋 Next task: {}", p.display());
@@ -167,7 +182,7 @@ pub async fn execute(
         eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
     }
     print_controls(project_config.has_process());
-    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config).await
+    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config, &semantic_ctx).await
 }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
@@ -177,7 +192,7 @@ async fn bootstrap(
     ctx: &OpsContext,
     path: &Path,
     force: bool,
-) -> Result<(SourceCodeGraph, vibe_graph_automaton::AutomatonDescription)> {
+) -> Result<(SourceCodeGraph, vibe_graph_automaton::AutomatonDescription, Option<VectorIndex>)> {
     eprintln!("🔄 Bootstrapping vibe-graph system...");
     let started = Instant::now();
 
@@ -238,12 +253,12 @@ async fn bootstrap(
     };
 
     // 4. Semantic index (optional — best-effort, non-blocking)
-    let _ = super::semantic::bootstrap_semantic(path, &graph, force);
+    let semantic_index = super::semantic::bootstrap_semantic(path, &graph, force).ok();
 
     let elapsed = started.elapsed();
     eprintln!("   Ready in {:.0?}\n", elapsed);
 
-    Ok((graph, description))
+    Ok((graph, description, semantic_index))
 }
 
 // ─── Change detection ────────────────────────────────────────────────────────
@@ -430,6 +445,7 @@ async fn watch_loop(
     snapshot: bool,
     initial_perturbation: Option<Perturbation>,
     project_config: &ProjectConfig,
+    semantic_ctx: &Option<(VectorIndex, Arc<dyn vibe_graph_semantic::Embedder>)>,
 ) -> Result<()> {
     let mut last_fingerprint = change_fingerprint(initial_changes);
     let mut perturbation: Option<Perturbation> = initial_perturbation;
@@ -493,7 +509,8 @@ async fn watch_loop(
                     b'p' => {
                         // Plan
                         eprintln!("   📋 Computing evolution plan...\n");
-                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref()) {
+                        let goal_scores = goal_semantic_scores(semantic_ctx, perturbation.as_ref());
+                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref(), goal_scores.as_ref()) {
                             Ok(plan) => {
                                 let md = format_evolution_plan(&plan);
                                 eprint!("{}", md);
@@ -505,11 +522,13 @@ async fn watch_loop(
                     }
                     b'n' => {
                         eprintln!("   🎯 Computing next task...\n");
-                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref()) {
+                        let goal_scores = goal_semantic_scores(semantic_ctx, perturbation.as_ref());
+                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref(), goal_scores.as_ref()) {
                             Ok(plan) if !plan.items.is_empty() => {
                                 let commit = git_head_sha(path);
                                 let total = plan.items.len();
-                                let task = build_next_task(&plan.items[0], graph, &plan.project_name, perturbation.as_ref(), 1, total, commit);
+                                let sem_neighbors = semantic_neighbors_for(semantic_ctx, graph, plan.items[0].node_id);
+                                let task = build_next_task(&plan.items[0], graph, &plan.project_name, perturbation.as_ref(), 1, total, commit, sem_neighbors);
                                 let markdown = format_next_task_markdown(&task);
                                 let task_path = write_task_file(path, &markdown)?;
                                 if let Ok(json) = serde_json::to_string_pretty(&task) {
@@ -760,6 +779,33 @@ fn chrono_now_short() -> String {
     let m = (secs % 3600) / 60;
     let s = secs % 60;
     format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
+// ─── Semantic integration helpers ─────────────────────────────────────────────
+
+/// Compute per-node semantic scores for the active goal.
+/// Returns `None` when no perturbation or no semantic context.
+fn goal_semantic_scores(
+    semantic_ctx: &Option<(VectorIndex, Arc<dyn vibe_graph_semantic::Embedder>)>,
+    perturbation: Option<&Perturbation>,
+) -> Option<HashMap<NodeId, f32>> {
+    let (idx, emb) = semantic_ctx.as_ref()?;
+    let p = perturbation?;
+    super::semantic::compute_goal_scores(&p.goal, idx, emb.as_ref())
+}
+
+/// Find semantically similar files for the top-priority node.
+/// Returns an empty vec when no semantic context is available.
+fn semantic_neighbors_for(
+    semantic_ctx: &Option<(VectorIndex, Arc<dyn vibe_graph_semantic::Embedder>)>,
+    graph: &SourceCodeGraph,
+    node_id: u64,
+) -> Vec<vibe_graph_automaton::TaskNeighbor> {
+    let (idx, _) = match semantic_ctx.as_ref() {
+        Some(ctx) => ctx,
+        None => return Vec::new(),
+    };
+    super::semantic::find_semantic_neighbors(NodeId(node_id), idx, graph, 5)
 }
 
 // ─── Raw terminal mode (for non-blocking key reads) ──────────────────────────

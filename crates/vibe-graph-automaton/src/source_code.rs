@@ -1133,12 +1133,15 @@ pub struct EvolutionItem {
     pub target_stability: f32,
     /// Gap = target - current (clamped to >= 0).
     pub gap: f32,
-    /// Composite priority (blended structural + propagated).
+    /// Composite priority (blended structural + propagated + semantic).
     pub priority: f32,
     /// Structural component: gap * (1 + 3 * in_degree_norm).
     pub structural_score: f32,
     /// Propagated component: activation after automaton ticks.
     pub propagated_score: f32,
+    /// Semantic similarity to the active goal (0.0 when no goal or no index).
+    #[serde(default)]
+    pub semantic_score: f32,
     /// Role assigned by the description generator.
     pub role: String,
     /// In-degree (how many nodes depend on this one).
@@ -1277,12 +1280,18 @@ pub struct EvolutionSummary {
 
 /// Run evolution planning: seed the automaton with stability gaps, propagate,
 /// and return an ordered work plan.
+///
+/// `semantic_scores` maps node IDs to cosine-similarity scores against the
+/// active goal (produced by embedding the goal text and searching the vector
+/// index). When provided, nodes with high semantic relevance to the goal
+/// receive boosted priority even if keyword matching doesn't catch them.
 pub fn run_evolution_plan(
     graph: SourceCodeGraph,
     description: &AutomatonDescription,
     objective: &StabilityObjective,
     perturbation: Option<&Perturbation>,
     script_feedback: Option<&crate::script::ScriptFeedback>,
+    semantic_scores: Option<&HashMap<NodeId, f32>>,
 ) -> AutomatonResult<EvolutionPlan> {
     let config = AutomatonConfig {
         max_ticks: 30,
@@ -1411,12 +1420,20 @@ pub fn run_evolution_plan(
         let nd_in = in_degrees.get(&node_id).copied().unwrap_or(0);
         let nd_test = has_test.get(&node_id).copied().unwrap_or(false);
 
-        let goal_matched = perturbation
+        let sem_score = semantic_scores
+            .and_then(|scores| scores.get(&node_id).copied())
+            .unwrap_or(0.0);
+
+        let keyword_matched = perturbation
             .map(|p| p.matches_path(&node_config.path))
             .unwrap_or(false);
+        let semantic_matched = perturbation.is_some() && sem_score > 0.2;
+        let goal_matched = keyword_matched || semantic_matched;
+
         if goal_matched {
-            let boost = perturbation.map(|p| p.boost).unwrap_or(1.0);
-            priority *= boost;
+            let base_boost = perturbation.map(|p| p.boost).unwrap_or(1.0);
+            let amplifier = if semantic_matched { 1.0 + sem_score.min(1.0) } else { 1.0 };
+            priority *= base_boost * amplifier;
         }
 
         let script_error_msg = script_feedback.and_then(|fb| {
@@ -1449,6 +1466,7 @@ pub fn run_evolution_plan(
             priority,
             structural_score: structural,
             propagated_score: propagated,
+            semantic_score: sem_score,
             role: role.to_string(),
             in_degree: nd_in,
             has_test_neighbor: nd_test,
@@ -1564,25 +1582,49 @@ pub fn format_evolution_plan(plan: &EvolutionPlan) -> String {
     out.push('\n');
 
     // Top items
+    let has_semantic = plan.goal.is_some()
+        && plan.items.iter().any(|i| i.semantic_score > 0.01);
+
     if !plan.items.is_empty() {
         out.push_str("## Priority Work Items\n\n");
         out.push_str("Ranked by cascading impact (improving these first has the most effect):\n\n");
-        out.push_str("| # | Priority | Gap | Current→Target | Role | Path | Action |\n");
-        out.push_str("|---|----------|-----|----------------|------|------|--------|\n");
+
+        if has_semantic {
+            out.push_str("| # | Priority | Gap | Sem | Current→Target | Role | Path | Action |\n");
+            out.push_str("|---|----------|-----|-----|----------------|------|------|--------|\n");
+        } else {
+            out.push_str("| # | Priority | Gap | Current→Target | Role | Path | Action |\n");
+            out.push_str("|---|----------|-----|----------------|------|------|--------|\n");
+        }
 
         for (i, item) in plan.items.iter().take(30).enumerate() {
             let short = shorten_path(&item.path, &prefix);
-            out.push_str(&format!(
-                "| {} | {:.3} | {:.2} | {:.2}→{:.2} | `{}` | `{}` | {} |\n",
-                i + 1,
-                item.priority,
-                item.gap,
-                item.current_stability,
-                item.target_stability,
-                item.role,
-                short,
-                item.suggested_action,
-            ));
+            if has_semantic {
+                out.push_str(&format!(
+                    "| {} | {:.3} | {:.2} | {:.2} | {:.2}→{:.2} | `{}` | `{}` | {} |\n",
+                    i + 1,
+                    item.priority,
+                    item.gap,
+                    item.semantic_score,
+                    item.current_stability,
+                    item.target_stability,
+                    item.role,
+                    short,
+                    item.suggested_action,
+                ));
+            } else {
+                out.push_str(&format!(
+                    "| {} | {:.3} | {:.2} | {:.2}→{:.2} | `{}` | `{}` | {} |\n",
+                    i + 1,
+                    item.priority,
+                    item.gap,
+                    item.current_stability,
+                    item.target_stability,
+                    item.role,
+                    short,
+                    item.suggested_action,
+                ));
+            }
         }
 
         if plan.items.len() > 30 {
@@ -1706,6 +1748,9 @@ pub struct TaskContext {
     pub incoming: Vec<TaskNeighbor>,
     /// Deduplicated outgoing edges (what this depends on).
     pub outgoing: Vec<TaskNeighbor>,
+    /// Files semantically related to the target (by embedding similarity).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_neighbors: Vec<TaskNeighbor>,
     /// One-line blast radius summary.
     pub blast_radius: String,
 }
@@ -1767,6 +1812,9 @@ pub struct NextTask {
     pub current_stability: f32,
     /// Target stability score.
     pub target_stability: f32,
+    /// Semantic similarity of this file to the active goal (0.0 when unavailable).
+    #[serde(default)]
+    pub semantic_score: f32,
     /// Active goal (if perturbation is active).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
@@ -1876,6 +1924,9 @@ fn epoch_to_iso(epoch_secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 ///
 /// `rank` is 1-based position within the plan; `total_candidates` is the plan
 /// length. `commit` is the git HEAD SHA (pass `None` if unavailable).
+/// `semantic_neighbors` are pre-computed similar files (pass empty vec when
+/// no semantic index is available).
+#[allow(clippy::too_many_arguments)]
 pub fn build_next_task(
     item: &EvolutionItem,
     graph: &SourceCodeGraph,
@@ -1884,6 +1935,7 @@ pub fn build_next_task(
     rank: usize,
     total_candidates: usize,
     commit: Option<String>,
+    semantic_neighbors: Vec<TaskNeighbor>,
 ) -> NextTask {
     let prefix = shorten_prefix(project_name, &item.path);
     let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path).to_string();
@@ -1913,15 +1965,21 @@ pub fn build_next_task(
         item.gap,
     );
 
+    let sem_note = if item.semantic_score > 0.01 {
+        format!("; semantic={:.2}, amplifier={:.1}x", item.semantic_score, 1.0 + item.semantic_score.min(1.0))
+    } else {
+        String::new()
+    };
+    let goal_note = if perturbation.is_some() { "; goal boost applied" } else { "" };
+
     let priority_explanation = format!(
         "score = 0.6 * structural({:.3}) + 0.4 * propagated({:.3}); \
          structural = gap({:.2}) * (1 + 3 * in_degree_norm); \
-         {} dependents amplify cascading impact{}",
+         {} dependents amplify cascading impact{goal_note}{sem_note}",
         item.structural_score,
         item.propagated_score,
         item.gap,
         item.in_degree,
-        if perturbation.is_some() { "; goal boost 3x applied" } else { "" },
     );
 
     // Collect deduplicated neighbors
@@ -1969,6 +2027,7 @@ pub fn build_next_task(
         context: TaskContext {
             incoming,
             outgoing,
+            semantic_neighbors,
             blast_radius,
         },
         scope: TaskScope {
@@ -1977,6 +2036,7 @@ pub fn build_next_task(
         },
         current_stability: item.current_stability,
         target_stability: item.target_stability,
+        semantic_score: item.semantic_score,
         goal: perturbation.map(|p| p.goal.clone()),
         goal_targets: perturbation
             .map(|p| p.targets.clone())
@@ -2154,6 +2214,9 @@ pub fn format_next_task_markdown(task: &NextTask) -> String {
         "- **Has tests**: {}\n",
         if task.evidence.has_tests { "yes" } else { "no" }
     ));
+    if task.semantic_score > 0.01 {
+        out.push_str(&format!("- **Semantic relevance**: {:.2}\n", task.semantic_score));
+    }
     out.push('\n');
 
     // Incoming
@@ -2169,6 +2232,15 @@ pub fn format_next_task_markdown(task: &NextTask) -> String {
     if !task.context.outgoing.is_empty() {
         out.push_str("## What this depends on (outgoing)\n\n");
         for n in &task.context.outgoing {
+            out.push_str(&format!("  - `{}` ({})\n", n.path, n.relationship));
+        }
+        out.push('\n');
+    }
+
+    // Semantic neighbors
+    if !task.context.semantic_neighbors.is_empty() {
+        out.push_str("## Semantically related files\n\n");
+        for n in &task.context.semantic_neighbors {
             out.push_str(&format!("  - `{}` ({})\n", n.path, n.relationship));
         }
         out.push('\n');
