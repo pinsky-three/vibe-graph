@@ -120,6 +120,49 @@ impl GatewayState {
 }
 
 // =============================================================================
+// Semantic Index Auto-Loading
+// =============================================================================
+
+/// Attempt to load a pre-built semantic index from the project's `.self/semantic/` directory.
+///
+/// Returns `(None, None)` if no index exists or the embedder can't be initialised.
+/// This enables semantic search for remote-registered projects without extra setup.
+#[cfg(feature = "semantic")]
+fn try_load_semantic(
+    workspace_path: &std::path::Path,
+) -> (
+    Option<Arc<vibe_graph_semantic::VectorIndex>>,
+    Option<Arc<dyn vibe_graph_semantic::Embedder>>,
+) {
+    let self_dir = workspace_path.join(".self");
+    let sem_store = vibe_graph_semantic::SemanticStore::new(&self_dir);
+
+    let index = match sem_store.load() {
+        Ok(Some((idx, meta))) => {
+            info!(
+                entries = idx.len(),
+                model = %meta.model_name,
+                "Loaded semantic index for remote project"
+            );
+            Some(Arc::new(idx))
+        }
+        _ => return (None, None),
+    };
+
+    let cache_dir = self_dir.join("semantic").join("cache");
+    let embedder: Option<Arc<dyn vibe_graph_semantic::Embedder>> =
+        match vibe_graph_semantic::FastEmbedBackend::from_env(Some(cache_dir)) {
+            Ok(backend) => Some(Arc::new(backend)),
+            Err(e) => {
+                warn!(error = %e, "Could not init embedder for remote project, semantic search will be read-only");
+                None
+            }
+        };
+
+    (index, embedder)
+}
+
+// =============================================================================
 // Internal API Handlers
 // =============================================================================
 
@@ -169,6 +212,9 @@ async fn register_handler(
         }
     };
 
+    #[cfg(feature = "semantic")]
+    let (semantic_index, embedder) = try_load_semantic(&req.workspace_path);
+
     let project = RegisteredProject {
         name: req.name.clone(),
         workspace_path: req.workspace_path,
@@ -176,9 +222,9 @@ async fn register_handler(
         store,
         registered_at: Instant::now(),
         #[cfg(feature = "semantic")]
-        semantic_index: None,
+        semantic_index,
         #[cfg(feature = "semantic")]
-        embedder: None,
+        embedder,
     };
 
     state.registry.register(project);

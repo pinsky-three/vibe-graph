@@ -10,7 +10,7 @@ homepage = "https://github.com/pinsky-three/vibe-graph"
 [features]
 default = ["http-server"]
 http-server = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-http", "dep:tokio-util"]
-semantic = ["dep:vibe-graph-semantic"]
+semantic = ["dep:vibe-graph-semantic", "vibe-graph-semantic/fastembed"]
 
 [dependencies]
 vibe-graph-core = { version = "0.2.4", path = "../vibe-graph-core" }
