@@ -635,7 +635,36 @@ pub async fn execute_mcp(ctx: &OpsContext, path: &Path, port: u16) -> Result<()>
     // Create gateway state and register our project
     let cancel = CancellationToken::new();
     let state = GatewayState::new(cancel);
-    state.register_local_project(project_name, path, Arc::new(graph), store);
+
+    #[cfg(feature = "semantic")]
+    {
+        let self_dir = path.join(".self");
+        let sem_store = SemanticStore::new(&self_dir);
+        let (sem_index, sem_embedder) = match sem_store.load() {
+            Ok(Some((idx, _meta))) => {
+                let (embedder, is_real) = super::semantic::make_embedder(&path);
+                if is_real {
+                    println!("   🔍 Semantic search enabled ({} entries)", idx.len());
+                    (Some(Arc::new(idx)), Some(embedder))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        };
+        state.register_local_project_with_semantic(
+            project_name,
+            path,
+            Arc::new(graph),
+            store,
+            sem_index,
+            sem_embedder,
+        );
+    }
+    #[cfg(not(feature = "semantic"))]
+    {
+        state.register_local_project(project_name, path, Arc::new(graph), store);
+    }
 
     // Run the gateway
     run_gateway(state, port).await?;

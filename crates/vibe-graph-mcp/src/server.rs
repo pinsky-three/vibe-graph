@@ -58,6 +58,22 @@ impl VibeGraphMcp {
         }
     }
 
+    /// Create a new MCP server with semantic search support.
+    #[cfg(feature = "semantic")]
+    pub fn with_semantic(
+        store: Store,
+        graph: Arc<SourceCodeGraph>,
+        workspace_path: PathBuf,
+        index: Option<Arc<vibe_graph_semantic::VectorIndex>>,
+        embedder: Option<Arc<dyn vibe_graph_semantic::Embedder>>,
+    ) -> Self {
+        Self {
+            executor: Arc::new(
+                ToolExecutor::new(store, graph, workspace_path).with_semantic(index, embedder),
+            ),
+        }
+    }
+
     /// Run the server over stdio transport.
     pub async fn run_stdio(self) -> Result<()> {
         let transport = (stdin(), stdout());
@@ -208,6 +224,19 @@ impl VibeGraphMcp {
                 output_schema: None,
                 title: None,
             },
+            Tool {
+                name: "semantic_search".into(),
+                description: Some(
+                    "Search the codebase by meaning using vector embeddings. Finds files semantically similar to a natural-language query. Requires a pre-built semantic index (`vg semantic index`)."
+                        .into(),
+                ),
+                input_schema: schema_to_input_schema::<SemanticSearchInput>(),
+                annotations: None,
+                icons: None,
+                meta: None,
+                output_schema: None,
+                title: None,
+            },
         ]
     }
 
@@ -349,6 +378,34 @@ impl VibeGraphMcp {
                     CallToolResult::error(vec![Content::text(format!("Invalid input: {}", e))])
                 }
             },
+            "semantic_search" => {
+                if !self.executor.has_semantic() {
+                    return CallToolResult::error(vec![Content::text(
+                        "Semantic search is not available. Build with `--features semantic` and run `vg semantic index` first.",
+                    )]);
+                }
+                #[cfg(feature = "semantic")]
+                {
+                    match serde_json::from_value::<SemanticSearchInput>(args) {
+                        Ok(input) => {
+                            let output = self.executor.semantic_search(input);
+                            let text =
+                                serde_json::to_string_pretty(&output).unwrap_or_default();
+                            CallToolResult::success(vec![Content::text(text)])
+                        }
+                        Err(e) => CallToolResult::error(vec![Content::text(format!(
+                            "Invalid input: {}",
+                            e
+                        ))]),
+                    }
+                }
+                #[cfg(not(feature = "semantic"))]
+                {
+                    CallToolResult::error(vec![Content::text(
+                        "Semantic search requires the `semantic` feature.",
+                    )])
+                }
+            }
             _ => CallToolResult::error(vec![Content::text(format!("Unknown tool: {}", name))]),
         }
     }
@@ -377,11 +434,12 @@ impl ServerHandler for VibeGraphMcp {
                 "Vibe-Graph provides semantic code intelligence. PREFER these tools over manual file exploration:\n\
                  \n\
                  BEFORE MODIFYING FILES: Run impact_analysis to see what depends on the file.\n\
-                 TO FIND CODE: Use search_nodes instead of grep/glob for semantic matches.\n\
+                 TO FIND CODE BY NAME: Use search_nodes for name/path pattern matching.\n\
+                 TO FIND CODE BY MEANING: Use semantic_search for natural-language queries (e.g. 'authentication logic', 'database migrations').\n\
                  TO UNDERSTAND IMPORTS: Use get_dependencies for incoming/outgoing relationships.\n\
                  TO BROWSE STRUCTURE: Use list_files with filters instead of ls.\n\
                  \n\
-                 The graph captures semantic relationships (uses, contains) beyond text patterns."
+                 The graph captures structural relationships (uses, contains) and semantic_search adds embedding-based similarity."
                     .into(),
             ),
         }

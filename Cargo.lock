@@ -6945,6 +6945,7 @@ dependencies = [
  "vibe-graph-core",
  "vibe-graph-git",
  "vibe-graph-ops",
+ "vibe-graph-semantic",
 ]
 
 [[package]]

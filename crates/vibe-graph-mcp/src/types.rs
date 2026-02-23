@@ -11,6 +11,9 @@ use dashmap::DashMap;
 use vibe_graph_core::SourceCodeGraph;
 use vibe_graph_ops::Store;
 
+#[cfg(feature = "semantic")]
+use vibe_graph_semantic::{Embedder, VectorIndex};
+
 // =============================================================================
 // Gateway Registry Types
 // =============================================================================
@@ -32,6 +35,14 @@ pub struct RegisteredProject {
 
     /// When this project was registered.
     pub registered_at: Instant,
+
+    /// Optional semantic vector index for embedding-based search.
+    #[cfg(feature = "semantic")]
+    pub semantic_index: Option<Arc<VectorIndex>>,
+
+    /// Optional embedder for semantic search queries.
+    #[cfg(feature = "semantic")]
+    pub embedder: Option<Arc<dyn Embedder>>,
 }
 
 /// Thread-safe registry of all projects served by the gateway.
@@ -295,6 +306,29 @@ pub struct GetGitChangesInput {
     pub project: Option<String>,
 }
 
+/// Input for the `semantic_search` tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SemanticSearchInput {
+    /// Project name to search in. Required if multiple projects are registered.
+    #[serde(default)]
+    pub project: Option<String>,
+
+    /// Natural-language query describing what you're looking for.
+    pub query: String,
+
+    /// Maximum number of results to return (default: 10).
+    #[serde(default = "default_semantic_top_k")]
+    pub top_k: usize,
+
+    /// Minimum cosine similarity threshold (0.0–1.0). Results below this are excluded.
+    #[serde(default)]
+    pub threshold: f32,
+}
+
+fn default_semantic_top_k() -> usize {
+    10
+}
+
 // =============================================================================
 // Tool Output Types
 // =============================================================================
@@ -451,4 +485,40 @@ pub struct ListFilesOutput {
 
     /// Path that was listed.
     pub path: Option<String>,
+}
+
+/// A single hit from semantic search.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SemanticSearchHit {
+    /// Node ID.
+    pub node_id: u64,
+
+    /// Cosine similarity score (0.0–1.0).
+    pub score: f32,
+
+    /// Node name.
+    pub name: String,
+
+    /// Relative file path (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
+    /// Node kind.
+    pub kind: String,
+}
+
+/// Output for the `semantic_search` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SemanticSearchOutput {
+    /// The original query text.
+    pub query: String,
+
+    /// Embedding model used.
+    pub model: String,
+
+    /// Matching nodes ranked by similarity.
+    pub hits: Vec<SemanticSearchHit>,
+
+    /// Total number of hits returned.
+    pub hit_count: usize,
 }

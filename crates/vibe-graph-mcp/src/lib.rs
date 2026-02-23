@@ -52,6 +52,7 @@
 //! - `get_git_changes` - Get current uncommitted git changes
 //! - `get_node_context` - Get a node and its neighbors for context
 //! - `list_files` - List files in the graph with filters
+//! - `semantic_search` - Search by meaning using vector embeddings (requires `semantic` feature + index)
 
 #[cfg(feature = "http-server")]
 pub mod gateway;

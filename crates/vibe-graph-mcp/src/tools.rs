@@ -7,14 +7,21 @@ use vibe_graph_core::{GraphNodeKind, SourceCodeGraph};
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::Store;
 
+#[cfg(feature = "semantic")]
+use vibe_graph_semantic::{Embedder, SemanticSearch, SearchQuery, VectorIndex};
+
 use crate::types::*;
 
 /// Tool executor that implements the actual logic.
 pub struct ToolExecutor {
-    #[allow(dead_code)] // Store kept for future caching/persistence
+    #[allow(dead_code)]
     pub store: Store,
     pub graph: Arc<SourceCodeGraph>,
     pub workspace_path: std::path::PathBuf,
+    #[cfg(feature = "semantic")]
+    pub semantic_index: Option<Arc<VectorIndex>>,
+    #[cfg(feature = "semantic")]
+    pub embedder: Option<Arc<dyn Embedder>>,
 }
 
 impl ToolExecutor {
@@ -27,6 +34,34 @@ impl ToolExecutor {
             store,
             graph,
             workspace_path,
+            #[cfg(feature = "semantic")]
+            semantic_index: None,
+            #[cfg(feature = "semantic")]
+            embedder: None,
+        }
+    }
+
+    /// Create a new executor with semantic search support.
+    #[cfg(feature = "semantic")]
+    pub fn with_semantic(
+        mut self,
+        index: Option<Arc<VectorIndex>>,
+        embedder: Option<Arc<dyn Embedder>>,
+    ) -> Self {
+        self.semantic_index = index;
+        self.embedder = embedder;
+        self
+    }
+
+    /// Whether this executor has a working semantic index.
+    pub fn has_semantic(&self) -> bool {
+        #[cfg(feature = "semantic")]
+        {
+            self.semantic_index.is_some() && self.embedder.is_some()
+        }
+        #[cfg(not(feature = "semantic"))]
+        {
+            false
         }
     }
 
@@ -424,6 +459,61 @@ impl ToolExecutor {
             files,
             total,
             path: input.path,
+        }
+    }
+
+    /// Perform a semantic (embedding-based) search over the indexed graph.
+    #[cfg(feature = "semantic")]
+    pub fn semantic_search(&self, input: SemanticSearchInput) -> SemanticSearchOutput {
+        let (Some(index), Some(embedder)) = (&self.semantic_index, &self.embedder) else {
+            return SemanticSearchOutput {
+                query: input.query,
+                model: String::new(),
+                hits: Vec::new(),
+                hit_count: 0,
+            };
+        };
+
+        let engine = SemanticSearch::new(embedder.clone());
+        let sq = SearchQuery::new(&input.query)
+            .with_top_k(input.top_k)
+            .with_threshold(input.threshold);
+
+        match engine.search(&sq, index, &self.graph) {
+            Ok(results) => {
+                let hits: Vec<SemanticSearchHit> = results
+                    .iter()
+                    .map(|r| {
+                        let kind = self
+                            .graph
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == r.node_id)
+                            .map(|n| kind_to_string(&n.kind))
+                            .unwrap_or_default();
+                        SemanticSearchHit {
+                            node_id: r.node_id.0,
+                            score: r.score,
+                            name: r.name.clone(),
+                            path: r.path.clone(),
+                            kind,
+                        }
+                    })
+                    .collect();
+                let hit_count = hits.len();
+                SemanticSearchOutput {
+                    query: input.query,
+                    model: embedder.model_name().to_string(),
+                    hits,
+                    hit_count,
+                }
+            }
+            Err(_e) => SemanticSearchOutput {
+                query: input.query,
+                model: embedder.model_name().to_string(),
+                hits: Vec::new(),
+                hit_count: 0,
+            },
         }
     }
 

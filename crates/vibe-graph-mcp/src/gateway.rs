@@ -85,6 +85,34 @@ impl GatewayState {
             graph,
             store,
             registered_at: Instant::now(),
+            #[cfg(feature = "semantic")]
+            semantic_index: None,
+            #[cfg(feature = "semantic")]
+            embedder: None,
+        };
+        self.registry.register(project);
+        let _ = self.project_updates.send(ProjectUpdate::Registered(name));
+    }
+
+    /// Register a project with semantic search support.
+    #[cfg(feature = "semantic")]
+    pub fn register_local_project_with_semantic(
+        &self,
+        name: String,
+        workspace_path: PathBuf,
+        graph: Arc<SourceCodeGraph>,
+        store: Store,
+        index: Option<Arc<vibe_graph_semantic::VectorIndex>>,
+        embedder: Option<Arc<dyn vibe_graph_semantic::Embedder>>,
+    ) {
+        let project = RegisteredProject {
+            name: name.clone(),
+            workspace_path,
+            graph,
+            store,
+            registered_at: Instant::now(),
+            semantic_index: index,
+            embedder,
         };
         self.registry.register(project);
         let _ = self.project_updates.send(ProjectUpdate::Registered(name));
@@ -147,6 +175,10 @@ async fn register_handler(
         graph,
         store,
         registered_at: Instant::now(),
+        #[cfg(feature = "semantic")]
+        semantic_index: None,
+        #[cfg(feature = "semantic")]
+        embedder: None,
     };
 
     state.registry.register(project);
@@ -329,11 +361,17 @@ impl McpGateway {
 
     /// Create a ToolExecutor for a specific project.
     fn executor_for(&self, project: &RegisteredProject) -> ToolExecutor {
-        ToolExecutor::new(
+        let executor = ToolExecutor::new(
             project.store.clone(),
             project.graph.clone(),
             project.workspace_path.clone(),
-        )
+        );
+        #[cfg(feature = "semantic")]
+        let executor = executor.with_semantic(
+            project.semantic_index.clone(),
+            project.embedder.clone(),
+        );
+        executor
     }
 
     /// Get the list of available tools.
@@ -424,6 +462,19 @@ impl McpGateway {
                         .into(),
                 ),
                 input_schema: crate::server::schema_to_input_schema::<ListFilesInput>(),
+                annotations: None,
+                icons: None,
+                meta: None,
+                output_schema: None,
+                title: None,
+            },
+            Tool {
+                name: "semantic_search".into(),
+                description: Some(
+                    "Search the codebase by meaning using vector embeddings. Finds files semantically similar to a natural-language query. Requires a pre-built semantic index (`vg semantic index`)."
+                        .into(),
+                ),
+                input_schema: crate::server::schema_to_input_schema::<SemanticSearchInput>(),
                 annotations: None,
                 icons: None,
                 meta: None,
@@ -663,6 +714,36 @@ impl McpGateway {
                 }
             },
 
+            "semantic_search" => match serde_json::from_value::<SemanticSearchInput>(args) {
+                Ok(input) => match self.resolve_project(input.project.as_deref()) {
+                    Ok(project) => {
+                        let executor = self.executor_for(&project);
+                        if !executor.has_semantic() {
+                            return CallToolResult::error(vec![Content::text(
+                                "Semantic search is not available for this project. Build with `--features semantic` and run `vg semantic index` first.",
+                            )]);
+                        }
+                        #[cfg(feature = "semantic")]
+                        {
+                            let output = executor.semantic_search(input);
+                            let text =
+                                serde_json::to_string_pretty(&output).unwrap_or_default();
+                            CallToolResult::success(vec![Content::text(text)])
+                        }
+                        #[cfg(not(feature = "semantic"))]
+                        {
+                            CallToolResult::error(vec![Content::text(
+                                "Semantic search requires the `semantic` feature.",
+                            )])
+                        }
+                    }
+                    Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                },
+                Err(e) => {
+                    CallToolResult::error(vec![Content::text(format!("Invalid input: {}", e))])
+                }
+            },
+
             _ => CallToolResult::error(vec![Content::text(format!("Unknown tool: {}", name))]),
         }
     }
@@ -693,10 +774,11 @@ impl ServerHandler for McpGateway {
             instructions: Some(format!(
                 "Vibe-Graph MCP Gateway serving {} project(s): [{}]\n\n\
                  BEFORE MODIFYING FILES: Run impact_analysis to see what depends on the file.\n\
-                 TO FIND CODE: Use search_nodes instead of grep/glob for semantic matches.\n\
+                 TO FIND CODE BY NAME: Use search_nodes for name/path pattern matching.\n\
+                 TO FIND CODE BY MEANING: Use semantic_search for natural-language queries (e.g. 'authentication logic', 'database migrations').\n\
                  TO UNDERSTAND IMPORTS: Use get_dependencies for incoming/outgoing relationships.\n\
                  TO BROWSE STRUCTURE: Use list_files with filters instead of ls.\n\n\
-                 The graph captures semantic relationships (uses, contains) beyond text patterns.\n\n\
+                 The graph captures structural relationships (uses, contains) and semantic_search adds embedding-based similarity.\n\n\
                  {}",
                 project_count,
                 project_list,
