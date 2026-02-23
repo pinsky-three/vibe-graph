@@ -91,7 +91,8 @@ pub fn index(path: &Path, force: bool) -> Result<()> {
     );
 
     let started = Instant::now();
-    let sampler = EmbeddingSampler::for_source_files(embedder.clone());
+    let sampler = EmbeddingSampler::for_source_files(embedder.clone())
+        .with_workspace(&path);
     let result = sampler
         .sample(&graph, &std::collections::HashMap::new())
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
@@ -368,7 +369,8 @@ pub fn bootstrap_semantic(
 
     eprint!("   🔍 Building semantic index...");
     let started = Instant::now();
-    let sampler = EmbeddingSampler::for_source_files(embedder.clone());
+    let sampler = EmbeddingSampler::for_source_files(embedder.clone())
+        .with_workspace(path);
     let result = sampler
         .sample(graph, &std::collections::HashMap::new())
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
