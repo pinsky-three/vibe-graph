@@ -681,6 +681,71 @@ pub fn detect_ts_references(content: &str, source_path: &Path) -> Vec<SourceRefe
     refs
 }
 
+/// Detect references in Lean 4 source code.
+///
+/// Handles `import` statements (e.g. `import Mathlib.Topology.Basic`)
+/// and `open` namespace declarations.
+pub fn detect_lean_references(content: &str, source_path: &Path) -> Vec<SourceReference> {
+    let mut refs = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with("--") || trimmed.starts_with("/-") {
+            continue;
+        }
+
+        // `import Mathlib.Topology.Basic` or `public import Mathlib.Foo.Bar`
+        let import_part = trimmed
+            .strip_prefix("public import ")
+            .or_else(|| trimmed.strip_prefix("import "));
+
+        if let Some(module_path) = import_part {
+            let module = module_path
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim();
+
+            if !module.is_empty() {
+                let file_path = module.replace('.', "/");
+                refs.push(SourceReference {
+                    source_path: source_path.to_path_buf(),
+                    kind: ReferenceKind::Imports,
+                    target_route: PathBuf::from(format!("{}.lean", file_path)),
+                });
+            }
+            continue;
+        }
+
+        // `open Topology Filter in` or `open Topology`
+        // These represent namespace dependencies worth capturing.
+        if let Some(rest) = trimmed.strip_prefix("open ") {
+            let namespaces = rest
+                .split(" in")
+                .next()
+                .unwrap_or(rest)
+                .split_whitespace();
+
+            for ns in namespaces {
+                let ns = ns.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '.');
+                if ns.is_empty() || ns == "scoped" {
+                    continue;
+                }
+                let file_path = ns.replace('.', "/");
+                refs.push(SourceReference {
+                    source_path: source_path.to_path_buf(),
+                    kind: ReferenceKind::Uses,
+                    target_route: PathBuf::from(format!("{}.lean", file_path)),
+                });
+            }
+        }
+    }
+
+    refs
+}
+
 /// Detect references based on file extension.
 pub fn detect_references(content: &str, source_path: &Path) -> Vec<SourceReference> {
     match source_path.extension().and_then(|e| e.to_str()) {
@@ -689,6 +754,7 @@ pub fn detect_references(content: &str, source_path: &Path) -> Vec<SourceReferen
         Some("ts") | Some("tsx") | Some("js") | Some("jsx") => {
             detect_ts_references(content, source_path)
         }
+        Some("lean") => detect_lean_references(content, source_path),
         _ => Vec::new(),
     }
 }
@@ -704,6 +770,7 @@ fn extension_to_language(ext: &str) -> &'static str {
         "jsx" => "javascript",
         "go" => "go",
         "java" => "java",
+        "lean" => "lean",
         "c" | "h" => "c",
         "cpp" | "hpp" | "cc" | "cxx" => "cpp",
         "md" => "markdown",
@@ -1467,5 +1534,57 @@ mod tests {
         let result = sampler.sample(&graph, &HashMap::new());
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().sampler_id, "failing");
+    }
+
+    // -- Lean 4 reference detection --
+
+    #[test]
+    fn test_detect_lean_references_imports() {
+        let content = r#"/-
+Copyright (c) 2024 Someone. All rights reserved.
+-/
+module
+
+public import Mathlib.Topology.ContinuousMap.Compact
+public import Mathlib.Topology.MetricSpace.Ultra.Basic
+import Aesop
+
+/-!
+# Some module docs
+-/
+
+open Topology Filter in
+
+def someDef := sorry
+"#;
+        let path = std::path::Path::new("Mathlib/Topology/Example.lean");
+        let refs = detect_lean_references(content, path);
+
+        let import_targets: Vec<String> = refs
+            .iter()
+            .filter(|r| matches!(r.kind, ReferenceKind::Imports))
+            .map(|r| r.target_route.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(import_targets.len(), 3);
+        assert!(import_targets.contains(&"Mathlib/Topology/ContinuousMap/Compact.lean".to_string()));
+        assert!(import_targets.contains(&"Mathlib/Topology/MetricSpace/Ultra/Basic.lean".to_string()));
+        assert!(import_targets.contains(&"Aesop.lean".to_string()));
+
+        let uses_targets: Vec<String> = refs
+            .iter()
+            .filter(|r| matches!(r.kind, ReferenceKind::Uses))
+            .map(|r| r.target_route.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(uses_targets.len(), 2);
+        assert!(uses_targets.contains(&"Topology.lean".to_string()));
+        assert!(uses_targets.contains(&"Filter.lean".to_string()));
+    }
+
+    #[test]
+    fn test_detect_lean_references_empty() {
+        let content = "-- just a comment\ndef x := 42\n";
+        let path = std::path::Path::new("test.lean");
+        let refs = detect_lean_references(content, path);
+        assert!(refs.is_empty());
     }
 }

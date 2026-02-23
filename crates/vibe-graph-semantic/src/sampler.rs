@@ -225,16 +225,61 @@ fn extract_semantic_excerpt(source: &str, lang: &str) -> String {
     let mut signature_lines = Vec::new();
 
     let (doc_prefix, import_prefix, sig_prefixes) = lang_markers(lang);
+    let is_lean = lang.eq_ignore_ascii_case("lean");
+
+    // Track block comment nesting for languages with /- ... -/ syntax (Lean)
+    let mut in_block_comment = false;
+    let mut is_doc_block = false;
 
     for line in source.lines() {
         let trimmed = line.trim();
+
+        // Handle Lean block comment state
+        if is_lean {
+            if in_block_comment {
+                if trimmed.contains("-/") {
+                    if is_doc_block {
+                        let before_close = trimmed.split("-/").next().unwrap_or("").trim();
+                        if !before_close.is_empty() {
+                            doc_lines.push(before_close);
+                        }
+                    }
+                    in_block_comment = false;
+                    is_doc_block = false;
+                } else if is_doc_block && !trimmed.is_empty() {
+                    doc_lines.push(trimmed);
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("/-!") || trimmed.starts_with("/--") {
+                is_doc_block = true;
+                in_block_comment = !trimmed.contains("-/");
+                let content = trimmed
+                    .strip_prefix("/-!")
+                    .or_else(|| trimmed.strip_prefix("/--"))
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches("-/")
+                    .trim();
+                if !content.is_empty() {
+                    doc_lines.push(content);
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("/-") {
+                // Non-doc block comment (copyright etc.) — skip entirely
+                in_block_comment = !trimmed.contains("-/");
+                continue;
+            }
+        }
 
         if trimmed.is_empty() {
             continue;
         }
 
         if !doc_lines.is_empty() || !import_lines.is_empty() || !signature_lines.is_empty() {
-            // Stop early if we already have enough material
             let total: usize =
                 doc_lines.iter().map(|l: &&str| l.len()).sum::<usize>()
                 + import_lines.iter().map(|l: &&str| l.len()).sum::<usize>()
@@ -244,10 +289,13 @@ fn extract_semantic_excerpt(source: &str, lang: &str) -> String {
             }
         }
 
-        // Doc comments at the top of the file
+        // Doc comments (line-based)
         if doc_prefix.iter().any(|p| trimmed.starts_with(p)) {
-            doc_lines.push(trimmed);
-            continue;
+            // For Lean, skip `/-` here since we handle it above
+            if !(is_lean && (trimmed.starts_with("/-") || trimmed.starts_with("/--"))) {
+                doc_lines.push(trimmed);
+                continue;
+            }
         }
 
         // Import / use statements
@@ -304,7 +352,12 @@ fn extract_semantic_excerpt(source: &str, lang: &str) -> String {
 
     let mut result = parts.join("\n");
     if result.len() > MAX_CONTENT_CHARS {
-        result.truncate(MAX_CONTENT_CHARS);
+        // Find nearest char boundary at or before the limit to avoid splitting UTF-8
+        let mut cut = MAX_CONTENT_CHARS;
+        while cut > 0 && !result.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        result.truncate(cut);
         if let Some(last_nl) = result.rfind('\n') {
             result.truncate(last_nl);
         }
@@ -358,6 +411,18 @@ fn lang_markers(lang: &str) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'stat
             vec!["//"],
             vec!["import "],
             vec!["func ", "type ", "var ", "const "],
+        ),
+        "lean" => (
+            vec!["/-!", "/--", "/-", "--"],
+            vec!["import ", "public import "],
+            vec![
+                "def ", "theorem ", "lemma ", "structure ", "class ",
+                "instance ", "inductive ", "abbrev ", "namespace ",
+                "noncomputable def ", "noncomputable instance ",
+                "open ", "variable ", "section ",
+                "@[simp] theorem ", "@[simp] lemma ",
+                "@[simp] def ",
+            ],
         ),
         _ => (
             vec!["//", "#", "///", "//!"],
