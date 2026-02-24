@@ -46,6 +46,16 @@ impl SemanticStore {
         index: &VectorIndex,
         model_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.save_with_extra(index, model_name, HashMap::new())
+    }
+
+    /// Persist the vector index with additional metadata key-value pairs.
+    pub fn save_with_extra(
+        &self,
+        index: &VectorIndex,
+        model_name: &str,
+        extra: HashMap<String, String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let dir = self.dir();
         std::fs::create_dir_all(&dir)?;
 
@@ -57,7 +67,7 @@ impl SemanticStore {
             model_name: model_name.to_string(),
             dimension: index.dimension(),
             entry_count: index.len(),
-            extra: HashMap::new(),
+            extra,
         };
         let meta_path = dir.join(META_FILE);
         let meta_data = serde_json::to_string_pretty(&meta)?;

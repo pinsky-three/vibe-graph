@@ -550,8 +550,13 @@ enum AutomatonCommands {
 enum SemanticCommands {
     /// Build or rebuild the semantic embedding index.
     ///
-    /// Embeds all source files using the configured model and persists
-    /// the index to `.self/semantic/`.
+    /// By default builds a fast index from filenames only (instant).
+    /// Use --deep to read file content for richer embeddings (runs in background).
+    ///
+    /// Examples:
+    ///   vg semantic index                # fast index (filenames)
+    ///   vg semantic index --deep         # deep index (content, background)
+    ///   vg semantic index --deep --force # force rebuild deep index
     Index {
         /// Path to workspace (defaults to current directory).
         #[arg(default_value = ".")]
@@ -560,6 +565,11 @@ enum SemanticCommands {
         /// Force rebuild even if an index already exists.
         #[arg(long)]
         force: bool,
+
+        /// Deep indexing: read file content (doc comments, imports, signatures).
+        /// Produces higher-quality embeddings but takes longer. Runs in background.
+        #[arg(long)]
+        deep: bool,
     },
 
     /// Search the codebase by meaning.
@@ -1042,8 +1052,12 @@ async fn main() -> Result<()> {
         }
 
         Commands::Semantic(semantic_cmd) => match semantic_cmd {
-            SemanticCommands::Index { path, force } => {
-                commands::semantic::index(&path, force)?;
+            SemanticCommands::Index { path, force, deep } => {
+                if std::env::var("VG_SEMANTIC_INDEX_WORKER").is_ok() {
+                    commands::semantic::index_worker(&path, deep)?;
+                } else {
+                    commands::semantic::index(&path, force, deep)?;
+                }
             }
             SemanticCommands::Search {
                 query,

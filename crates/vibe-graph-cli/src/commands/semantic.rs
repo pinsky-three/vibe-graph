@@ -65,34 +65,86 @@ fn semantic_store(path: &Path) -> SemanticStore {
 // ─── vg semantic index ──────────────────────────────────────────────────────
 
 /// Build or rebuild the semantic index for the codebase.
-pub fn index(path: &Path, force: bool) -> Result<()> {
+///
+/// Both modes spawn a background process so the user never blocks.
+/// - Default (fast): embeds filenames only.
+/// - `--deep`: reads file content for richer embeddings.
+pub fn index(path: &Path, force: bool, deep: bool) -> Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let store = semantic_store(&path);
+    let depth_label = if deep { "deep" } else { "fast" };
 
     if !force && store.exists() {
-        eprintln!("✅ Semantic index already exists. Use --force to rebuild.");
         if let Ok(Some((_idx, meta))) = store.load() {
-            eprintln!(
-                "   Model: {}, Entries: {}, Dim: {}",
-                meta.model_name, meta.entry_count, meta.dimension
-            );
+            let current = meta.extra.get("depth").map(|s| s.as_str()).unwrap_or("fast");
+            if current == depth_label {
+                eprintln!("✅ Semantic index ({}) already exists. Use --force to rebuild.", current);
+                eprintln!(
+                    "   Model: {}, Entries: {}, Dim: {}",
+                    meta.model_name, meta.entry_count, meta.dimension
+                );
+                return Ok(());
+            }
         }
-        return Ok(());
     }
 
+    spawn_index_worker(&path, force, deep)
+}
+
+/// Spawn a detached background process that builds the index.
+fn spawn_index_worker(path: &Path, force: bool, deep: bool) -> Result<()> {
+    let exe = std::env::current_exe().context("Could not determine vg executable path")?;
+    let depth_label = if deep { "deep" } else { "fast" };
+
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("semantic").arg("index");
+    if deep {
+        cmd.arg("--deep");
+    }
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(path);
+    cmd.env("VG_SEMANTIC_INDEX_WORKER", "1");
+
+    let log_dir = path.join(".self").join("semantic");
+    std::fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join(format!("{}-index.log", depth_label));
+    let log_file = std::fs::File::create(&log_path)?;
+
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(log_file.try_clone()?);
+    cmd.stderr(log_file);
+
+    let child = cmd.spawn().context("Failed to spawn background indexer")?;
+
+    eprintln!("🔍 Indexing ({}) started in background (pid {})", depth_label, child.id());
+    eprintln!("   Log: .self/semantic/{}-index.log", depth_label);
+    eprintln!("   Check progress: vg semantic status");
+    Ok(())
+}
+
+/// Worker entry point (called by the spawned background process).
+pub fn index_worker(path: &Path, deep: bool) -> Result<()> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let graph = load_graph(&path)?;
     let (embedder, _is_real) = make_embedder(&path);
+    let depth_label = if deep { "deep" } else { "fast" };
 
     eprintln!(
-        "🔍 Indexing {} nodes with model \"{}\" (dim={})...",
+        "🔍 {} index: {} nodes with model \"{}\" (dim={})...",
+        if deep { "Deep" } else { "Fast" },
         graph.node_count(),
         embedder.model_name(),
         embedder.dimension()
     );
 
     let started = Instant::now();
-    let sampler = EmbeddingSampler::for_source_files(embedder.clone())
-        .with_workspace(&path);
+    let sampler = if deep {
+        EmbeddingSampler::for_source_files(embedder.clone()).with_workspace(&path)
+    } else {
+        EmbeddingSampler::for_source_files(embedder.clone())
+    };
     let result = sampler
         .sample(&graph, &std::collections::HashMap::new())
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
@@ -100,14 +152,13 @@ pub fn index(path: &Path, force: bool) -> Result<()> {
     let index = sampler.index_snapshot();
     let elapsed = started.elapsed();
 
-    eprintln!(
-        "✅ Indexed {} nodes in {:.1?}",
-        result.len(),
-        elapsed
-    );
+    eprintln!("✅ Indexed {} nodes in {:.1?}", result.len(), elapsed);
 
-    store
-        .save(&index, embedder.model_name())
+    let mut extra = std::collections::HashMap::new();
+    extra.insert("depth".to_string(), depth_label.to_string());
+
+    semantic_store(&path)
+        .save_with_extra(&index, embedder.model_name(), extra)
         .map_err(|e| anyhow::anyhow!("Failed to save index: {}", e))?;
 
     eprintln!("💾 Saved to .self/semantic/");
@@ -207,16 +258,40 @@ pub fn status(path: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to load index: {}", e))?
         .context("Index files corrupted")?;
 
+    let depth = meta
+        .extra
+        .get("depth")
+        .map(|s| s.as_str())
+        .unwrap_or("fast");
+
     println!("📊 Semantic Index Status");
     println!("{:─<40}", "");
     println!("   Model:      {}", meta.model_name);
     println!("   Dimension:  {}", meta.dimension);
     println!("   Entries:    {}", meta.entry_count);
+    println!(
+        "   Depth:      {} {}",
+        depth,
+        if depth == "fast" { "(filenames only — run with --deep for richer embeddings)" } else { "(file content included)" }
+    );
 
     #[cfg(feature = "semantic")]
     println!("   Backend:    fastembed (native ONNX)");
     #[cfg(not(feature = "semantic"))]
     println!("   Backend:    noop (rebuild with --features semantic)");
+
+    for level in &["fast", "deep"] {
+        let log_path = path.join(".self").join("semantic").join(format!("{}-index.log", level));
+        if log_path.exists() {
+            if let Ok(log) = std::fs::read_to_string(&log_path) {
+                let done = log.contains("Saved to");
+                println!("   {} index: {}",
+                    if *level == "deep" { "Deep" } else { "Fast" },
+                    if done { "✅ complete" } else { "🔄 in progress" },
+                );
+            }
+        }
+    }
 
     Ok(())
 }
@@ -367,10 +442,9 @@ pub fn bootstrap_semantic(
         return Ok(VectorIndex::new(embedder.dimension()));
     }
 
-    eprint!("   🔍 Building semantic index...");
+    eprint!("   🔍 Building semantic index (fast)...");
     let started = Instant::now();
-    let sampler = EmbeddingSampler::for_source_files(embedder.clone())
-        .with_workspace(path);
+    let sampler = EmbeddingSampler::for_source_files(embedder.clone());
     let result = sampler
         .sample(graph, &std::collections::HashMap::new())
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
@@ -378,7 +452,9 @@ pub fn bootstrap_semantic(
     let index = sampler.index_snapshot();
     let elapsed = started.elapsed();
 
-    let _ = store.save(&index, embedder.model_name());
+    let mut extra = std::collections::HashMap::new();
+    extra.insert("depth".to_string(), "fast".to_string());
+    let _ = store.save_with_extra(&index, embedder.model_name(), extra);
     eprintln!(" {} entries in {:.1?}", result.len(), elapsed);
 
     Ok(index)
