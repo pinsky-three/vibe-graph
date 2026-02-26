@@ -1053,8 +1053,8 @@ async fn main() -> Result<()> {
 
         Commands::Semantic(semantic_cmd) => match semantic_cmd {
             SemanticCommands::Index { path, force, deep } => {
-                if std::env::var("VG_SEMANTIC_INDEX_WORKER").is_ok() {
-                    commands::semantic::index_worker(&path, deep)?;
+                if deep && std::env::var("VG_SEMANTIC_INDEX_WORKER").is_ok() {
+                    commands::semantic::index_deep_worker(&path)?;
                 } else {
                     commands::semantic::index(&path, force, deep)?;
                 }
