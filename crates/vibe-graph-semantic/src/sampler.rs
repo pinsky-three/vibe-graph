@@ -180,6 +180,10 @@ impl EmbeddingSampler {
 
         let header = format!("{kind} {lang} {rel_path}");
 
+        if self.workspace_path.is_none() {
+            return header;
+        }
+
         let file_path = self.resolve_file_path(node);
         let content = file_path.and_then(|p| std::fs::read_to_string(p).ok());
 
