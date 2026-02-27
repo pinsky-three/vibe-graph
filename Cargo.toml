@@ -17,6 +17,7 @@ members = [
   "crates/vibe-graph-api",
   "crates/vibe-graph-layout-gpu",
   "crates/vibe-graph-mcp",
+  "crates/vibe-graph-bevy",
 ]
 resolver = "2"
 
