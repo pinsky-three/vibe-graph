@@ -128,27 +128,38 @@ impl FrameTimer {
         if self.count == 0 {
             return 0.0;
         }
-        let avg_ms: f32 =
-            self.frame_times_ms[..self.count.min(FRAME_TIMER_WINDOW)].iter().sum::<f32>()
-                / self.count as f32;
-        if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
+        let avg_ms: f32 = self.frame_times_ms[..self.count.min(FRAME_TIMER_WINDOW)]
+            .iter()
+            .sum::<f32>()
+            / self.count as f32;
+        if avg_ms > 0.0 {
+            1000.0 / avg_ms
+        } else {
+            0.0
+        }
     }
 
     pub fn p50_ms(&self) -> f32 {
         let s = self.sorted_window();
-        if s.is_empty() { return 0.0; }
+        if s.is_empty() {
+            return 0.0;
+        }
         s[s.len() / 2]
     }
 
     pub fn p95_ms(&self) -> f32 {
         let s = self.sorted_window();
-        if s.is_empty() { return 0.0; }
+        if s.is_empty() {
+            return 0.0;
+        }
         s[(s.len() as f32 * 0.95) as usize]
     }
 
     pub fn p99_ms(&self) -> f32 {
         let s = self.sorted_window();
-        if s.is_empty() { return 0.0; }
+        if s.is_empty() {
+            return 0.0;
+        }
         s[((s.len() as f32 * 0.99) as usize).min(s.len() - 1)]
     }
 
@@ -163,7 +174,14 @@ impl FrameTimer {
         self.total_frames
     }
 
-    pub fn draw_overlay(&self, ui: &mut egui::Ui, visible_nodes: usize, total_nodes: usize, visible_edges: usize, total_edges: usize) {
+    pub fn draw_overlay(
+        &self,
+        ui: &mut egui::Ui,
+        visible_nodes: usize,
+        total_nodes: usize,
+        visible_edges: usize,
+        total_edges: usize,
+    ) {
         let rect = ui.max_rect();
         let painter = ui.painter();
 
@@ -178,9 +196,26 @@ impl FrameTimer {
 
         let lines = [
             (format!("{:.0} FPS", fps), fps_color),
-            (format!("p50 {:.1}ms  p95 {:.1}ms  p99 {:.1}ms", self.p50_ms(), self.p95_ms(), self.p99_ms()), egui::Color32::from_rgb(160, 160, 180)),
-            (format!("nodes {}/{} edges {}/{}", visible_nodes, total_nodes, visible_edges, total_edges), egui::Color32::from_rgb(120, 120, 140)),
-            (format!("frame #{}", self.total_frames), egui::Color32::from_rgb(100, 100, 120)),
+            (
+                format!(
+                    "p50 {:.1}ms  p95 {:.1}ms  p99 {:.1}ms",
+                    self.p50_ms(),
+                    self.p95_ms(),
+                    self.p99_ms()
+                ),
+                egui::Color32::from_rgb(160, 160, 180),
+            ),
+            (
+                format!(
+                    "nodes {}/{} edges {}/{}",
+                    visible_nodes, total_nodes, visible_edges, total_edges
+                ),
+                egui::Color32::from_rgb(120, 120, 140),
+            ),
+            (
+                format!("frame #{}", self.total_frames),
+                egui::Color32::from_rgb(100, 100, 120),
+            ),
         ];
 
         let font = egui::FontId::monospace(11.0);
@@ -193,11 +228,18 @@ impl FrameTimer {
             egui::vec2(bg_width, bg_height),
         );
 
-        painter.rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+        painter.rect_filled(
+            bg_rect,
+            4.0,
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180),
+        );
 
         for (i, (text, color)) in lines.iter().enumerate() {
             painter.text(
-                egui::pos2(bg_rect.left() + pad, bg_rect.top() + pad + i as f32 * line_height),
+                egui::pos2(
+                    bg_rect.left() + pad,
+                    bg_rect.top() + pad + i as f32 * line_height,
+                ),
                 egui::Align2::LEFT_TOP,
                 text,
                 font.clone(),
@@ -250,20 +292,15 @@ struct SearchHit {
 }
 
 /// Whether to search by text substring or semantic embeddings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SearchMode {
+    #[default]
     Text,
     /// Semantic search via local embedder (native with `semantic` feature).
     #[cfg(feature = "semantic")]
     Semantic,
     /// Semantic search via /api/semantic/search (WASM).
     SemanticApi,
-}
-
-impl Default for SearchMode {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 /// Pending async search result channel (for WASM API calls).
@@ -957,12 +994,18 @@ impl VibeGraphApp {
 
     #[allow(dead_code)]
     fn node_degree_stats(&self) -> (HashMap<NodeIndex, usize>, usize) {
-        (self.cached_stats.degrees.clone(), self.cached_stats.max_degree)
+        (
+            self.cached_stats.degrees.clone(),
+            self.cached_stats.max_degree,
+        )
     }
 
     #[allow(dead_code)]
     fn node_pagerank_stats(&self) -> (HashMap<NodeIndex, f32>, f32) {
-        (self.cached_stats.pageranks.clone(), self.cached_stats.max_pagerank)
+        (
+            self.cached_stats.pageranks.clone(),
+            self.cached_stats.max_pagerank,
+        )
     }
 
     fn ensure_degree_cache(&mut self) {
@@ -1234,8 +1277,18 @@ impl VibeGraphApp {
 
             visible_nodes += 1;
 
-            let degree = self.cached_stats.degrees.get(&node_idx).copied().unwrap_or(0);
-            let page_rank = self.cached_stats.pageranks.get(&node_idx).copied().unwrap_or(0.0);
+            let degree = self
+                .cached_stats
+                .degrees
+                .get(&node_idx)
+                .copied()
+                .unwrap_or(0);
+            let page_rank = self
+                .cached_stats
+                .pageranks
+                .get(&node_idx)
+                .copied()
+                .unwrap_or(0.0);
             let kind = self.node_kinds.get(&node_idx).map(|v| v.as_str());
             let change_kind = self.changed_nodes.get(&node_idx).copied();
 
@@ -1284,7 +1337,13 @@ impl VibeGraphApp {
         if self.frame_timer.show_overlay {
             let total_nodes = self.g.node_count();
             let total_edges_count = self.g.edge_count();
-            self.frame_timer.draw_overlay(ui, visible_nodes, total_nodes, visible_edges, total_edges_count);
+            self.frame_timer.draw_overlay(
+                ui,
+                visible_nodes,
+                total_nodes,
+                visible_edges,
+                total_edges_count,
+            );
         }
 
         response
@@ -2193,10 +2252,7 @@ impl VibeGraphApp {
                                 if let Some(p) = path {
                                     if ui
                                         .small_button("📄")
-                                        .on_hover_text(format!(
-                                            "Open in viewer: {}",
-                                            p.display()
-                                        ))
+                                        .on_hover_text(format!("Open in viewer: {}", p.display()))
                                         .clicked()
                                     {
                                         files_to_open.push(p.clone());
@@ -2323,7 +2379,11 @@ impl VibeGraphApp {
             })
             .collect();
         by_degree.sort_by(|a, b| b.1.cmp(&a.1));
-        by_degree.into_iter().take(top_n).map(|(idx, _)| idx).collect()
+        by_degree
+            .into_iter()
+            .take(top_n)
+            .map(|(idx, _)| idx)
+            .collect()
     }
 
     /// Return nodes matching a specific kind string (e.g. "File", "Directory").
@@ -2370,7 +2430,7 @@ impl VibeGraphApp {
             let path_lower = path_str.as_deref().map(|s| s.to_lowercase());
 
             let label_match = label_lower.contains(&q);
-            let path_match = path_lower.as_deref().map_or(false, |p| p.contains(&q));
+            let path_match = path_lower.as_deref().is_some_and(|p| p.contains(&q));
 
             if label_match || path_match {
                 let score = if label_lower == q {
@@ -2391,7 +2451,11 @@ impl VibeGraphApp {
             }
         }
 
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(30);
         hits
     }
@@ -2421,7 +2485,10 @@ impl VibeGraphApp {
                     .get(egui_idx)
                     .cloned()
                     .unwrap_or_default();
-                let path = self.node_paths.get(egui_idx).map(|p| p.display().to_string());
+                let path = self
+                    .node_paths
+                    .get(egui_idx)
+                    .map(|p| p.display().to_string());
                 Some(SearchHit {
                     node_idx: *egui_idx,
                     score: hit.score,
@@ -2552,13 +2619,11 @@ impl VibeGraphApp {
                     }
 
                     // Show API mode when available or in WASM
-                    let api_available = self.search_api_available.unwrap_or(cfg!(target_arch = "wasm32"));
+                    let api_available = self
+                        .search_api_available
+                        .unwrap_or(cfg!(target_arch = "wasm32"));
                     if api_available {
-                        ui.selectable_value(
-                            &mut self.search_mode,
-                            SearchMode::SemanticApi,
-                            "API",
-                        );
+                        ui.selectable_value(&mut self.search_mode, SearchMode::SemanticApi, "API");
                     }
                 });
 
@@ -2628,25 +2693,23 @@ impl VibeGraphApp {
                 // Results list
                 if !self.search_results.is_empty() {
                     let results_snapshot: Vec<_> = self.search_results.clone();
-                    ScrollArea::vertical()
-                        .max_height(200.0)
-                        .show(ui, |ui| {
-                            for hit in &results_snapshot {
-                                let display = hit
-                                    .path
-                                    .as_deref()
-                                    .and_then(|p| p.rsplit('/').next())
-                                    .unwrap_or(&hit.label);
+                    ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                        for hit in &results_snapshot {
+                            let display = hit
+                                .path
+                                .as_deref()
+                                .and_then(|p| p.rsplit('/').next())
+                                .unwrap_or(&hit.label);
 
-                                let text = format!("[{:.2}] {}", hit.score, display);
-                                let btn = ui.selectable_label(false, text).on_hover_text(
-                                    hit.path.as_deref().unwrap_or(&hit.label),
-                                );
-                                if btn.clicked() {
-                                    self.apply_programmatic_selection(vec![hit.node_idx]);
-                                }
+                            let text = format!("[{:.2}] {}", hit.score, display);
+                            let btn = ui
+                                .selectable_label(false, text)
+                                .on_hover_text(hit.path.as_deref().unwrap_or(&hit.label));
+                            if btn.clicked() {
+                                self.apply_programmatic_selection(vec![hit.node_idx]);
                             }
-                        });
+                        }
+                    });
 
                     if ui.small_button("Clear").clicked() {
                         self.search_query.clear();
@@ -2676,7 +2739,9 @@ impl VibeGraphApp {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .small_button("🍂 Leaves")
-                        .on_hover_text("Select leaf nodes (out-degree 0 — they don't reference anything)")
+                        .on_hover_text(
+                            "Select leaf nodes (out-degree 0 — they don't reference anything)",
+                        )
                         .clicked()
                     {
                         let nodes = self.find_leaves();
@@ -2781,16 +2846,17 @@ impl VibeGraphApp {
                             change_kind_counts.entry(kind).or_default().push(idx);
                         }
 
-                        let change_kind_label = |k: &GitChangeKind| -> (&'static str, &'static str) {
-                            match k {
-                                GitChangeKind::Modified => ("✏", "Modified"),
-                                GitChangeKind::Added => ("➕", "Added"),
-                                GitChangeKind::Deleted => ("🗑", "Deleted"),
-                                GitChangeKind::Untracked => ("❓", "Untracked"),
-                                GitChangeKind::RenamedFrom => ("↩", "Renamed From"),
-                                GitChangeKind::RenamedTo => ("↪", "Renamed To"),
-                            }
-                        };
+                        let change_kind_label =
+                            |k: &GitChangeKind| -> (&'static str, &'static str) {
+                                match k {
+                                    GitChangeKind::Modified => ("✏", "Modified"),
+                                    GitChangeKind::Added => ("➕", "Added"),
+                                    GitChangeKind::Deleted => ("🗑", "Deleted"),
+                                    GitChangeKind::Untracked => ("❓", "Untracked"),
+                                    GitChangeKind::RenamedFrom => ("↩", "Renamed From"),
+                                    GitChangeKind::RenamedTo => ("↪", "Renamed To"),
+                                }
+                            };
 
                         let mut sorted_changes: Vec<_> = change_kind_counts.into_iter().collect();
                         sorted_changes.sort_by_key(|(k, _)| change_kind_label(k).1);
@@ -2799,12 +2865,7 @@ impl VibeGraphApp {
                             let (icon, label) = change_kind_label(kind);
                             if !indices.is_empty()
                                 && ui
-                                    .small_button(format!(
-                                        "{} {} ({})",
-                                        icon,
-                                        label,
-                                        indices.len()
-                                    ))
+                                    .small_button(format!("{} {} ({})", icon, label, indices.len()))
                                     .on_hover_text(format!("Select {} files", label.to_lowercase()))
                                     .clicked()
                             {
@@ -2836,10 +2897,7 @@ impl VibeGraphApp {
                         self.apply_programmatic_selection(vec![]);
                     }
                     if ui
-                        .add_enabled(
-                            has_selection,
-                            egui::Button::new("◑ Invert").small(),
-                        )
+                        .add_enabled(has_selection, egui::Button::new("◑ Invert").small())
                         .on_hover_text("Invert current selection")
                         .clicked()
                     {
