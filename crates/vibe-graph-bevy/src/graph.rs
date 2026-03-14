@@ -14,6 +14,7 @@ pub struct GraphLayout {
     pub iterations_per_frame: usize,
     #[allow(dead_code)]
     pub labels: Vec<String>,
+    pub source_graph: Option<vibe_graph_core::SourceCodeGraph>,
 }
 
 impl GraphLayout {
@@ -81,6 +82,7 @@ impl GraphLayout {
             running: true,
             iterations_per_frame: settings.iterations_per_frame,
             labels,
+            source_graph: None,
         }
     }
 
@@ -114,6 +116,7 @@ impl GraphLayout {
             running: true,
             iterations_per_frame: settings.iterations_per_frame,
             labels,
+            source_graph: Some(g.clone()),
         }
     }
 }

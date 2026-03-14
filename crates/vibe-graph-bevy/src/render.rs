@@ -8,6 +8,9 @@ pub struct GraphNode {
 }
 
 #[derive(Component)]
+pub struct Hovered;
+
+#[derive(Component)]
 pub struct Selected;
 
 #[derive(Resource)]
@@ -19,6 +22,7 @@ pub struct GraphAssets {
 
 pub struct NodeMaterials {
     pub default_mat: Handle<StandardMaterial>,
+    pub hovered_mat: Handle<StandardMaterial>,
     pub selected_mat: Handle<StandardMaterial>,
 }
 
@@ -54,10 +58,16 @@ fn setup_assets(
             perceptual_roughness: 0.6,
             ..default()
         }),
-        selected_mat: materials.add(StandardMaterial {
+        hovered_mat: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.85, 0.0),
             emissive: LinearRgba::new(0.6, 0.4, 0.0, 1.0),
             perceptual_roughness: 0.3,
+            ..default()
+        }),
+        selected_mat: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.0, 0.4),
+            emissive: LinearRgba::new(0.8, 0.0, 0.2, 1.0),
+            perceptual_roughness: 0.2,
             ..default()
         }),
     };
@@ -136,15 +146,25 @@ fn draw_edges(layout: Res<GraphLayout>, mut gizmos: Gizmos) {
 }
 
 fn highlight_selected(
-    mut query: Query<(&mut MeshMaterial3d<StandardMaterial>, Option<&Selected>)>,
+    mut query: Query<(
+        &mut MeshMaterial3d<StandardMaterial>,
+        Option<&Selected>,
+        Option<&Hovered>,
+    )>,
     assets: Option<Res<GraphAssets>>,
 ) {
     let Some(assets) = assets else { return };
-    for (mut mat, selected) in query.iter_mut() {
-        if selected.is_some() {
-            *mat = MeshMaterial3d(assets.materials.selected_mat.clone());
-        } else if mat.0 != assets.materials.default_mat {
-            *mat = MeshMaterial3d(assets.materials.default_mat.clone());
+    for (mut mat, selected, hovered) in query.iter_mut() {
+        let target_mat = if hovered.is_some() {
+            &assets.materials.hovered_mat
+        } else if selected.is_some() {
+            &assets.materials.selected_mat
+        } else {
+            &assets.materials.default_mat
+        };
+
+        if mat.0 != *target_mat {
+            mat.0 = target_mat.clone();
         }
     }
 }

@@ -23,6 +23,8 @@ fn ui_panels(
     mut settings: ResMut<LayoutSettings>,
     diagnostics: Res<DiagnosticsStore>,
     mut frame_count: Local<u32>,
+    mut lasso: ResMut<crate::interaction::LassoState>,
+    mut search: ResMut<crate::interaction::SearchState>,
 ) {
     // Skip first few frames to let egui initialize fonts and context
     *frame_count += 1;
@@ -45,6 +47,16 @@ fn ui_panels(
         return;
     };
 
+    // Draw Lasso
+    if lasso.is_drawing && lasso.points.len() > 1 {
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("lasso_layer")));
+        let egui_points: Vec<egui::Pos2> = lasso.points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
+        painter.add(egui::Shape::line(egui_points.clone(), egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 255, 255))));
+        if lasso.points.len() > 2 {
+            painter.line_segment([egui_points[0], *egui_points.last().unwrap()], egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 255, 255)));
+        }
+    }
+
     egui::TopBottomPanel::top("stats_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label(format!(
@@ -55,12 +67,28 @@ fn ui_panels(
                 fps,
                 frame_time_ms,
             ));
+            
+            ui.separator();
+            ui.label("🔍 Search:");
+            let search_response = ui.text_edit_singleline(&mut search.query);
+            if search_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                search.active = true;
+            }
+            if ui.button("Search").clicked() {
+                search.active = true;
+            }
         });
     });
 
     egui::SidePanel::left("layout_controls")
         .default_width(240.0)
         .show(ctx, |ui| {
+            ui.heading("Tools");
+            if ui.selectable_label(lasso.enabled, "🪢 Lasso Tool (disable orbit)").clicked() {
+                lasso.enabled = !lasso.enabled;
+            }
+            
+            ui.add_space(12.0);
             ui.heading("Layout");
             ui.separator();
 

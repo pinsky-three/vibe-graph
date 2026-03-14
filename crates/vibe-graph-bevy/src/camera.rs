@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
-use bevy_egui::{PrimaryEguiContext, EguiGlobalSettings};
+use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::graph::GraphLayout;
 
@@ -16,13 +16,14 @@ impl Plugin for CameraPlugin {
 
 fn spawn_camera(
     mut commands: Commands,
-    mut egui_global_settings: ResMut<EguiGlobalSettings>,
+    mut egui_settings: ResMut<EguiGlobalSettings>,
 ) {
-    egui_global_settings.auto_create_primary_context = false;
+    egui_settings.auto_create_primary_context = false;
 
+    // 3D scene camera + Primary UI Context
     commands.spawn((
-        PrimaryEguiContext,
         Camera3d::default(),
+        PrimaryEguiContext,
         Transform::from_translation(Vec3::new(0.0, 50.0, 300.0))
             .looking_at(Vec3::ZERO, Vec3::Y),
         PanOrbitCamera {

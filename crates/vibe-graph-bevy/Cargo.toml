@@ -8,12 +8,18 @@ description = "3D force-directed graph visualizer using Bevy"
 name = "vibe-graph-3d"
 path = "src/main.rs"
 
+[features]
+default = []
+semantic = ["vibe-graph-semantic", "vibe-graph-semantic/fastembed"]
+
 [dependencies]
 bevy = { version = "0.18", features = ["wayland"] }
 bevy_egui = "0.39"
 bevy_panorbit_camera = "0.34"
 petgraph = { workspace = true }
 vibe-graph-core = { path = "../vibe-graph-core" }
+vibe-graph-semantic = { path = "../vibe-graph-semantic", optional = true }
 rand = "0.8"
 tracing = { workspace = true }
 serde_json = { workspace = true }
+
