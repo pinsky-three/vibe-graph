@@ -121,6 +121,10 @@ fn update_node_positions(
 }
 
 fn draw_edges(layout: Res<GraphLayout>, mut gizmos: Gizmos) {
+    if layout.edge_count > 5000 {
+        return; // Rendering too many gizmo lines tanks FPS
+    }
+    
     let positions = layout.positions();
     let edge_color = Color::srgba(0.3, 0.5, 0.7, 0.12);
 

@@ -1,6 +1,6 @@
-use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
-use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 use crate::graph::{GraphLayout, LayoutSettings};
 
@@ -10,7 +10,10 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
-            .add_systems(Update, ui_panels.run_if(resource_exists::<GraphLayout>));
+            .add_systems(
+                EguiPrimaryContextPass,
+                ui_panels.run_if(resource_exists::<GraphLayout>),
+            );
     }
 }
 
@@ -21,11 +24,12 @@ fn ui_panels(
     diagnostics: Res<DiagnosticsStore>,
     mut frame_count: Local<u32>,
 ) {
-    // Skip first frame to let egui initialize fonts
+    // Skip first few frames to let egui initialize fonts and context
     *frame_count += 1;
     if *frame_count < 3 {
         return;
     }
+
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -37,7 +41,10 @@ fn ui_panels(
         .unwrap_or(0.0)
         * 1000.0;
 
-    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else {
+        tracing::warn!("Failed to get egui context");
+        return;
+    };
 
     egui::TopBottomPanel::top("stats_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {

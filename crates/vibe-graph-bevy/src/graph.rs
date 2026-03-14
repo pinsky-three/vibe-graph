@@ -98,7 +98,16 @@ pub fn step_layout(mut layout: ResMut<GraphLayout>) {
     if !layout.running {
         return;
     }
-    let iters = layout.iterations_per_frame;
+    
+    // Scale down iterations per frame for large graphs to maintain FPS
+    let iters = if layout.node_count >= 5000 {
+        layout.iterations_per_frame.min(2)
+    } else if layout.node_count >= 1000 {
+        layout.iterations_per_frame.min(5)
+    } else {
+        layout.iterations_per_frame
+    };
+    
     for _ in 0..iters {
         layout.layout.step();
     }
