@@ -42,7 +42,6 @@ fn ui_panels(
         * 1000.0;
 
     let Ok(ctx) = contexts.ctx_mut() else {
-        tracing::warn!("Failed to get egui context");
         return;
     };
 
