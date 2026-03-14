@@ -9134,6 +9134,7 @@ dependencies = [
  "bevy_panorbit_camera",
  "petgraph",
  "rand 0.8.5",
+ "serde_json",
  "tracing",
  "vibe-graph-core",
 ]

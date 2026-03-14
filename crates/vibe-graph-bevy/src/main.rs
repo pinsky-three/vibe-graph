@@ -9,21 +9,28 @@ mod ui;
 use bevy::prelude::*;
 
 fn main() {
-    let scale = std::env::args()
-        .nth(1)
-        .map(|s| match s.as_str() {
-            "100" | "small" => benchmark::GraphScale::Small,
-            "1000" | "1k" | "medium" => benchmark::GraphScale::Medium,
-            "10000" | "10k" | "large" => benchmark::GraphScale::Large,
-            _ => {
-                eprintln!("Usage: vibe-graph-3d [100|1000|10000]  (default: 1000)");
-                benchmark::GraphScale::Medium
-            }
-        })
-        .unwrap_or(benchmark::GraphScale::Medium);
+    let mut custom_graph_path = None;
+    let mut scale = benchmark::GraphScale::Medium;
+
+    if let Some(arg) = std::env::args().nth(1) {
+        if arg.ends_with(".json") {
+            custom_graph_path = Some(arg);
+        } else {
+            scale = match arg.as_str() {
+                "100" | "small" => benchmark::GraphScale::Small,
+                "1000" | "1k" | "medium" => benchmark::GraphScale::Medium,
+                "10000" | "10k" | "large" => benchmark::GraphScale::Large,
+                _ => {
+                    eprintln!("Usage: vibe-graph-3d [100|1000|10000|path/to/graph.json]  (default: 1000)");
+                    benchmark::GraphScale::Medium
+                }
+            };
+        }
+    }
 
     let settings = graph::LayoutSettings {
         scale,
+        custom_graph_path,
         ..Default::default()
     };
 

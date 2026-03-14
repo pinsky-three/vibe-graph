@@ -35,6 +35,7 @@ pub struct LayoutSettings {
     pub config: LayoutConfig,
     pub iterations_per_frame: usize,
     pub scale: GraphScale,
+    pub custom_graph_path: Option<String>,
 }
 
 impl Default for LayoutSettings {
@@ -43,6 +44,7 @@ impl Default for LayoutSettings {
             config: LayoutConfig::default(),
             iterations_per_frame: 10,
             scale: GraphScale::Medium,
+            custom_graph_path: None,
         }
     }
 }
@@ -81,11 +83,63 @@ impl GraphLayout {
             labels,
         }
     }
+
+    pub fn from_source_code_graph(g: &vibe_graph_core::SourceCodeGraph, settings: &LayoutSettings) -> Self {
+        let node_count = g.nodes.len();
+        
+        let mut idx_map = std::collections::HashMap::new();
+        let mut labels = Vec::with_capacity(node_count);
+        
+        for (i, node) in g.nodes.iter().enumerate() {
+            idx_map.insert(node.id, i);
+            labels.push(node.name.clone());
+        }
+
+        let edges: Vec<(usize, usize)> = g.edges.iter()
+            .filter_map(|e| {
+                let src = idx_map.get(&e.from)?;
+                let tgt = idx_map.get(&e.to)?;
+                Some((*src, *tgt))
+            })
+            .collect();
+
+        let edge_count = edges.len();
+
+        let layout = ForceLayout3D::new(node_count, edges, settings.config.clone());
+
+        Self {
+            layout,
+            node_count,
+            edge_count,
+            running: true,
+            iterations_per_frame: settings.iterations_per_frame,
+            labels,
+        }
+    }
 }
 
 pub fn init_graph(mut commands: Commands, settings: Res<LayoutSettings>) {
-    let g = benchmark::generate_random_graph(settings.scale.node_count());
-    let layout = GraphLayout::from_petgraph(&g, &settings);
+    let layout = if let Some(path) = &settings.custom_graph_path {
+        tracing::info!("Loading custom graph from {}", path);
+        if let Ok(file_content) = std::fs::read_to_string(path) {
+            match serde_json::from_str::<vibe_graph_core::SourceCodeGraph>(&file_content) {
+                Ok(sc_graph) => GraphLayout::from_source_code_graph(&sc_graph, &settings),
+                Err(e) => {
+                    tracing::error!("Failed to parse custom graph JSON: {}", e);
+                    let g = benchmark::generate_random_graph(settings.scale.node_count());
+                    GraphLayout::from_petgraph(&g, &settings)
+                }
+            }
+        } else {
+            tracing::error!("Failed to read custom graph file: {}", path);
+            let g = benchmark::generate_random_graph(settings.scale.node_count());
+            GraphLayout::from_petgraph(&g, &settings)
+        }
+    } else {
+        let g = benchmark::generate_random_graph(settings.scale.node_count());
+        GraphLayout::from_petgraph(&g, &settings)
+    };
+
     tracing::info!(
         nodes = layout.node_count,
         edges = layout.edge_count,
