@@ -98,6 +98,11 @@ fn ui_panels(
             }
 
             ui.add_space(8.0);
+            
+            ui.label("Node Size");
+            ui.add(egui::Slider::new(&mut settings.node_size, 0.1..=5.0));
+
+            ui.add_space(8.0);
 
             ui.label("Iterations / frame");
             ui.add(egui::Slider::new(&mut settings.iterations_per_frame, 1..=50));

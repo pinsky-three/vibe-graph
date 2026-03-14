@@ -97,6 +97,7 @@ fn setup_assets(
 fn spawn_nodes(
     mut commands: Commands,
     layout: Res<GraphLayout>,
+    settings: Res<crate::graph::LayoutSettings>,
     assets: Res<GraphAssets>,
 ) {
     let use_lod = layout.node_count > 2000;
@@ -106,7 +107,7 @@ fn spawn_nodes(
         assets.node_mesh.clone()
     };
 
-    let node_radius = node_radius_for_scale(layout.node_count);
+    let node_radius = node_radius_for_scale(layout.node_count) * settings.node_size;
 
     for (i, &pos) in layout.positions().iter().enumerate() {
         commands.spawn((
@@ -120,12 +121,19 @@ fn spawn_nodes(
 
 fn update_node_positions(
     layout: Res<GraphLayout>,
+    settings: Res<crate::graph::LayoutSettings>,
     mut query: Query<(&GraphNode, &mut Transform)>,
 ) {
     let positions = layout.positions();
+    let target_radius = node_radius_for_scale(layout.node_count) * settings.node_size;
+    let target_scale = Vec3::splat(target_radius);
+
     for (node, mut transform) in query.iter_mut() {
         if let Some(&pos) = positions.get(node.index) {
             transform.translation = pos;
+        }
+        if transform.scale != target_scale {
+            transform.scale = target_scale;
         }
     }
 }

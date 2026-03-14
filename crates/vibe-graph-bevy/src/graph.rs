@@ -37,6 +37,7 @@ pub struct LayoutSettings {
     pub iterations_per_frame: usize,
     pub scale: GraphScale,
     pub custom_graph_path: Option<String>,
+    pub node_size: f32,
 }
 
 impl Default for LayoutSettings {
@@ -46,6 +47,7 @@ impl Default for LayoutSettings {
             iterations_per_frame: 10,
             scale: GraphScale::Medium,
             custom_graph_path: None,
+            node_size: 1.0,
         }
     }
 }
