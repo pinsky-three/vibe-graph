@@ -14,6 +14,7 @@ pub struct GraphLayout {
     pub iterations_per_frame: usize,
     #[allow(dead_code)]
     pub labels: Vec<String>,
+    #[allow(dead_code)]
     pub source_graph: Option<vibe_graph_core::SourceCodeGraph>,
 }
 

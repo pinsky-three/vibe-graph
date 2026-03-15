@@ -18,6 +18,7 @@ pub struct SearchState {
     pub index: Option<vibe_graph_semantic::VectorIndex>,
     #[cfg(feature = "semantic")]
     pub embedder: Option<std::sync::Arc<dyn vibe_graph_semantic::Embedder>>,
+    #[allow(dead_code)]
     pub is_initialized: bool,
 }
 
@@ -60,6 +61,7 @@ fn keyboard_controls(keys: Res<ButtonInput<KeyCode>>, mut layout: ResMut<GraphLa
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn node_hover_highlight(
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window>,
@@ -136,6 +138,7 @@ fn node_hover_highlight(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lasso_interaction(
     mut lasso: ResMut<LassoState>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -157,13 +160,15 @@ fn lasso_interaction(
     }
 
     let Ok(window) = windows.single() else { return };
-    let Some(cursor_pos) = window.cursor_position() else { return };
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
 
     if mouse.just_pressed(MouseButton::Left) {
         lasso.is_drawing = true;
         lasso.points.clear();
         lasso.points.push(cursor_pos);
-        
+
         // Clear previous selection
         for entity in selected_q.iter() {
             commands.entity(entity).remove::<Selected>();
@@ -176,13 +181,17 @@ fn lasso_interaction(
         }
     } else if mouse.just_released(MouseButton::Left) && lasso.is_drawing {
         lasso.is_drawing = false;
-        
+
         // Finalize lasso: select enclosed nodes
         if lasso.points.len() > 2 {
-            let Ok((camera, cam_transform)) = camera_q.single() else { return };
-            
+            let Ok((camera, cam_transform)) = camera_q.single() else {
+                return;
+            };
+
             for (entity, transform) in node_q.iter() {
-                if let Ok(viewport_pos) = camera.world_to_viewport(cam_transform, transform.translation()) {
+                if let Ok(viewport_pos) =
+                    camera.world_to_viewport(cam_transform, transform.translation())
+                {
                     if point_in_polygon(viewport_pos, &lasso.points) {
                         commands.entity(entity).insert(Selected);
                     }
@@ -192,6 +201,7 @@ fn lasso_interaction(
     }
 }
 
+#[allow(unused_variables, clippy::needless_return)]
 fn handle_semantic_search(
     mut search: ResMut<SearchState>,
     mut commands: Commands,
@@ -226,17 +236,20 @@ fn handle_semantic_search(
             search.is_initialized = true;
         }
 
-        if let (Some(embedder), Some(index), Some(source_graph)) = (&search.embedder, &search.index, &layout.source_graph) {
+        if let (Some(embedder), Some(index), Some(source_graph)) =
+            (&search.embedder, &search.index, &layout.source_graph)
+        {
             let engine = vibe_graph_semantic::SemanticSearch::new(embedder.clone());
             let sq = vibe_graph_semantic::SearchQuery::new(search.query.clone()).with_top_k(20);
-            
+
             if let Ok(results) = engine.search(&sq, index, source_graph) {
-                let hit_ids: std::collections::HashSet<_> = results.into_iter().map(|r| r.node_id).collect();
-                
+                let hit_ids: std::collections::HashSet<_> =
+                    results.into_iter().map(|r| r.node_id).collect();
+
                 for entity in selected_q.iter() {
                     commands.entity(entity).remove::<Selected>();
                 }
-                
+
                 for (entity, node) in node_q.iter() {
                     if let Some(sg_node) = source_graph.nodes.get(node.index) {
                         if hit_ids.contains(&sg_node.id) {
