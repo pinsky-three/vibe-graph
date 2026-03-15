@@ -10,7 +10,7 @@ pub struct LassoState {
     pub points: Vec<Vec2>,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct SearchState {
     pub query: String,
     pub active: bool,
@@ -20,6 +20,27 @@ pub struct SearchState {
     pub embedder: Option<std::sync::Arc<dyn vibe_graph_semantic::Embedder>>,
     #[allow(dead_code)]
     pub is_initialized: bool,
+    
+    // For handling async search results (e.g. from WASM fetch)
+    pub rx: crossbeam_channel::Receiver<Vec<u64>>,
+    pub tx: crossbeam_channel::Sender<Vec<u64>>,
+}
+
+impl Default for SearchState {
+    fn default() -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        Self {
+            query: String::new(),
+            active: false,
+            #[cfg(feature = "semantic")]
+            index: None,
+            #[cfg(feature = "semantic")]
+            embedder: None,
+            is_initialized: false,
+            rx,
+            tx,
+        }
+    }
 }
 
 pub struct InteractionPlugin;
@@ -209,6 +230,23 @@ fn handle_semantic_search(
     node_q: Query<(Entity, &GraphNode)>,
     selected_q: Query<Entity, With<Selected>>,
 ) {
+    // Process any incoming search results (from WASM fetch)
+    while let Ok(hits) = search.rx.try_recv() {
+        let hit_ids: std::collections::HashSet<_> = hits.into_iter().map(vibe_graph_core::NodeId).collect();
+        for entity in selected_q.iter() {
+            commands.entity(entity).remove::<Selected>();
+        }
+        for (entity, node) in node_q.iter() {
+            if let Some(source_graph) = &layout.source_graph {
+                if let Some(sg_node) = source_graph.nodes.get(node.index) {
+                    if hit_ids.contains(&sg_node.id) {
+                        commands.entity(entity).insert(Selected);
+                    }
+                }
+            }
+        }
+    }
+
     if !search.active {
         return;
     }
@@ -259,6 +297,40 @@ fn handle_semantic_search(
                 }
             }
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        
+        // For WASM, we call the backend API endpoint
+        let query = search.query.clone();
+        let tx = search.tx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let window = web_sys::window().expect("no window");
+            let encoded_query = js_sys::encode_uri_component(&query);
+            let url = format!("/api/semantic/search?q={}", encoded_query);
+            
+            if let Ok(resp_value) = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(&url)).await {
+                if let Ok(resp) = resp_value.dyn_into::<web_sys::Response>() {
+                    if let Ok(json_value) = wasm_bindgen_futures::JsFuture::from(resp.text().unwrap()).await {
+                        if let Some(json_str) = json_value.as_string() {
+                            #[derive(serde::Deserialize)]
+                            struct Hit { node_id: u64 }
+                            #[derive(serde::Deserialize)]
+                            struct Data { hits: Vec<Hit> }
+                            #[derive(serde::Deserialize)]
+                            struct ApiResp { data: Data }
+                            
+                            if let Ok(api_resp) = serde_json::from_str::<ApiResp>(&json_str) {
+                                let ids = api_resp.data.hits.into_iter().map(|h| h.node_id).collect();
+                                let _ = tx.send(ids);
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

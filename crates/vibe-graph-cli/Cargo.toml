@@ -30,7 +30,7 @@ native-viz = [
 llm-inference = ["vibe-graph-automaton/llm"]
 # Enable semantic search with local embeddings (fastembed/ONNX)
 # Build with: cargo build --release --features semantic
-semantic = ["vibe-graph-semantic/fastembed", "vibe-graph-mcp/semantic"]
+semantic = ["vibe-graph-semantic/fastembed", "vibe-graph-mcp/semantic", "vibe-graph-bevy?/semantic"]
 
 [dependencies]
 anyhow = { workspace = true }

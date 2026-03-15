@@ -9133,15 +9133,18 @@ dependencies = [
  "bevy_egui",
  "bevy_panorbit_camera",
  "console_error_panic_hook",
+ "crossbeam-channel",
  "getrandom 0.2.16",
  "js-sys",
  "petgraph",
  "rand 0.8.5",
+ "serde",
  "serde_json",
  "tracing",
  "vibe-graph-core",
  "vibe-graph-semantic",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
