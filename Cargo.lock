@@ -9132,12 +9132,17 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "bevy_panorbit_camera",
+ "console_error_panic_hook",
+ "getrandom 0.2.16",
+ "js-sys",
  "petgraph",
  "rand 0.8.5",
  "serde_json",
  "tracing",
  "vibe-graph-core",
  "vibe-graph-semantic",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -9167,12 +9172,12 @@ dependencies = [
  "uuid",
  "vibe-graph-api",
  "vibe-graph-automaton",
+ "vibe-graph-bevy",
  "vibe-graph-core",
  "vibe-graph-git",
  "vibe-graph-mcp",
  "vibe-graph-ops",
  "vibe-graph-semantic",
- "vibe-graph-viz",
  "walkdir",
 ]
 

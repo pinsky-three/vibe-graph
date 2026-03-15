@@ -1,12 +1,10 @@
-//! Native egui visualization command.
+//! Native bevy visualization command.
 //!
-//! Launches a native desktop window with the graph visualization.
+//! Launches a native desktop window with the 3D graph visualization.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use eframe::{run_native, NativeOptions};
-use vibe_graph_viz::VibeGraphApp;
 
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Store};
 
@@ -46,41 +44,13 @@ pub fn execute(path: &Path, automaton: bool) -> Result<()> {
         response.graph
     };
 
-    println!("🖼️  Launching native visualization...");
+    println!("🖼️  Launching 3D visualization...");
     if automaton {
-        println!("   Automaton mode: enabled");
-        println!("   Press 'A' to toggle, Space to play/pause");
+        println!("   Automaton mode: enabled (TODO: connect in bevy)");
     }
     println!();
 
-    let options = NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0])
-            .with_title(format!("Vibe Graph - {}", path.display())),
-        ..Default::default()
-    };
-
-    let path_clone = path.clone();
-    let automaton_enabled = automaton;
-
-    run_native(
-        "Vibe Graph",
-        options,
-        Box::new(move |cc| {
-            let mut app = VibeGraphApp::from_source_graph(cc, source_graph);
-
-            // Set project root for file viewer (resolves relative paths)
-            app.set_project_root(path_clone.clone());
-
-            if automaton_enabled {
-                app.set_automaton_path(path_clone.clone());
-                app.enable_automaton_mode();
-            }
-
-            Ok(Box::new(app))
-        }),
-    )
-    .map_err(|e| anyhow::anyhow!("Visualization error: {}", e))?;
+    vibe_graph_bevy::run_visualizer(source_graph);
 
     Ok(())
 }

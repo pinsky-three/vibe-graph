@@ -20,13 +20,11 @@ default = []
 # Native egui visualization with automaton temporal state viewer
 # Build with: cargo build --release --features native-viz
 native-viz = [
-    "vibe-graph-viz/native",
-    "vibe-graph-viz/automaton",
-    "eframe/default",
+    "vibe-graph-bevy/default",
 ]
 # GPU-accelerated Barnes-Hut layout (requires WebGPU/wgpu)
 # Build with: cargo build --release --features native-viz,gpu-layout
-gpu-layout = ["vibe-graph-viz/gpu-layout"]
+# gpu-layout = ["vibe-graph-viz/gpu-layout"]
 # Enable LLM-based automaton inference
 # Build with: cargo build --release --features llm-inference
 llm-inference = ["vibe-graph-automaton/llm"]
@@ -57,7 +55,7 @@ vibe-graph-git = { version = "0.3.1", path = "../vibe-graph-git" }
 vibe-graph-automaton = { version = "0.2.1", path = "../vibe-graph-automaton" }
 vibe-graph-mcp = { version = "0.2.2", path = "../vibe-graph-mcp" }
 vibe-graph-semantic = { version = "0.1.0", path = "../vibe-graph-semantic" }
-vibe-graph-viz = { version = "0.1.3", path = "../vibe-graph-viz", optional = true }
+vibe-graph-bevy = { version = "0.1.0", path = "../vibe-graph-bevy", optional = true }
 eframe = { workspace = true, optional = true }
 axum = { workspace = true }
 tower-http = { workspace = true }

@@ -124,8 +124,10 @@ impl GraphLayout {
     }
 }
 
-pub fn init_graph(mut commands: Commands, settings: Res<LayoutSettings>) {
-    let layout = if let Some(path) = &settings.custom_graph_path {
+pub fn init_graph(mut commands: Commands, settings: Res<LayoutSettings>, initial_graph: Option<Res<crate::InitialGraph>>) {
+    let layout = if let Some(init_graph) = initial_graph {
+        GraphLayout::from_source_code_graph(&init_graph.0, &settings)
+    } else if let Some(path) = &settings.custom_graph_path {
         tracing::info!("Loading custom graph from {}", path);
         if let Ok(file_content) = std::fs::read_to_string(path) {
             match serde_json::from_str::<vibe_graph_core::SourceCodeGraph>(&file_content) {

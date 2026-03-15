@@ -190,9 +190,9 @@ enum Commands {
         frontend_dir: Option<PathBuf>,
     },
 
-    /// Launch native egui visualization (requires --features native-viz).
+    /// Launch native 3D bevy visualization (requires --features native-viz).
     ///
-    /// Opens a native desktop window with the graph visualization.
+    /// Opens a native desktop window with the 3D graph visualization.
     /// Supports automaton mode to visualize temporal state evolution.
     ///
     /// Examples:

@@ -36,13 +36,15 @@ use vibe_graph_api::{
 };
 use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::{Config as OpsConfig, GraphRequest, OpsContext, Project, Store, SyncRequest};
-use vibe_graph_semantic::{SearchQuery as SemSearchQuery, SemanticSearch, SemanticStore, VectorIndex};
+use vibe_graph_semantic::{
+    SearchQuery as SemSearchQuery, SemanticSearch, SemanticStore, VectorIndex,
+};
 
 use crate::config::Config;
 
 // Embedded WASM assets (always included)
-static EMBEDDED_WASM: &[u8] = include_bytes!("../../assets/vibe_graph_viz_bg.wasm");
-static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_viz.js");
+static EMBEDDED_WASM: &[u8] = include_bytes!("../../assets/vibe_graph_bevy_bg.wasm");
+static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_bevy.js");
 
 // ─── Semantic search API ────────────────────────────────────────────────────
 
@@ -204,7 +206,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     </div>
     <canvas id="vibe-graph-canvas"></canvas>
     <script type="module">
-        import init from './vibe_graph_viz.js';
+        import init from './vibe_graph_bevy.js';
         const setText = (t) => document.getElementById('loading-text').textContent = t;
         
         try {
@@ -227,7 +229,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             
             // Initialize WASM
             setText('Loading visualization...');
-            await init('./vibe_graph_viz_bg.wasm');
+            await init('./vibe_graph_bevy_bg.wasm');
             document.getElementById('loading').classList.add('hidden');
             
             // Keep git changes fresh via polling
@@ -350,10 +352,10 @@ pub async fn execute(
     let mut app = Router::new()
         .nest("/api", api_router)
         .route("/", get(index_handler))
-        .route("/vibe_graph_viz_bg.wasm", get(wasm_handler))
-        .route("/vibe_graph_viz.js", get(js_handler))
-        .route("/wasm/vibe_graph_viz_bg.wasm", get(wasm_handler))
-        .route("/wasm/vibe_graph_viz.js", get(js_handler));
+        .route("/vibe_graph_bevy_bg.wasm", get(wasm_handler))
+        .route("/vibe_graph_bevy.js", get(js_handler))
+        .route("/wasm/vibe_graph_bevy_bg.wasm", get(wasm_handler))
+        .route("/wasm/vibe_graph_bevy.js", get(js_handler));
 
     if let Some(sem_router) = semantic_router {
         app = app.nest("/api/semantic", sem_router);
