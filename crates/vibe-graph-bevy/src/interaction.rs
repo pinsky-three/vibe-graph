@@ -1,7 +1,13 @@
+use std::collections::{HashMap, HashSet};
+
 use bevy::prelude::*;
 
 use crate::graph::GraphLayout;
 use crate::render::{GraphNode, Hovered, Selected};
+
+// =============================================================================
+// Resources
+// =============================================================================
 
 #[derive(Resource, Default)]
 pub struct LassoState {
@@ -20,8 +26,7 @@ pub struct SearchState {
     pub embedder: Option<std::sync::Arc<dyn vibe_graph_semantic::Embedder>>,
     #[allow(dead_code)]
     pub is_initialized: bool,
-    
-    // For handling async search results (e.g. from WASM fetch)
+
     pub rx: crossbeam_channel::Receiver<Vec<u64>>,
     pub tx: crossbeam_channel::Sender<Vec<u64>>,
 }
@@ -43,22 +48,181 @@ impl Default for SearchState {
     }
 }
 
+/// How neighborhood expansion combines with base selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NeighborhoodMode {
+    #[default]
+    Union,
+    Replace,
+    Accumulate,
+}
+
+impl NeighborhoodMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Union => "Union",
+            Self::Replace => "Replace",
+            Self::Accumulate => "Accumulate",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Union => "Base selection + neighbors at depth N",
+            Self::Replace => "Only neighbors at exactly depth N (no base)",
+            Self::Accumulate => "All nodes from depth 0 to N",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Union => Self::Replace,
+            Self::Replace => Self::Accumulate,
+            Self::Accumulate => Self::Union,
+        }
+    }
+}
+
+pub const MAX_NEIGHBORHOOD_DEPTH: i32 = 20;
+
+/// Persistent selection state tracking base selection and neighborhood expansion.
+#[derive(Resource)]
+pub struct SelectionState {
+    /// Node indices (into GraphLayout) that form the base selection.
+    pub base_selection: Vec<usize>,
+    /// Positive = ancestors (incoming edges), negative = descendants (outgoing).
+    pub neighborhood_depth: i32,
+    pub mode: NeighborhoodMode,
+    pub include_edges: bool,
+    /// Bumped whenever the effective selection changes, so the apply system reacts.
+    pub generation: u64,
+    last_applied_generation: u64,
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            base_selection: Vec::new(),
+            neighborhood_depth: 0,
+            mode: NeighborhoodMode::default(),
+            include_edges: true,
+            generation: 0,
+            last_applied_generation: 0,
+        }
+    }
+}
+
+impl SelectionState {
+    pub fn has_selection(&self) -> bool {
+        !self.base_selection.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.base_selection.clear();
+        self.neighborhood_depth = 0;
+        self.generation += 1;
+    }
+
+    pub fn set_selection(&mut self, nodes: Vec<usize>) {
+        self.base_selection = nodes;
+        self.neighborhood_depth = 0;
+        self.generation += 1;
+    }
+
+    pub fn bump(&mut self) {
+        self.generation += 1;
+    }
+
+    fn needs_apply(&self) -> bool {
+        self.generation != self.last_applied_generation
+    }
+
+    fn mark_applied(&mut self) {
+        self.last_applied_generation = self.generation;
+    }
+}
+
+// =============================================================================
+// Plugin
+// =============================================================================
+
 pub struct InteractionPlugin;
 
 impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LassoState>()
             .init_resource::<SearchState>()
+            .init_resource::<SelectionState>()
             .add_systems(
                 Update,
                 (
                     keyboard_controls.run_if(resource_exists::<GraphLayout>),
                     node_hover_highlight.run_if(resource_exists::<GraphLayout>),
+                    click_selection.run_if(resource_exists::<GraphLayout>),
                     lasso_interaction.run_if(resource_exists::<GraphLayout>),
                     disable_orbit_on_lasso,
                     handle_semantic_search.run_if(resource_exists::<GraphLayout>),
+                    apply_selection_state.run_if(resource_exists::<GraphLayout>),
                 ),
             );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn click_selection(
+    mouse: Res<ButtonInput<MouseButton>>,
+    hovered_q: Query<(Entity, &GraphNode), With<Hovered>>,
+    selected_q: Query<(Entity, &GraphNode), With<Selected>>,
+    mut commands: Commands,
+    mut contexts: bevy_egui::EguiContexts,
+    keys: Res<ButtonInput<KeyCode>>,
+    lasso: Res<LassoState>,
+    mut sel_state: ResMut<SelectionState>,
+) {
+    if lasso.enabled {
+        return;
+    }
+
+    if let Ok(ctx) = contexts.ctx_mut() {
+        if ctx.wants_pointer_input() || ctx.is_pointer_over_area() {
+            return;
+        }
+    }
+
+    if mouse.just_pressed(MouseButton::Left) {
+        let multi = keys.pressed(KeyCode::ShiftLeft)
+            || keys.pressed(KeyCode::ShiftRight)
+            || keys.pressed(KeyCode::SuperLeft)
+            || keys.pressed(KeyCode::SuperRight);
+
+        let hovered = hovered_q.iter().next();
+
+        if let Some((_entity, hovered_node)) = hovered {
+            if multi {
+                let idx = hovered_node.index;
+                if let Some(pos) = sel_state.base_selection.iter().position(|&i| i == idx) {
+                    sel_state.base_selection.remove(pos);
+                } else {
+                    sel_state.base_selection.push(idx);
+                }
+                sel_state.neighborhood_depth = 0;
+                sel_state.bump();
+            } else {
+                sel_state.set_selection(vec![hovered_node.index]);
+            }
+        } else if !multi {
+            sel_state.clear();
+        }
+
+        // Immediate ECS sync so highlight feels instant (apply_selection_state
+        // will reconcile on the same frame via generation check).
+        let effective_set: HashSet<usize> =
+            sel_state.base_selection.iter().copied().collect();
+        for (entity, node) in selected_q.iter() {
+            if !effective_set.contains(&node.index) {
+                commands.entity(entity).remove::<Selected>();
+            }
+        }
     }
 }
 
@@ -165,19 +329,24 @@ fn lasso_interaction(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
-    node_q: Query<(Entity, &GlobalTransform), With<GraphNode>>,
+    node_q: Query<(Entity, &GraphNode, &Transform)>,
     mut commands: Commands,
     selected_q: Query<Entity, With<Selected>>,
     mut contexts: bevy_egui::EguiContexts,
+    mut sel_state: ResMut<SelectionState>,
 ) {
     if !lasso.enabled {
         return;
     }
 
-    if let Ok(ctx) = contexts.ctx_mut() {
-        if ctx.wants_pointer_input() || ctx.is_pointer_over_area() {
-            return;
-        }
+    let pointer_over_ui = if let Ok(ctx) = contexts.ctx_mut() {
+        ctx.wants_pointer_input() || ctx.is_pointer_over_area()
+    } else {
+        false
+    };
+
+    if pointer_over_ui && !lasso.is_drawing {
+        return;
     }
 
     let Ok(window) = windows.single() else { return };
@@ -186,11 +355,14 @@ fn lasso_interaction(
     };
 
     if mouse.just_pressed(MouseButton::Left) {
+        if pointer_over_ui {
+            return;
+        }
+
         lasso.is_drawing = true;
         lasso.points.clear();
         lasso.points.push(cursor_pos);
 
-        // Clear previous selection
         for entity in selected_q.iter() {
             commands.entity(entity).remove::<Selected>();
         }
@@ -203,21 +375,23 @@ fn lasso_interaction(
     } else if mouse.just_released(MouseButton::Left) && lasso.is_drawing {
         lasso.is_drawing = false;
 
-        // Finalize lasso: select enclosed nodes
         if lasso.points.len() > 2 {
             let Ok((camera, cam_transform)) = camera_q.single() else {
                 return;
             };
 
-            for (entity, transform) in node_q.iter() {
+            let mut selected_indices = Vec::new();
+            for (entity, gn, transform) in node_q.iter() {
                 if let Ok(viewport_pos) =
-                    camera.world_to_viewport(cam_transform, transform.translation())
+                    camera.world_to_viewport(cam_transform, transform.translation)
                 {
                     if point_in_polygon(viewport_pos, &lasso.points) {
                         commands.entity(entity).insert(Selected);
+                        selected_indices.push(gn.index);
                     }
                 }
             }
+            sel_state.set_selection(selected_indices);
         }
     }
 }
@@ -349,4 +523,214 @@ fn point_in_polygon(point: Vec2, polygon: &[Vec2]) -> bool {
         j = i;
     }
     inside
+}
+
+// =============================================================================
+// Programmatic selection application
+// =============================================================================
+
+/// Reacts to SelectionState.generation changes and syncs ECS `Selected` markers.
+fn apply_selection_state(
+    mut sel: ResMut<SelectionState>,
+    layout: Res<GraphLayout>,
+    node_q: Query<(Entity, &GraphNode)>,
+    selected_q: Query<Entity, With<Selected>>,
+    mut commands: Commands,
+) {
+    if !sel.needs_apply() {
+        return;
+    }
+    sel.mark_applied();
+
+    let effective = if sel.neighborhood_depth == 0 || sel.base_selection.is_empty() {
+        sel.base_selection.iter().copied().collect::<HashSet<_>>()
+    } else {
+        expand_neighborhood(
+            &sel.base_selection,
+            sel.neighborhood_depth,
+            sel.mode,
+            layout.edges(),
+            layout.node_count,
+        )
+    };
+
+    for entity in selected_q.iter() {
+        commands.entity(entity).remove::<Selected>();
+    }
+    for (entity, node) in node_q.iter() {
+        if effective.contains(&node.index) {
+            commands.entity(entity).insert(Selected);
+        }
+    }
+}
+
+// =============================================================================
+// Topology queries (operate on GraphLayout edge list)
+// =============================================================================
+
+fn compute_degrees(edges: &[(usize, usize)], node_count: usize) -> (Vec<usize>, Vec<usize>) {
+    let mut in_deg = vec![0usize; node_count];
+    let mut out_deg = vec![0usize; node_count];
+    for &(src, tgt) in edges {
+        if src < node_count {
+            out_deg[src] += 1;
+        }
+        if tgt < node_count {
+            in_deg[tgt] += 1;
+        }
+    }
+    (in_deg, out_deg)
+}
+
+pub fn find_leaves(edges: &[(usize, usize)], node_count: usize) -> Vec<usize> {
+    let (_, out_deg) = compute_degrees(edges, node_count);
+    (0..node_count).filter(|&i| out_deg[i] == 0).collect()
+}
+
+pub fn find_roots(edges: &[(usize, usize)], node_count: usize) -> Vec<usize> {
+    let (in_deg, _) = compute_degrees(edges, node_count);
+    (0..node_count).filter(|&i| in_deg[i] == 0).collect()
+}
+
+pub fn find_orphans(edges: &[(usize, usize)], node_count: usize) -> Vec<usize> {
+    let (in_deg, out_deg) = compute_degrees(edges, node_count);
+    (0..node_count)
+        .filter(|&i| in_deg[i] == 0 && out_deg[i] == 0)
+        .collect()
+}
+
+pub fn find_hubs(edges: &[(usize, usize)], node_count: usize, top_n: usize) -> Vec<usize> {
+    let (in_deg, out_deg) = compute_degrees(edges, node_count);
+    let mut by_degree: Vec<(usize, usize)> = (0..node_count)
+        .map(|i| (i, in_deg[i] + out_deg[i]))
+        .collect();
+    by_degree.sort_by(|a, b| b.1.cmp(&a.1));
+    by_degree.into_iter().take(top_n).map(|(i, _)| i).collect()
+}
+
+pub fn find_by_kind(
+    source_graph: &vibe_graph_core::SourceCodeGraph,
+    kind: vibe_graph_core::GraphNodeKind,
+) -> Vec<usize> {
+    source_graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.kind == kind)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+pub fn invert_selection(current: &[usize], node_count: usize) -> Vec<usize> {
+    let set: HashSet<usize> = current.iter().copied().collect();
+    (0..node_count).filter(|i| !set.contains(i)).collect()
+}
+
+/// Collect per-kind counts from a SourceCodeGraph. Returns sorted (kind, count) pairs.
+pub fn kind_counts(
+    source_graph: &vibe_graph_core::SourceCodeGraph,
+) -> Vec<(vibe_graph_core::GraphNodeKind, usize)> {
+    let mut counts: HashMap<vibe_graph_core::GraphNodeKind, usize> = HashMap::new();
+    for node in &source_graph.nodes {
+        *counts.entry(node.kind).or_default() += 1;
+    }
+    let mut sorted: Vec<_> = counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted
+}
+
+// =============================================================================
+// Neighborhood expansion
+// =============================================================================
+
+fn build_adjacency(
+    edges: &[(usize, usize)],
+    node_count: usize,
+) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+    let mut children = vec![Vec::new(); node_count];
+    let mut parents = vec![Vec::new(); node_count];
+    for &(src, tgt) in edges {
+        if src < node_count && tgt < node_count {
+            children[src].push(tgt);
+            parents[tgt].push(src);
+        }
+    }
+    (children, parents)
+}
+
+pub fn expand_neighborhood(
+    base: &[usize],
+    depth: i32,
+    mode: NeighborhoodMode,
+    edges: &[(usize, usize)],
+    node_count: usize,
+) -> HashSet<usize> {
+    let (children, parents) = build_adjacency(edges, node_count);
+    let go_up = depth > 0;
+    let abs_depth = depth.unsigned_abs() as usize;
+
+    let base_set: HashSet<usize> = base.iter().copied().collect();
+
+    match mode {
+        NeighborhoodMode::Union => {
+            let mut result = base_set.clone();
+            let mut frontier = base_set;
+            for _ in 0..abs_depth {
+                let mut next = HashSet::new();
+                for &node in &frontier {
+                    let neighbors = if go_up { &parents[node] } else { &children[node] };
+                    for &n in neighbors {
+                        if result.insert(n) {
+                            next.insert(n);
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    break;
+                }
+                frontier = next;
+            }
+            result
+        }
+        NeighborhoodMode::Replace => {
+            let mut visited: HashSet<usize> = base.iter().copied().collect();
+            let mut frontier: HashSet<usize> = base.iter().copied().collect();
+            for _ in 0..abs_depth {
+                let mut next = HashSet::new();
+                for &node in &frontier {
+                    let neighbors = if go_up { &parents[node] } else { &children[node] };
+                    for &n in neighbors {
+                        if visited.insert(n) {
+                            next.insert(n);
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    break;
+                }
+                frontier = next;
+            }
+            frontier
+        }
+        NeighborhoodMode::Accumulate => {
+            let mut result: HashSet<usize> = base.iter().copied().collect();
+            let mut frontier: HashSet<usize> = base.iter().copied().collect();
+            for _ in 0..abs_depth {
+                let mut next = HashSet::new();
+                for &node in &frontier {
+                    let neighbors = if go_up { &parents[node] } else { &children[node] };
+                    for &n in neighbors {
+                        if result.insert(n) {
+                            next.insert(n);
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    break;
+                }
+                frontier = next;
+            }
+            result
+        }
+    }
 }

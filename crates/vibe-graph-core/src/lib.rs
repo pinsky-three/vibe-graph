@@ -176,7 +176,7 @@ pub struct NodeId(pub u64);
 pub struct EdgeId(pub u64);
 
 /// Enumerates the kinds of nodes that can populate the `SourceCodeGraph`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum GraphNodeKind {
     /// A logical module, typically aligned to a crate or package.
     Module,
