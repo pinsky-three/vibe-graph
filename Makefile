@@ -9,7 +9,7 @@
 # =============================================================================
 
 dev: ## Start dev server (builds WASM if needed, then serves)
-	@if [ ! -f crates/vibe-graph-cli/assets/vibe_graph_viz_bg.wasm ]; then \
+	@if [ ! -f crates/vibe-graph-cli/assets/vibe_graph_bevy_bg.wasm.br ] || [ ! -f crates/vibe-graph-cli/assets/vibe_graph_bevy.js ]; then \
 		echo "📦 WASM assets not found, building..."; \
 		$(MAKE) build-wasm; \
 	fi
@@ -27,12 +27,15 @@ check: ## Check all crates compile
 
 build-wasm: ## Build WASM visualization with WebGPU support
 	@command -v wasm-pack >/dev/null 2>&1 || { echo "Installing wasm-pack..."; cargo install wasm-pack; }
+	@command -v brotli >/dev/null 2>&1 || { echo "Missing brotli. Install with: brew install brotli"; exit 1; }
 	@echo "📦 Building WASM with WebGPU support..."
 	cd crates/vibe-graph-bevy && wasm-pack build --target web --release --out-dir pkg
 	@echo "📦 Copying to CLI assets..."
 	@mkdir -p crates/vibe-graph-cli/assets
 	@cp crates/vibe-graph-bevy/pkg/vibe_graph_bevy_bg.wasm crates/vibe-graph-cli/assets/
 	@cp crates/vibe-graph-bevy/pkg/vibe_graph_bevy.js crates/vibe-graph-cli/assets/
+	@echo "📦 Compressing WASM with Brotli..."
+	@brotli -q 11 -f -o crates/vibe-graph-cli/assets/vibe_graph_bevy_bg.wasm.br crates/vibe-graph-cli/assets/vibe_graph_bevy_bg.wasm
 	@echo "✅ WASM built"
 
 build: ## Build CLI with native viz and GPU layout
@@ -126,11 +129,13 @@ clean: ## Clean all build artifacts
 	cargo clean
 	rm -rf crates/vibe-graph-bevy/pkg
 	rm -rf crates/vibe-graph-cli/assets/*.wasm
+	rm -rf crates/vibe-graph-cli/assets/*.wasm.br
 	rm -rf crates/vibe-graph-cli/assets/*.js
 
 clean-wasm: ## Clean only WASM artifacts
 	rm -rf crates/vibe-graph-bevy/pkg
 	rm -rf crates/vibe-graph-cli/assets/*.wasm
+	rm -rf crates/vibe-graph-cli/assets/*.wasm.br
 	rm -rf crates/vibe-graph-cli/assets/*.js
 
 # =============================================================================
