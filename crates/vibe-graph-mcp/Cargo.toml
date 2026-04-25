@@ -14,7 +14,7 @@ semantic = ["dep:vibe-graph-semantic", "vibe-graph-semantic/fastembed"]
 
 [dependencies]
 vibe-graph-core = { version = "0.2.5", path = "../vibe-graph-core" }
-vibe-graph-ops = { version = "0.2.4", path = "../vibe-graph-ops" }
+vibe-graph-ops = { version = "0.2.5", path = "../vibe-graph-ops" }
 vibe-graph-git = { version = "0.3.2", path = "../vibe-graph-git" }
 vibe-graph-semantic = { path = "../vibe-graph-semantic", optional = true }
 
