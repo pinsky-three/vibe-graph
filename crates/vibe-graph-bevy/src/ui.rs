@@ -84,12 +84,19 @@ fn ui_panels(
         }
     }
 
-    egui::SidePanel::right("vibe_graph_panel")
-        .default_width(200.0)
-        .show(ctx, |ui| {
-            ui.heading("Vibe Graph");
-            ui.separator();
+    let viewport = ctx.viewport_rect();
+    let panel_width = 240.0;
+    let panel_pos = egui::pos2((viewport.right() - panel_width - 16.0).max(16.0), 48.0);
 
+    egui::Window::new("Vibe Graph")
+        .id(egui::Id::new("vibe_graph_floating_panel"))
+        .default_pos(panel_pos)
+        .default_size(egui::vec2(panel_width, viewport.height().min(680.0)))
+        .max_height((viewport.height() - 32.0).max(240.0))
+        .resizable(true)
+        .collapsible(true)
+        .vscroll(true)
+        .show(ctx, |ui| {
             // ── Graph Info ──────────────────────────────────────────
             egui::CollapsingHeader::new("Graph Info")
                 .default_open(true)
