@@ -9,7 +9,14 @@ homepage = "https://github.com/pinsky-three/vibe-graph"
 readme = "README.md"
 keywords = ["cli", "codebase", "analysis", "documentation", "workspace"]
 categories = ["command-line-utilities", "development-tools"]
-include = ["src/**/*", "templates/**/*", "assets/**/*", "LICENSE", "README.md"]
+include = [
+    "src/**/*",
+    "templates/**/*",
+    "assets/vibe_graph_bevy.js",
+    "assets/vibe_graph_bevy_bg.wasm.br",
+    "LICENSE",
+    "README.md",
+]
 
 [[bin]]
 name = "vg"

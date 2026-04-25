@@ -42,8 +42,9 @@ use vibe_graph_semantic::{
 
 use crate::config::Config;
 
-// Embedded WASM assets (always included)
-static EMBEDDED_WASM: &[u8] = include_bytes!("../../assets/vibe_graph_bevy_bg.wasm");
+// Embedded WASM assets (always included). The WASM is stored pre-compressed so
+// the published CLI crate stays under crates.io's upload limit.
+static EMBEDDED_WASM_BR: &[u8] = include_bytes!("../../assets/vibe_graph_bevy_bg.wasm.br");
 static EMBEDDED_JS: &[u8] = include_bytes!("../../assets/vibe_graph_bevy.js");
 
 // ─── Semantic search API ────────────────────────────────────────────────────
@@ -388,7 +389,14 @@ async fn index_handler() -> Html<&'static str> {
 
 /// Handler for WASM binary.
 async fn wasm_handler() -> Response {
-    ([(header::CONTENT_TYPE, "application/wasm")], EMBEDDED_WASM).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, "application/wasm"),
+            (header::CONTENT_ENCODING, "br"),
+        ],
+        EMBEDDED_WASM_BR,
+    )
+        .into_response()
 }
 
 /// Handler for JS glue code.

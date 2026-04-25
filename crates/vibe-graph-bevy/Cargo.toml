@@ -3,6 +3,9 @@ name = "vibe-graph-bevy"
 version = "0.1.0"
 edition.workspace = true
 description = "3D force-directed graph visualizer using Bevy"
+license = "MIT"
+repository = "https://github.com/pinsky-three/vibe-graph"
+homepage = "https://github.com/pinsky-three/vibe-graph"
 
 [lib]
 name = "vibe_graph_bevy"
@@ -26,8 +29,8 @@ bevy = { version = "0.18", features = ["wayland"] }
 bevy_egui = "0.39"
 bevy_panorbit_camera = "0.34"
 petgraph = { workspace = true }
-vibe-graph-core = { path = "../vibe-graph-core" }
-vibe-graph-semantic = { path = "../vibe-graph-semantic", optional = true }
+vibe-graph-core = { version = "0.2.5", path = "../vibe-graph-core" }
+vibe-graph-semantic = { version = "0.1.0", path = "../vibe-graph-semantic", optional = true }
 rand = "0.8"
 tracing = { workspace = true }
 serde_json = { workspace = true }

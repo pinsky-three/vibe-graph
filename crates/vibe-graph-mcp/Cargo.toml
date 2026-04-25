@@ -16,7 +16,7 @@ semantic = ["dep:vibe-graph-semantic", "vibe-graph-semantic/fastembed"]
 vibe-graph-core = { version = "0.2.5", path = "../vibe-graph-core" }
 vibe-graph-ops = { version = "0.2.5", path = "../vibe-graph-ops" }
 vibe-graph-git = { version = "0.3.2", path = "../vibe-graph-git" }
-vibe-graph-semantic = { path = "../vibe-graph-semantic", optional = true }
+vibe-graph-semantic = { version = "0.1.0", path = "../vibe-graph-semantic", optional = true }
 
 # MCP SDK
 rmcp = { version = "0.13", features = ["server"] }
