@@ -20,7 +20,7 @@ gpu-layout = ["vibe-graph-layout-gpu"]
 semantic = ["vibe-graph-semantic/fastembed"]
 
 [dependencies]
-vibe-graph-core = { version = "0.2.4", path = "../vibe-graph-core" }
+vibe-graph-core = { version = "0.2.5", path = "../vibe-graph-core" }
 vibe-graph-automaton = { version = "0.2.1", path = "../vibe-graph-automaton", optional = true }
 vibe-graph-layout-gpu = { version = "0.1.1", path = "../vibe-graph-layout-gpu", optional = true }
 vibe-graph-semantic = { version = "0.1.0", path = "../vibe-graph-semantic", optional = true }
