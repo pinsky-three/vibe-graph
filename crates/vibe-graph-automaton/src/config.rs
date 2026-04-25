@@ -309,12 +309,31 @@ impl StabilityObjective {
             .unwrap_or("");
         matches!(
             ext,
-            "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "rb" | "ex" | "exs"
+            "rs" | "py"
+                | "js"
+                | "ts"
+                | "tsx"
+                | "jsx"
+                | "go"
+                | "java"
+                | "c"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "rb"
+                | "ex"
+                | "exs"
         )
     }
 
     /// Suggest the kind of work needed to close a gap, based on role + gap size.
-    pub fn suggest_action(&self, role: &str, gap: f32, in_degree: usize, has_test_neighbor: bool) -> &'static str {
+    pub fn suggest_action(
+        &self,
+        role: &str,
+        gap: f32,
+        in_degree: usize,
+        has_test_neighbor: bool,
+    ) -> &'static str {
         if gap <= 0.0 {
             return "none — at or above target";
         }

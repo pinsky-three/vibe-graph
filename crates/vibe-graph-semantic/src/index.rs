@@ -96,18 +96,17 @@ impl VectorIndex {
             })
             .collect();
 
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored.truncate(top_k);
         scored
     }
 
     /// Find entries with similarity above `threshold`, up to `top_k`.
-    pub fn search_above(
-        &self,
-        query: &Embedding,
-        top_k: usize,
-        threshold: f32,
-    ) -> Vec<SearchHit> {
+    pub fn search_above(&self, query: &Embedding, top_k: usize, threshold: f32) -> Vec<SearchHit> {
         self.search(query, top_k)
             .into_iter()
             .filter(|h| h.score >= threshold)

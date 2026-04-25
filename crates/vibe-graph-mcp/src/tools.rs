@@ -8,7 +8,7 @@ use vibe_graph_git::get_git_changes;
 use vibe_graph_ops::Store;
 
 #[cfg(feature = "semantic")]
-use vibe_graph_semantic::{Embedder, SemanticSearch, SearchQuery, VectorIndex};
+use vibe_graph_semantic::{Embedder, SearchQuery, SemanticSearch, VectorIndex};
 
 use crate::types::*;
 

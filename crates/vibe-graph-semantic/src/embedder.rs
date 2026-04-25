@@ -169,9 +169,10 @@ mod fastembed_backend {
     impl Embedder for FastEmbedBackend {
         fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
             let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-            let mut model = self.model.lock().map_err(|e| {
-                EmbedError::new(format!("fastembed lock poisoned: {e}"))
-            })?;
+            let mut model = self
+                .model
+                .lock()
+                .map_err(|e| EmbedError::new(format!("fastembed lock poisoned: {e}")))?;
             model
                 .embed(owned, None)
                 .map_err(|e| EmbedError::new(format!("fastembed embed: {e}")))

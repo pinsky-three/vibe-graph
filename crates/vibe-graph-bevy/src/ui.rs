@@ -3,10 +3,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 use crate::graph::{GraphLayout, LayoutSettings};
-use crate::interaction::{
-    self, LassoState, SearchState, SelectionState, MAX_NEIGHBORHOOD_DEPTH,
-};
-use crate::render::{GraphNode, Selected};
+use crate::interaction::{self, LassoState, SearchState, SelectionState, MAX_NEIGHBORHOOD_DEPTH};
+use crate::node_visual::{label_visible_for, visual_spec_for, NodeLabelMode, NodeRenderSettings};
+use crate::render::{GraphNode, Hovered, Selected};
 
 pub struct UiPlugin;
 
@@ -31,7 +30,10 @@ fn ui_panels(
     mut lasso: ResMut<LassoState>,
     mut search: ResMut<SearchState>,
     mut sel_state: ResMut<SelectionState>,
+    mut render_settings: ResMut<NodeRenderSettings>,
     selected_q: Query<&GraphNode, With<Selected>>,
+    label_node_q: Query<(&GraphNode, &Transform, Option<&Selected>, Option<&Hovered>)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
 ) {
     *frame_count += 1;
     if *frame_count < 3 {
@@ -52,6 +54,15 @@ fn ui_panels(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+
+    draw_graph_labels(
+        ctx,
+        &layout,
+        &render_settings,
+        settings.node_size,
+        &camera_q,
+        &label_node_q,
+    );
 
     // Draw Lasso overlay
     if lasso.is_drawing && lasso.points.len() > 1 {
@@ -280,8 +291,10 @@ fn ui_panels(
                             .on_hover_text("Invert current selection")
                             .clicked()
                         {
-                            let nodes =
-                                interaction::invert_selection(&sel_state.base_selection, node_count);
+                            let nodes = interaction::invert_selection(
+                                &sel_state.base_selection,
+                                node_count,
+                            );
                             sel_state.set_selection(nodes);
                         }
                     });
@@ -327,10 +340,7 @@ fn ui_panels(
                                 format!("+{} ancestors", sel_state.neighborhood_depth)
                             }
                             std::cmp::Ordering::Less => {
-                                format!(
-                                    "{} descendants",
-                                    sel_state.neighborhood_depth.abs()
-                                )
+                                format!("{} descendants", sel_state.neighborhood_depth.abs())
                             }
                             std::cmp::Ordering::Equal => "base selection".to_string(),
                         };
@@ -406,9 +416,110 @@ fn ui_panels(
             egui::CollapsingHeader::new("Style")
                 .default_open(false)
                 .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut settings.node_size, 0.1..=5.0).text("node_size"));
+                    ui.separator();
+                    ui.checkbox(&mut render_settings.labels_enabled, "show labels");
+                    ui.horizontal(|ui| {
+                        ui.label("label mode:");
+                        if ui
+                            .button(render_settings.label_mode.label())
+                            .on_hover_text(render_settings.label_mode.description())
+                            .clicked()
+                        {
+                            render_settings.label_mode = render_settings.label_mode.next();
+                        }
+                    });
+                    ui.add_enabled(
+                        render_settings.label_mode == NodeLabelMode::Capped,
+                        egui::Slider::new(&mut render_settings.max_labels, 25..=2000)
+                            .text("label cap"),
+                    );
                     ui.add(
-                        egui::Slider::new(&mut settings.node_size, 0.1..=5.0).text("node_size"),
+                        egui::Slider::new(&mut render_settings.label_scale, 0.2..=3.0)
+                            .text("label scale"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut render_settings.truncate_len, 8..=64)
+                            .text("label chars"),
                     );
                 });
         });
+}
+
+fn draw_graph_labels(
+    ctx: &egui::Context,
+    layout: &GraphLayout,
+    render_settings: &NodeRenderSettings,
+    node_size: f32,
+    camera_q: &Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    node_q: &Query<(&GraphNode, &Transform, Option<&Selected>, Option<&Hovered>)>,
+) {
+    if !render_settings.labels_enabled {
+        return;
+    }
+
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("graph_labels_layer"),
+    ));
+    let font_size = (10.0 * render_settings.label_scale).clamp(8.0, 30.0);
+    let screen_rect = ctx.viewport_rect();
+
+    for (node, transform, selected, hovered) in node_q.iter() {
+        let highlighted = selected.is_some() || hovered.is_some();
+        if !label_visible_for(render_settings, layout.node_count, highlighted) {
+            continue;
+        }
+
+        let spec = visual_spec_for(layout, render_settings, node_size, node.index);
+        let Ok(viewport_pos) = camera.world_to_viewport(camera_transform, transform.translation)
+        else {
+            continue;
+        };
+
+        let pos = egui::pos2(
+            viewport_pos.x,
+            viewport_pos.y - (spec.radius * 8.0 + 10.0) * render_settings.label_scale,
+        );
+        if !screen_rect.expand(80.0).contains(pos) {
+            continue;
+        }
+
+        let color = if hovered.is_some() {
+            egui::Color32::from_rgb(255, 220, 40)
+        } else if selected.is_some() {
+            egui::Color32::from_rgb(255, 45, 105)
+        } else {
+            label_color(spec.kind)
+        };
+
+        painter.text(
+            pos + egui::vec2(1.0, 1.0),
+            egui::Align2::CENTER_CENTER,
+            &spec.label,
+            egui::FontId::monospace(font_size),
+            egui::Color32::from_black_alpha(210),
+        );
+        painter.text(
+            pos,
+            egui::Align2::CENTER_CENTER,
+            spec.label,
+            egui::FontId::monospace(font_size),
+            color,
+        );
+    }
+}
+
+fn label_color(kind: Option<vibe_graph_core::GraphNodeKind>) -> egui::Color32 {
+    match kind {
+        Some(vibe_graph_core::GraphNodeKind::Directory) => egui::Color32::from_rgb(125, 255, 170),
+        Some(vibe_graph_core::GraphNodeKind::File) => egui::Color32::from_rgb(185, 230, 255),
+        Some(vibe_graph_core::GraphNodeKind::Module) => egui::Color32::from_rgb(225, 185, 255),
+        Some(vibe_graph_core::GraphNodeKind::Test) => egui::Color32::from_rgb(255, 210, 145),
+        _ => egui::Color32::from_rgb(230, 240, 255),
+    }
 }

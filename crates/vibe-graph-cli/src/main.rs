@@ -385,7 +385,7 @@ enum Commands {
         /// Group by row for lattice strategy.
         #[arg(long)]
         group_by_row: bool,
-        
+
         /// Dry run (print structure without writing).
         #[arg(long)]
         dry_run: bool,
@@ -972,8 +972,8 @@ async fn main() -> Result<()> {
             targets,
         } => {
             commands::run::execute(
-                &ctx, &path, force, once, interval, json, snapshot, top, max_ticks,
-                goal, targets, scripts,
+                &ctx, &path, force, once, interval, json, snapshot, top, max_ticks, goal, targets,
+                scripts,
             )
             .await?;
         }
@@ -983,13 +983,21 @@ async fn main() -> Result<()> {
             let config_path = path.join(vibe_graph_automaton::CONFIG_FILENAME);
 
             if config_path.exists() {
-                eprintln!("⚠ {} already exists at {}", vibe_graph_automaton::CONFIG_FILENAME, config_path.display());
+                eprintln!(
+                    "⚠ {} already exists at {}",
+                    vibe_graph_automaton::CONFIG_FILENAME,
+                    config_path.display()
+                );
                 eprintln!("  Delete it first if you want to regenerate.");
                 std::process::exit(1);
             }
 
             let project_type = vibe_graph_automaton::detect_project_type(&path);
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("project").to_string();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("project")
+                .to_string();
 
             let toml_content = if workspace {
                 eprintln!("🔍 Generating workspace config for: {}", name);
@@ -1026,18 +1034,32 @@ async fn main() -> Result<()> {
                     }
                     if let Some(ref proc) = config.process {
                         eprintln!("\nManaged process:");
-                        eprintln!("  {:<12} {} (restart: {})", "[process]", proc.cmd, proc.restart);
+                        eprintln!(
+                            "  {:<12} {} (restart: {})",
+                            "[process]", proc.cmd, proc.restart
+                        );
                     }
                 }
                 Some(script_name) => {
-                    let cmd = config.scripts.get(&script_name).cloned().unwrap_or_else(|| {
-                        eprintln!("Unknown script: \"{}\"", script_name);
-                        if !config.scripts.is_empty() {
-                            let names: Vec<_> = config.scripts.keys().collect();
-                            eprintln!("Available: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
-                        }
-                        std::process::exit(1);
-                    });
+                    let cmd = config
+                        .scripts
+                        .get(&script_name)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            eprintln!("Unknown script: \"{}\"", script_name);
+                            if !config.scripts.is_empty() {
+                                let names: Vec<_> = config.scripts.keys().collect();
+                                eprintln!(
+                                    "Available: {}",
+                                    names
+                                        .iter()
+                                        .map(|s| s.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                );
+                            }
+                            std::process::exit(1);
+                        });
 
                     // Spawn with inherited stdio for full terminal passthrough
                     let status = std::process::Command::new("sh")
@@ -1236,7 +1258,15 @@ async fn main() -> Result<()> {
             group_by_row,
             dry_run,
         } => {
-            commands::architect::execute(&input, &output, temp, &strategy, width, group_by_row, dry_run)?;
+            commands::architect::execute(
+                &input,
+                &output,
+                temp,
+                &strategy,
+                width,
+                group_by_row,
+                dry_run,
+            )?;
         }
     }
 

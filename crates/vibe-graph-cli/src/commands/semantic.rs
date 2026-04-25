@@ -38,9 +38,7 @@ pub(crate) fn make_embedder(workspace: &Path) -> (Arc<dyn vibe_graph_semantic::E
     #[cfg(not(feature = "semantic"))]
     {
         let _ = workspace;
-        eprintln!(
-            "   ℹ Built without `semantic` feature. Using no-op embedder."
-        );
+        eprintln!("   ℹ Built without `semantic` feature. Using no-op embedder.");
         eprintln!("   Rebuild with: cargo build --features semantic");
     }
 
@@ -75,9 +73,16 @@ pub fn index(path: &Path, force: bool, deep: bool) -> Result<()> {
 
     if !force && store.exists() {
         if let Ok(Some((_idx, meta))) = store.load() {
-            let current = meta.extra.get("depth").map(|s| s.as_str()).unwrap_or("fast");
+            let current = meta
+                .extra
+                .get("depth")
+                .map(|s| s.as_str())
+                .unwrap_or("fast");
             if current == depth_label {
-                eprintln!("✅ Semantic index ({}) already exists. Use --force to rebuild.", current);
+                eprintln!(
+                    "✅ Semantic index ({}) already exists. Use --force to rebuild.",
+                    current
+                );
                 eprintln!(
                     "   Model: {}, Entries: {}, Dim: {}",
                     meta.model_name, meta.entry_count, meta.dimension
@@ -151,7 +156,10 @@ fn spawn_deep_worker(path: &Path, force: bool) -> Result<()> {
 
     let child = cmd.spawn().context("Failed to spawn background indexer")?;
 
-    eprintln!("🔍 Deep indexing started in background (pid {})", child.id());
+    eprintln!(
+        "🔍 Deep indexing started in background (pid {})",
+        child.id()
+    );
     eprintln!("   Log: .self/semantic/deep-index.log");
     eprintln!("   Check progress: vg semantic status");
     Ok(())
@@ -299,7 +307,11 @@ pub fn status(path: &Path) -> Result<()> {
     println!(
         "   Depth:      {} {}",
         depth,
-        if depth == "fast" { "(filenames only — run with --deep for richer embeddings)" } else { "(file content included)" }
+        if depth == "fast" {
+            "(filenames only — run with --deep for richer embeddings)"
+        } else {
+            "(file content included)"
+        }
     );
 
     #[cfg(feature = "semantic")]
@@ -311,8 +323,13 @@ pub fn status(path: &Path) -> Result<()> {
     if log_path.exists() {
         if let Ok(log) = std::fs::read_to_string(&log_path) {
             let done = log.contains("Saved to");
-            println!("   Deep index: {}",
-                if done { "✅ complete" } else { "🔄 in progress" },
+            println!(
+                "   Deep index: {}",
+                if done {
+                    "✅ complete"
+                } else {
+                    "🔄 in progress"
+                },
             );
         }
     }
@@ -366,9 +383,7 @@ pub fn models() -> Result<()> {
             } else {
                 ""
             };
-            println!(
-                "   {code:<50} {dim:>5}  {desc}{marker}",
-            );
+            println!("   {code:<50} {dim:>5}  {desc}{marker}",);
         }
     }
 

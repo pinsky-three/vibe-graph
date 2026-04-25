@@ -702,11 +702,7 @@ pub fn detect_lean_references(content: &str, source_path: &Path) -> Vec<SourceRe
             .or_else(|| trimmed.strip_prefix("import "));
 
         if let Some(module_path) = import_part {
-            let module = module_path
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim();
+            let module = module_path.split_whitespace().next().unwrap_or("").trim();
 
             if !module.is_empty() {
                 let file_path = module.replace('.', "/");
@@ -722,11 +718,7 @@ pub fn detect_lean_references(content: &str, source_path: &Path) -> Vec<SourceRe
         // `open Topology Filter in` or `open Topology`
         // These represent namespace dependencies worth capturing.
         if let Some(rest) = trimmed.strip_prefix("open ") {
-            let namespaces = rest
-                .split(" in")
-                .next()
-                .unwrap_or(rest)
-                .split_whitespace();
+            let namespaces = rest.split(" in").next().unwrap_or(rest).split_whitespace();
 
             for ns in namespaces {
                 let ns = ns.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '.');
@@ -1567,7 +1559,9 @@ def someDef := sorry
             .collect();
         assert_eq!(import_targets.len(), 3);
         assert!(import_targets.contains(&"Mathlib/Topology/ContinuousMap/Compact.lean".to_string()));
-        assert!(import_targets.contains(&"Mathlib/Topology/MetricSpace/Ultra/Basic.lean".to_string()));
+        assert!(
+            import_targets.contains(&"Mathlib/Topology/MetricSpace/Ultra/Basic.lean".to_string())
+        );
         assert!(import_targets.contains(&"Aesop.lean".to_string()));
 
         let uses_targets: Vec<String> = refs

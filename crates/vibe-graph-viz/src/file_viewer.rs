@@ -87,49 +87,47 @@ impl FileWindow {
             .resizable(true)
             .collapsible(true)
             .scroll(false)
-            .show(ctx, |ui| {
-                match &state_snapshot {
-                    ContentState::Loading => {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(40.0);
-                            ui.spinner();
-                            ui.label("Loading file...");
-                        });
-                    }
-                    ContentState::Error(err) => {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(20.0);
-                            ui.label(
-                                egui::RichText::new("⚠ Error")
-                                    .color(egui::Color32::from_rgb(255, 80, 80))
-                                    .strong(),
-                            );
-                            ui.label(err.as_str());
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(&path_display)
-                                    .small()
-                                    .color(egui::Color32::GRAY),
-                            );
-                        });
-                    }
-                    ContentState::Loaded {
+            .show(ctx, |ui| match &state_snapshot {
+                ContentState::Loading => {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(40.0);
+                        ui.spinner();
+                        ui.label("Loading file...");
+                    });
+                }
+                ContentState::Error(err) => {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            egui::RichText::new("⚠ Error")
+                                .color(egui::Color32::from_rgb(255, 80, 80))
+                                .strong(),
+                        );
+                        ui.label(err.as_str());
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(&path_display)
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    });
+                }
+                ContentState::Loaded {
+                    content,
+                    language,
+                    total_lines,
+                    size_bytes,
+                    resolved_path,
+                } => {
+                    render_loaded_content(
+                        ui,
+                        &mut font_size,
                         content,
                         language,
-                        total_lines,
-                        size_bytes,
+                        *total_lines,
+                        *size_bytes,
                         resolved_path,
-                    } => {
-                        render_loaded_content(
-                            ui,
-                            &mut font_size,
-                            content,
-                            language,
-                            *total_lines,
-                            *size_bytes,
-                            resolved_path,
-                        );
-                    }
+                    );
                 }
             });
 
@@ -138,7 +136,6 @@ impl FileWindow {
         self.font_size = font_size;
         self.open
     }
-
 }
 
 /// Render loaded file content (free function to avoid borrow conflicts).
@@ -172,11 +169,7 @@ fn render_loaded_content(
                 .show_value(false);
             ui.add(slider).on_hover_text(format!("{:.0}px", *font_size));
 
-            ui.label(
-                egui::RichText::new("Aa")
-                    .small()
-                    .color(egui::Color32::GRAY),
-            );
+            ui.label(egui::RichText::new("Aa").small().color(egui::Color32::GRAY));
 
             ui.separator();
 

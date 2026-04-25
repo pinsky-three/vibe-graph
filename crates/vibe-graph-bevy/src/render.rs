@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::graph::GraphLayout;
+use crate::node_visual::{scaled_node_radius, visual_spec_for, NodeRenderSettings};
 
 #[derive(Component)]
 pub struct GraphNode {
@@ -30,7 +31,8 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_assets)
+        app.init_resource::<NodeRenderSettings>()
+            .add_systems(Startup, setup_assets)
             .add_systems(
                 Update,
                 (
@@ -98,6 +100,7 @@ fn spawn_nodes(
     mut commands: Commands,
     layout: Res<GraphLayout>,
     settings: Res<crate::graph::LayoutSettings>,
+    render_settings: Res<NodeRenderSettings>,
     assets: Res<GraphAssets>,
 ) {
     let use_lod = layout.node_count > 2000;
@@ -107,14 +110,13 @@ fn spawn_nodes(
         assets.node_mesh.clone()
     };
 
-    let node_radius = node_radius_for_scale(layout.node_count) * settings.node_size;
-
     for (i, &pos) in layout.positions().iter().enumerate() {
+        let spec = visual_spec_for(&layout, &render_settings, settings.node_size, i);
         commands.spawn((
-            GraphNode { index: i },
+            GraphNode { index: spec.index },
             Mesh3d(mesh.clone()),
             MeshMaterial3d(assets.materials.default_mat.clone()),
-            Transform::from_translation(pos).with_scale(Vec3::splat(node_radius)),
+            Transform::from_translation(pos).with_scale(Vec3::splat(spec.radius)),
         ));
     }
 }
@@ -125,7 +127,7 @@ fn update_node_positions(
     mut query: Query<(&GraphNode, &mut Transform)>,
 ) {
     let positions = layout.positions();
-    let target_radius = node_radius_for_scale(layout.node_count) * settings.node_size;
+    let target_radius = scaled_node_radius(layout.node_count, settings.node_size);
     let target_scale = Vec3::splat(target_radius);
 
     for (node, mut transform) in query.iter_mut() {
@@ -142,7 +144,7 @@ fn draw_edges(layout: Res<GraphLayout>, mut gizmos: Gizmos) {
     if layout.edge_count > 5000 {
         return; // Rendering too many gizmo lines tanks FPS
     }
-    
+
     let positions = layout.positions();
     let edge_color = Color::srgba(0.3, 0.5, 0.7, 0.12);
 
@@ -174,15 +176,5 @@ fn highlight_selected(
         if mat.0 != *target_mat {
             mat.0 = target_mat.clone();
         }
-    }
-}
-
-fn node_radius_for_scale(node_count: usize) -> f32 {
-    if node_count >= 5000 {
-        0.3
-    } else if node_count >= 1000 {
-        0.5
-    } else {
-        0.8
     }
 }

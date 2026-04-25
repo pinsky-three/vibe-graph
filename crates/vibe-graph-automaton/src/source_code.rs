@@ -1225,10 +1225,43 @@ impl Perturbation {
     /// overly broad matching.
     fn goal_keywords(&self) -> Vec<String> {
         const STOP_WORDS: &[&str] = &[
-            "a", "an", "the", "to", "for", "of", "in", "on", "at", "by", "is", "it",
-            "and", "or", "but", "not", "with", "from", "that", "this", "add", "implement",
-            "create", "make", "build", "fix", "update", "remove", "delete", "change",
-            "improve", "new", "all", "each", "every", "some", "any",
+            "a",
+            "an",
+            "the",
+            "to",
+            "for",
+            "of",
+            "in",
+            "on",
+            "at",
+            "by",
+            "is",
+            "it",
+            "and",
+            "or",
+            "but",
+            "not",
+            "with",
+            "from",
+            "that",
+            "this",
+            "add",
+            "implement",
+            "create",
+            "make",
+            "build",
+            "fix",
+            "update",
+            "remove",
+            "delete",
+            "change",
+            "improve",
+            "new",
+            "all",
+            "each",
+            "every",
+            "some",
+            "any",
         ];
 
         self.goal
@@ -1326,7 +1359,12 @@ pub fn run_evolution_plan(
 
     for node in &graph.nodes {
         // Check for inline tests via metadata (set during graph build)
-        if node.metadata.get("has_tests").map(|v| v == "true").unwrap_or(false) {
+        if node
+            .metadata
+            .get("has_tests")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
             has_test.insert(node.id, true);
         }
 
@@ -1432,13 +1470,16 @@ pub fn run_evolution_plan(
 
         if goal_matched {
             let base_boost = perturbation.map(|p| p.boost).unwrap_or(1.0);
-            let amplifier = if semantic_matched { 1.0 + sem_score.min(1.0) } else { 1.0 };
+            let amplifier = if semantic_matched {
+                1.0 + sem_score.min(1.0)
+            } else {
+                1.0
+            };
             priority *= base_boost * amplifier;
         }
 
-        let script_error_msg = script_feedback.and_then(|fb| {
-            fb.first_error_for(&node_config.path).map(|m| m.to_string())
-        });
+        let script_error_msg = script_feedback
+            .and_then(|fb| fb.first_error_for(&node_config.path).map(|m| m.to_string()));
         if script_error_msg.is_some() {
             priority *= 5.0;
         }
@@ -1582,8 +1623,7 @@ pub fn format_evolution_plan(plan: &EvolutionPlan) -> String {
     out.push('\n');
 
     // Top items
-    let has_semantic = plan.goal.is_some()
-        && plan.items.iter().any(|i| i.semantic_score > 0.01);
+    let has_semantic = plan.goal.is_some() && plan.items.iter().any(|i| i.semantic_score > 0.01);
 
     if !plan.items.is_empty() {
         out.push_str("## Priority Work Items\n\n");
@@ -1682,9 +1722,15 @@ impl TaskAction {
         let lower = action.to_lowercase();
         if lower.contains("test") {
             Self::AddTests
-        } else if lower.contains("documentation") || lower.contains("document") || lower.contains("docs") {
+        } else if lower.contains("documentation")
+            || lower.contains("document")
+            || lower.contains("docs")
+        {
             Self::AddDocs
-        } else if lower.contains("coupling") || lower.contains("interface") || lower.contains("extract") {
+        } else if lower.contains("coupling")
+            || lower.contains("interface")
+            || lower.contains("extract")
+        {
             Self::ReduceCoupling
         } else if lower.contains("goal-directed") {
             Self::GoalDirected
@@ -1835,8 +1881,12 @@ fn collect_neighbors(
     let mut result = Vec::new();
 
     let edges: Box<dyn Iterator<Item = &vibe_graph_core::GraphEdge>> = match direction {
-        NeighborDirection::Incoming => Box::new(graph.edges.iter().filter(move |e| e.to == node_id)),
-        NeighborDirection::Outgoing => Box::new(graph.edges.iter().filter(move |e| e.from == node_id)),
+        NeighborDirection::Incoming => {
+            Box::new(graph.edges.iter().filter(move |e| e.to == node_id))
+        }
+        NeighborDirection::Outgoing => {
+            Box::new(graph.edges.iter().filter(move |e| e.from == node_id))
+        }
     };
 
     for edge in edges {
@@ -1906,14 +1956,31 @@ fn epoch_to_iso(epoch_secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let mut y = 1970u64;
     loop {
         let ydays = if is_leap(y) { 366 } else { 365 };
-        if days < ydays { break; }
+        if days < ydays {
+            break;
+        }
         days -= ydays;
         y += 1;
     }
-    let mdays = [31, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mdays = [
+        31,
+        if is_leap(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 0u64;
     for md in mdays {
-        if days < md { break; }
+        if days < md {
+            break;
+        }
         days -= md;
         m += 1;
     }
@@ -1938,7 +2005,11 @@ pub fn build_next_task(
     semantic_neighbors: Vec<TaskNeighbor>,
 ) -> NextTask {
     let prefix = shorten_prefix(project_name, &item.path);
-    let short_path = item.path.strip_prefix(&prefix).unwrap_or(&item.path).to_string();
+    let short_path = item
+        .path
+        .strip_prefix(&prefix)
+        .unwrap_or(&item.path)
+        .to_string();
     let node_id = NodeId(item.node_id);
 
     let generated_at = {
@@ -1961,25 +2032,34 @@ pub fn build_next_task(
         item.in_degree,
         affected_crates,
         if affected_crates != 1 { "s" } else { "" },
-        if item.has_test_neighbor { "has tests" } else { "no tests" },
+        if item.has_test_neighbor {
+            "has tests"
+        } else {
+            "no tests"
+        },
         item.gap,
     );
 
     let sem_note = if item.semantic_score > 0.01 {
-        format!("; semantic={:.2}, amplifier={:.1}x", item.semantic_score, 1.0 + item.semantic_score.min(1.0))
+        format!(
+            "; semantic={:.2}, amplifier={:.1}x",
+            item.semantic_score,
+            1.0 + item.semantic_score.min(1.0)
+        )
     } else {
         String::new()
     };
-    let goal_note = if perturbation.is_some() { "; goal boost applied" } else { "" };
+    let goal_note = if perturbation.is_some() {
+        "; goal boost applied"
+    } else {
+        ""
+    };
 
     let priority_explanation = format!(
         "score = 0.6 * structural({:.3}) + 0.4 * propagated({:.3}); \
          structural = gap({:.2}) * (1 + 3 * in_degree_norm); \
          {} dependents amplify cascading impact{goal_note}{sem_note}",
-        item.structural_score,
-        item.propagated_score,
-        item.gap,
-        item.in_degree,
+        item.structural_score, item.propagated_score, item.gap, item.in_degree,
     );
 
     // Collect deduplicated neighbors
@@ -1995,7 +2075,8 @@ pub fn build_next_task(
     );
 
     // Steps + acceptance criteria + commands based on action type
-    let (steps, acceptance, commands) = generate_task_instructions(&action, &short_path, perturbation);
+    let (steps, acceptance, commands) =
+        generate_task_instructions(&action, &short_path, perturbation);
 
     let touch_only = vec![short_path.clone()];
 
@@ -2038,9 +2119,7 @@ pub fn build_next_task(
         target_stability: item.target_stability,
         semantic_score: item.semantic_score,
         goal: perturbation.map(|p| p.goal.clone()),
-        goal_targets: perturbation
-            .map(|p| p.targets.clone())
-            .unwrap_or_default(),
+        goal_targets: perturbation.map(|p| p.targets.clone()).unwrap_or_default(),
     }
 }
 
@@ -2049,7 +2128,10 @@ fn generate_task_instructions(
     target_path: &str,
     perturbation: Option<&Perturbation>,
 ) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let read_step = format!("Read `{}` and understand its current implementation", target_path);
+    let read_step = format!(
+        "Read `{}` and understand its current implementation",
+        target_path
+    );
 
     let (mut steps, mut acceptance) = match action {
         TaskAction::AddTests => (
@@ -2057,7 +2139,8 @@ fn generate_task_instructions(
                 read_step,
                 "Identify untested public API surface".to_string(),
                 "Create or extend the test file for this module".to_string(),
-                "Write at least: one happy-path test, one edge-case test, one failure test".to_string(),
+                "Write at least: one happy-path test, one edge-case test, one failure test"
+                    .to_string(),
                 "Ensure tests cover error handling paths".to_string(),
                 "Run tests and verify all pass".to_string(),
             ],
@@ -2100,7 +2183,9 @@ fn generate_task_instructions(
             ],
         ),
         TaskAction::GoalDirected => {
-            let goal_text = perturbation.map(|p| p.goal.as_str()).unwrap_or("the stated goal");
+            let goal_text = perturbation
+                .map(|p| p.goal.as_str())
+                .unwrap_or("the stated goal");
             (
                 vec![
                     read_step,
@@ -2151,7 +2236,10 @@ fn generate_task_instructions(
     acceptance.push("Re-run `vg run --once` to verify health score improves".to_string());
 
     if perturbation.is_some() && *action != TaskAction::GoalDirected {
-        steps.insert(1, "Consider how this change supports the active goal".to_string());
+        steps.insert(
+            1,
+            "Consider how this change supports the active goal".to_string(),
+        );
     }
 
     let commands = vec![
@@ -2192,15 +2280,16 @@ pub fn format_next_task_markdown(task: &NextTask) -> String {
 
     // Context
     out.push_str("## Context\n\n");
-    out.push_str(&format!("- **Rank**: #{} of {} candidates\n", task.rank, task.total_candidates));
+    out.push_str(&format!(
+        "- **Rank**: #{} of {} candidates\n",
+        task.rank, task.total_candidates
+    ));
     out.push_str(&format!("- **File**: `{}`\n", task.target));
     out.push_str(&format!("- **Action**: `{}`\n", task.action));
     out.push_str(&format!("- **Role**: `{}`\n", task.evidence.role));
     out.push_str(&format!(
         "- **Stability**: {:.2} → target {:.2} (gap: {:.2})\n",
-        task.current_stability,
-        task.target_stability,
-        task.evidence.stability_gap,
+        task.current_stability, task.target_stability, task.evidence.stability_gap,
     ));
     out.push_str(&format!(
         "- **Priority**: {:.3} — {}\n",
@@ -2215,7 +2304,10 @@ pub fn format_next_task_markdown(task: &NextTask) -> String {
         if task.evidence.has_tests { "yes" } else { "no" }
     ));
     if task.semantic_score > 0.01 {
-        out.push_str(&format!("- **Semantic relevance**: {:.2}\n", task.semantic_score));
+        out.push_str(&format!(
+            "- **Semantic relevance**: {:.2}\n",
+            task.semantic_score
+        ));
     }
     out.push('\n');
 
@@ -2482,10 +2574,7 @@ mod tests {
     #[test]
     fn test_perturbation_combined_matching() {
         // Both explicit targets and keyword matching should work together
-        let p = Perturbation::with_targets(
-            "add metrics endpoint",
-            vec!["src/api/".into()],
-        );
+        let p = Perturbation::with_targets("add metrics endpoint", vec!["src/api/".into()]);
         // Explicit target match
         assert!(p.matches_path("src/api/routes.rs"));
         // Keyword match ("metrics")
@@ -2504,10 +2593,7 @@ mod tests {
 
     #[test]
     fn test_perturbation_serde_roundtrip() {
-        let p = Perturbation::with_targets(
-            "add WebSocket support",
-            vec!["src/ws.rs".into()],
-        );
+        let p = Perturbation::with_targets("add WebSocket support", vec!["src/ws.rs".into()]);
         let json = serde_json::to_string(&p).unwrap();
         let p2: Perturbation = serde_json::from_str(&json).unwrap();
         assert_eq!(p2.goal, p.goal);

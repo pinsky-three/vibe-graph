@@ -15,13 +15,13 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use vibe_graph_automaton::{
-    build_next_task, format_behavioral_contracts, format_evolution_plan,
-    format_next_task_markdown, run_evolution_plan, run_impact_analysis, run_watch_scripts,
-    AutomatonDescription, AutomatonStore, DescriptionGenerator, GeneratorConfig, ImpactReport,
-    Perturbation, ProjectConfig, ScriptFeedback,
-};
 use super::process::ManagedProcess;
+use vibe_graph_automaton::{
+    build_next_task, format_behavioral_contracts, format_evolution_plan, format_next_task_markdown,
+    run_evolution_plan, run_impact_analysis, run_watch_scripts, AutomatonDescription,
+    AutomatonStore, DescriptionGenerator, GeneratorConfig, ImpactReport, Perturbation,
+    ProjectConfig, ScriptFeedback,
+};
 use vibe_graph_core::{NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest};
 use vibe_graph_semantic::VectorIndex;
@@ -60,7 +60,11 @@ pub async fn execute(
     let semantic_ctx: Option<(VectorIndex, Arc<dyn vibe_graph_semantic::Embedder>)> =
         semantic_index.and_then(|idx| {
             let (embedder, is_real) = super::semantic::make_embedder(&path);
-            if is_real { Some((idx, embedder)) } else { None }
+            if is_real {
+                Some((idx, embedder))
+            } else {
+                None
+            }
         });
 
     // ── Perturbation: resolve from CLI flags or persisted state ──────────
@@ -99,12 +103,29 @@ pub async fn execute(
         let project_config = ProjectConfig::resolve(&path, None);
         let objective = project_config.stability_objective();
         let goal_scores = goal_semantic_scores(&semantic_ctx, perturbation.as_ref());
-        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), None, goal_scores.as_ref()) {
+        match run_evolution_plan(
+            graph.clone(),
+            &description,
+            &objective,
+            perturbation.as_ref(),
+            None,
+            goal_scores.as_ref(),
+        ) {
             Ok(plan) if !plan.items.is_empty() => {
                 let commit = git_head_sha(&path);
                 let total = plan.items.len();
-                let sem_neighbors = semantic_neighbors_for(&semantic_ctx, &graph, plan.items[0].node_id);
-                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit, sem_neighbors);
+                let sem_neighbors =
+                    semantic_neighbors_for(&semantic_ctx, &graph, plan.items[0].node_id);
+                let task = build_next_task(
+                    &plan.items[0],
+                    &graph,
+                    &plan.project_name,
+                    perturbation.as_ref(),
+                    1,
+                    total,
+                    commit,
+                    sem_neighbors,
+                );
                 let json = serde_json::to_string_pretty(&task)?;
                 println!("{}", json);
             }
@@ -152,18 +173,37 @@ pub async fn execute(
 
         let objective = project_config.stability_objective();
         let goal_scores = goal_semantic_scores(&semantic_ctx, perturbation.as_ref());
-        match run_evolution_plan(graph.clone(), &description, &objective, perturbation.as_ref(), script_fb.as_ref(), goal_scores.as_ref()) {
+        match run_evolution_plan(
+            graph.clone(),
+            &description,
+            &objective,
+            perturbation.as_ref(),
+            script_fb.as_ref(),
+            goal_scores.as_ref(),
+        ) {
             Ok(plan) if !plan.items.is_empty() => {
                 let commit = git_head_sha(&path);
                 let total = plan.items.len();
-                let sem_neighbors = semantic_neighbors_for(&semantic_ctx, &graph, plan.items[0].node_id);
-                let task = build_next_task(&plan.items[0], &graph, &plan.project_name, perturbation.as_ref(), 1, total, commit, sem_neighbors);
+                let sem_neighbors =
+                    semantic_neighbors_for(&semantic_ctx, &graph, plan.items[0].node_id);
+                let task = build_next_task(
+                    &plan.items[0],
+                    &graph,
+                    &plan.project_name,
+                    perturbation.as_ref(),
+                    1,
+                    total,
+                    commit,
+                    sem_neighbors,
+                );
                 let markdown = format_next_task_markdown(&task);
                 if let Ok(p) = write_task_file(&path, &markdown) {
                     eprintln!("\n   📋 Next task: {}", p.display());
                 }
                 if let Ok(json) = serde_json::to_string_pretty(&task) {
-                    let json_path = AutomatonStore::new(&path).automaton_dir().join("next-task.json");
+                    let json_path = AutomatonStore::new(&path)
+                        .automaton_dir()
+                        .join("next-task.json");
                     let _ = std::fs::write(&json_path, &json);
                 }
             }
@@ -176,13 +216,30 @@ pub async fn execute(
     // (managed children never reach here — they exit in the `once` branch above)
     let project_config = ProjectConfig::resolve(&path, None);
     if project_config.has_scripts() {
-        eprintln!("   📄 Loaded vg.toml ({} scripts)", project_config.scripts.len());
+        eprintln!(
+            "   📄 Loaded vg.toml ({} scripts)",
+            project_config.scripts.len()
+        );
     }
     if let Some(ref proc) = project_config.process {
         eprintln!("   ⚡ Process: {} (restart: {})", proc.cmd, proc.restart);
     }
     print_controls(project_config.has_process());
-    watch_loop(ctx, &path, &graph, &description, &changed_files, interval, top, max_ticks, snapshot, perturbation, &project_config, &semantic_ctx).await
+    watch_loop(
+        ctx,
+        &path,
+        &graph,
+        &description,
+        &changed_files,
+        interval,
+        top,
+        max_ticks,
+        snapshot,
+        perturbation,
+        &project_config,
+        &semantic_ctx,
+    )
+    .await
 }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
@@ -192,7 +249,11 @@ async fn bootstrap(
     ctx: &OpsContext,
     path: &Path,
     force: bool,
-) -> Result<(SourceCodeGraph, vibe_graph_automaton::AutomatonDescription, Option<VectorIndex>)> {
+) -> Result<(
+    SourceCodeGraph,
+    vibe_graph_automaton::AutomatonDescription,
+    Option<VectorIndex>,
+)> {
     eprintln!("🔄 Bootstrapping vibe-graph system...");
     let started = Instant::now();
 
@@ -267,16 +328,22 @@ async fn bootstrap(
 async fn detect_git_changes(ctx: &OpsContext, path: &Path) -> Vec<PathBuf> {
     let request = vibe_graph_ops::GitChangesRequest::new(path);
     match ctx.git_changes(request).await {
-        Ok(response) if !response.changes.changes.is_empty() => {
-            response.changes.changes.iter().map(|c| c.path.clone()).collect()
-        }
+        Ok(response) if !response.changes.changes.is_empty() => response
+            .changes
+            .changes
+            .iter()
+            .map(|c| c.path.clone())
+            .collect(),
         _ => Vec::new(),
     }
 }
 
 /// Get a fingerprint of the current change set for diffing.
 fn change_fingerprint(files: &[PathBuf]) -> HashSet<String> {
-    files.iter().map(|p| p.to_string_lossy().to_string()).collect()
+    files
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect()
 }
 
 // ─── Analysis ────────────────────────────────────────────────────────────────
@@ -320,10 +387,7 @@ fn print_report(report: &ImpactReport, top: usize, _path: &Path) {
     );
 
     if !report.changed_files.is_empty() {
-        eprintln!(
-            "   {} file(s) changed",
-            report.changed_files.len()
-        );
+        eprintln!("   {} file(s) changed", report.changed_files.len());
     }
     eprintln!();
 
@@ -349,7 +413,10 @@ fn print_report(report: &ImpactReport, top: usize, _path: &Path) {
 
     if !visible.is_empty() {
         // Find common prefix for shorter paths
-        let prefix = find_path_prefix(&report.project_name, visible.first().map(|n| n.path.as_str()).unwrap_or(""));
+        let prefix = find_path_prefix(
+            &report.project_name,
+            visible.first().map(|n| n.path.as_str()).unwrap_or(""),
+        );
 
         for node in &visible {
             let short = node.path.strip_prefix(&prefix).unwrap_or(&node.path);
@@ -510,7 +577,14 @@ async fn watch_loop(
                         // Plan
                         eprintln!("   📋 Computing evolution plan...\n");
                         let goal_scores = goal_semantic_scores(semantic_ctx, perturbation.as_ref());
-                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref(), goal_scores.as_ref()) {
+                        match run_evolution_plan(
+                            graph.clone(),
+                            description,
+                            &objective,
+                            perturbation.as_ref(),
+                            last_script_feedback.as_ref(),
+                            goal_scores.as_ref(),
+                        ) {
                             Ok(plan) => {
                                 let md = format_evolution_plan(&plan);
                                 eprint!("{}", md);
@@ -523,23 +597,49 @@ async fn watch_loop(
                     b'n' => {
                         eprintln!("   🎯 Computing next task...\n");
                         let goal_scores = goal_semantic_scores(semantic_ctx, perturbation.as_ref());
-                        match run_evolution_plan(graph.clone(), description, &objective, perturbation.as_ref(), last_script_feedback.as_ref(), goal_scores.as_ref()) {
+                        match run_evolution_plan(
+                            graph.clone(),
+                            description,
+                            &objective,
+                            perturbation.as_ref(),
+                            last_script_feedback.as_ref(),
+                            goal_scores.as_ref(),
+                        ) {
                             Ok(plan) if !plan.items.is_empty() => {
                                 let commit = git_head_sha(path);
                                 let total = plan.items.len();
-                                let sem_neighbors = semantic_neighbors_for(semantic_ctx, graph, plan.items[0].node_id);
-                                let task = build_next_task(&plan.items[0], graph, &plan.project_name, perturbation.as_ref(), 1, total, commit, sem_neighbors);
+                                let sem_neighbors = semantic_neighbors_for(
+                                    semantic_ctx,
+                                    graph,
+                                    plan.items[0].node_id,
+                                );
+                                let task = build_next_task(
+                                    &plan.items[0],
+                                    graph,
+                                    &plan.project_name,
+                                    perturbation.as_ref(),
+                                    1,
+                                    total,
+                                    commit,
+                                    sem_neighbors,
+                                );
                                 let markdown = format_next_task_markdown(&task);
                                 let task_path = write_task_file(path, &markdown)?;
                                 if let Ok(json) = serde_json::to_string_pretty(&task) {
-                                    let json_path = AutomatonStore::new(path).automaton_dir().join("next-task.json");
+                                    let json_path = AutomatonStore::new(path)
+                                        .automaton_dir()
+                                        .join("next-task.json");
                                     let _ = std::fs::write(&json_path, &json);
                                 }
                                 eprintln!("{}", markdown);
                                 eprintln!("   💾 Task written to: {}", task_path.display());
-                                eprintln!("   💡 Open this file and ask Cursor Agent to execute it.\n");
+                                eprintln!(
+                                    "   💡 Open this file and ask Cursor Agent to execute it.\n"
+                                );
                             }
-                            Ok(_) => eprintln!("   ✅ All nodes at target stability! Nothing to do.\n"),
+                            Ok(_) => {
+                                eprintln!("   ✅ All nodes at target stability! Nothing to do.\n")
+                            }
                             Err(e) => eprintln!("   ❌ Plan error: {}\n", e),
                         }
                         print_watching();
@@ -566,7 +666,8 @@ async fn watch_loop(
                     b'g' => {
                         // Set goal: read a line from stdin in cooked mode
                         if let Some(ref guard) = _raw_guard {
-                            if let Some(goal_text) = guard.read_line_cooked("   🎯 Enter goal: ") {
+                            if let Some(goal_text) = guard.read_line_cooked("   🎯 Enter goal: ")
+                            {
                                 let p = if let Some(ref existing) = perturbation {
                                     Perturbation::with_targets(&goal_text, existing.targets.clone())
                                 } else {
@@ -588,7 +689,9 @@ async fn watch_loop(
                         if perturbation.is_none() {
                             eprintln!("   ⚠ No active goal. Press 'g' first to set a goal.\n");
                         } else if let Some(ref guard) = _raw_guard {
-                            if let Some(target_path) = guard.read_line_cooked("   📌 Enter target path: ") {
+                            if let Some(target_path) =
+                                guard.read_line_cooked("   📌 Enter target path: ")
+                            {
                                 if let Some(ref mut p) = perturbation {
                                     p.targets.push(target_path.clone());
                                     let _ = store.save_perturbation(p);
@@ -663,7 +766,11 @@ async fn watch_loop(
                 let fb = run_watch_scripts(project_config, path);
                 eprintln!("   {}", fb.summary_line());
                 if !fb.errors.is_empty() {
-                    eprintln!("   📌 {} script errors in {} files", fb.errors.len(), fb.errored_files().len());
+                    eprintln!(
+                        "   📌 {} script errors in {} files",
+                        fb.errors.len(),
+                        fb.errored_files().len()
+                    );
                 }
                 last_script_feedback = Some(fb);
             }
@@ -682,7 +789,6 @@ async fn watch_loop(
             last_fingerprint = new_fingerprint;
         }
     }
-
 }
 
 fn print_watching() {
@@ -894,7 +1000,11 @@ impl RawModeGuard {
 
             if ok {
                 let trimmed = line.trim().to_string();
-                if trimmed.is_empty() { None } else { Some(trimmed) }
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
             } else {
                 None
             }

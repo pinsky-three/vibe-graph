@@ -3,6 +3,7 @@ pub mod camera;
 pub mod graph;
 pub mod interaction;
 pub mod layout;
+pub mod node_visual;
 pub mod render;
 pub mod ui;
 
@@ -53,7 +54,7 @@ pub fn wasm_main() {
 
     let window = web_sys::window().expect("no global `window` exists");
     let data_val = js_sys::Reflect::get(&window, &"VIBE_GRAPH_DATA".into()).unwrap();
-    
+
     let mut initial_graph = vibe_graph_core::SourceCodeGraph::default();
     if let Some(json_string) = data_val.as_string() {
         if let Ok(graph) = serde_json::from_str(&json_string) {

@@ -218,7 +218,12 @@ pub fn generate_toml(config: &ProjectConfig) -> String {
     // [watch]
     if !config.watch.run.is_empty() {
         out.push_str("[watch]\n");
-        let items: Vec<String> = config.watch.run.iter().map(|s| format!("\"{}\"", s)).collect();
+        let items: Vec<String> = config
+            .watch
+            .run
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .collect();
         out.push_str(&format!("run = [{}]\n", items.join(", ")));
         out.push('\n');
     }
@@ -236,7 +241,11 @@ pub fn generate_toml(config: &ProjectConfig) -> String {
         }
         if !proc.env.is_empty() {
             out.push_str("env = { ");
-            let pairs: Vec<String> = proc.env.iter().map(|(k, v)| format!("{} = \"{}\"", k, v)).collect();
+            let pairs: Vec<String> = proc
+                .env
+                .iter()
+                .map(|(k, v)| format!("{} = \"{}\"", k, v))
+                .collect();
             out.push_str(&pairs.join(", "));
             out.push_str(" }\n");
         }

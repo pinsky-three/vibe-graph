@@ -916,7 +916,11 @@ mod wasm_impl {
 
         if !resp.ok() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("File fetch failed (HTTP {}): {}", resp.status(), text));
+            return Err(format!(
+                "File fetch failed (HTTP {}): {}",
+                resp.status(),
+                text
+            ));
         }
 
         let body: ApiResponse<FileContentResponse> = resp
@@ -932,11 +936,7 @@ mod wasm_impl {
         query: &str,
         top: usize,
     ) -> Result<SemanticSearchResponse, String> {
-        let url = format!(
-            "/api/semantic/search?q={}&top={}",
-            urlencoding(query),
-            top
-        );
+        let url = format!("/api/semantic/search?q={}&top={}", urlencoding(query), top);
 
         let resp = Request::get(&url)
             .send()
@@ -1074,8 +1074,7 @@ pub fn fetch_file_content_native(
         path.to_path_buf()
     };
 
-    let content =
-        std::fs::read_to_string(&resolved).map_err(|e| format!("Read error: {}", e))?;
+    let content = std::fs::read_to_string(&resolved).map_err(|e| format!("Read error: {}", e))?;
 
     let total_lines = content.lines().count();
     let size_bytes = content.len() as u64;
@@ -1274,7 +1273,10 @@ mod tests {
 
     #[test]
     fn test_detect_language_special_filenames() {
-        assert_eq!(detect_language_native(Path::new("Dockerfile")), "dockerfile");
+        assert_eq!(
+            detect_language_native(Path::new("Dockerfile")),
+            "dockerfile"
+        );
         assert_eq!(detect_language_native(Path::new("Makefile")), "sh");
         assert_eq!(detect_language_native(Path::new("GNUmakefile")), "sh");
         assert_eq!(detect_language_native(Path::new("Cargo.toml")), "toml");
@@ -1333,10 +1335,7 @@ mod tests {
 
     #[test]
     fn test_fetch_file_content_native_nonexistent_file() {
-        let result = fetch_file_content_native(
-            Path::new("/nonexistent/path/to/file.rs"),
-            None,
-        );
+        let result = fetch_file_content_native(Path::new("/nonexistent/path/to/file.rs"), None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Read error"));
     }
@@ -1501,7 +1500,10 @@ mod tests {
 
     #[test]
     fn test_op_result_clone() {
-        let op = OpResult::SyncDone { repos: 1, files: 10 };
+        let op = OpResult::SyncDone {
+            repos: 1,
+            files: 10,
+        };
         let cloned = op.clone();
         if let OpResult::SyncDone { repos, files } = cloned {
             assert_eq!(repos, 1);

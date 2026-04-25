@@ -30,9 +30,7 @@ pub fn generate_random_graph(n: usize) -> StableDiGraph<String, String> {
     let mut g = StableDiGraph::new();
     let mut rng = rand::thread_rng();
 
-    let nodes: Vec<_> = (0..n)
-        .map(|i| g.add_node(format!("node_{i}")))
-        .collect();
+    let nodes: Vec<_> = (0..n).map(|i| g.add_node(format!("node_{i}"))).collect();
 
     let target_edges = n * 3;
     for _ in 0..target_edges {
@@ -82,8 +80,9 @@ pub fn generate_scale_free_graph(n: usize, m: usize) -> StableDiGraph<String, St
         }
 
         for &target_idx in &targets {
-            g.add_edge(new_node, seed_nodes.get(target_idx).copied()
-                .unwrap_or_else(|| {
+            g.add_edge(
+                new_node,
+                seed_nodes.get(target_idx).copied().unwrap_or_else(|| {
                     // For indices beyond seed, map through all nodes
                     let all_nodes: Vec<_> = g.node_indices().collect();
                     all_nodes[target_idx % all_nodes.len()]

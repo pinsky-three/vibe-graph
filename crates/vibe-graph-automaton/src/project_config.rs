@@ -227,8 +227,8 @@ impl ProjectConfig {
 
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        let mut config: ProjectConfig =
-            toml::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+        let mut config: ProjectConfig = toml::from_str(&content)
+            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
 
         // Default project name to directory name
         if config.project.name.is_empty() {
@@ -272,10 +272,7 @@ impl ProjectConfig {
                                 root = %root.display(),
                                 "Using workspace defaults"
                             );
-                            return Self::from_workspace_defaults(
-                                &ws.defaults,
-                                repo_path,
-                            );
+                            return Self::from_workspace_defaults(&ws.defaults, repo_path);
                         }
                     }
                     Ok(None) => {}
@@ -347,7 +344,12 @@ impl ProjectConfig {
 
     /// Check if this config has watch scripts configured.
     pub fn has_watch_scripts(&self) -> bool {
-        !self.watch.run.is_empty() && self.watch.run.iter().any(|n| self.scripts.contains_key(n.as_str()))
+        !self.watch.run.is_empty()
+            && self
+                .watch
+                .run
+                .iter()
+                .any(|n| self.scripts.contains_key(n.as_str()))
     }
 
     /// Check if this config has a managed process configured.

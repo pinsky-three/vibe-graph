@@ -389,8 +389,7 @@ impl VibeGraphMcp {
                     match serde_json::from_value::<SemanticSearchInput>(args) {
                         Ok(input) => {
                             let output = self.executor.semantic_search(input);
-                            let text =
-                                serde_json::to_string_pretty(&output).unwrap_or_default();
+                            let text = serde_json::to_string_pretty(&output).unwrap_or_default();
                             CallToolResult::success(vec![Content::text(text)])
                         }
                         Err(e) => CallToolResult::error(vec![Content::text(format!(

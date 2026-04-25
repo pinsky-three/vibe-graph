@@ -140,10 +140,7 @@ pub async fn file_handler(
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(ApiResponse::new(FileErrorResponse {
                 code: "FILE_TOO_LARGE".into(),
-                message: format!(
-                    "File is {} bytes (max {} bytes)",
-                    size_bytes, MAX_FILE_SIZE
-                ),
+                message: format!("File is {} bytes (max {} bytes)", size_bytes, MAX_FILE_SIZE),
             })),
         )
             .into_response();

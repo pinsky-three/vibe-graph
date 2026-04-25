@@ -105,10 +105,7 @@ impl Sampler for EmbeddingSampler {
             });
         }
 
-        let texts: Vec<String> = selected
-            .iter()
-            .map(|n| self.text_for_node(n))
-            .collect();
+        let texts: Vec<String> = selected.iter().map(|n| self.text_for_node(n)).collect();
 
         let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
 
@@ -146,10 +143,7 @@ impl Sampler for EmbeddingSampler {
             "dimension".to_string(),
             Value::Number(self.embedder.dimension().into()),
         );
-        metadata.insert(
-            "count".to_string(),
-            Value::Number(artifacts.len().into()),
-        );
+        metadata.insert("count".to_string(), Value::Number(artifacts.len().into()));
 
         Ok(SampleResult {
             sampler_id: self.id().to_string(),
@@ -284,10 +278,12 @@ fn extract_semantic_excerpt(source: &str, lang: &str) -> String {
         }
 
         if !doc_lines.is_empty() || !import_lines.is_empty() || !signature_lines.is_empty() {
-            let total: usize =
-                doc_lines.iter().map(|l: &&str| l.len()).sum::<usize>()
+            let total: usize = doc_lines.iter().map(|l: &&str| l.len()).sum::<usize>()
                 + import_lines.iter().map(|l: &&str| l.len()).sum::<usize>()
-                + signature_lines.iter().map(|l: &&str| l.len()).sum::<usize>();
+                + signature_lines
+                    .iter()
+                    .map(|l: &&str| l.len())
+                    .sum::<usize>();
             if total > MAX_CONTENT_CHARS {
                 break;
             }
@@ -391,9 +387,7 @@ fn lang_markers(lang: &str) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'stat
         "python" => (
             vec!["\"\"\"", "#"],
             vec!["import ", "from "],
-            vec![
-                "def ", "async def ", "class ",
-            ],
+            vec!["def ", "async def ", "class "],
         ),
         "typescript" | "javascript" => (
             vec!["/**", " *", "//"],
@@ -420,11 +414,22 @@ fn lang_markers(lang: &str) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'stat
             vec!["/-!", "/--", "/-", "--"],
             vec!["import ", "public import "],
             vec![
-                "def ", "theorem ", "lemma ", "structure ", "class ",
-                "instance ", "inductive ", "abbrev ", "namespace ",
-                "noncomputable def ", "noncomputable instance ",
-                "open ", "variable ", "section ",
-                "@[simp] theorem ", "@[simp] lemma ",
+                "def ",
+                "theorem ",
+                "lemma ",
+                "structure ",
+                "class ",
+                "instance ",
+                "inductive ",
+                "abbrev ",
+                "namespace ",
+                "noncomputable def ",
+                "noncomputable instance ",
+                "open ",
+                "variable ",
+                "section ",
+                "@[simp] theorem ",
+                "@[simp] lemma ",
                 "@[simp] def ",
             ],
         ),
@@ -432,8 +437,17 @@ fn lang_markers(lang: &str) -> (Vec<&'static str>, Vec<&'static str>, Vec<&'stat
             vec!["//", "#", "///", "//!"],
             vec!["use ", "import ", "from ", "require(", "include"],
             vec![
-                "pub ", "def ", "fn ", "func ", "class ", "struct ",
-                "enum ", "trait ", "interface ", "type ", "export ",
+                "pub ",
+                "def ",
+                "fn ",
+                "func ",
+                "class ",
+                "struct ",
+                "enum ",
+                "trait ",
+                "interface ",
+                "type ",
+                "export ",
             ],
         ),
     }

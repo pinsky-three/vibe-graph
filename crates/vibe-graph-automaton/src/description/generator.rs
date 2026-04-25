@@ -1199,7 +1199,10 @@ mod tests {
         let description = generator.generate(&graph, "dir-test");
 
         let dir_node = description.get_node(4).unwrap();
-        let local = dir_node.local_rules.as_ref().expect("should have local rules");
+        let local = dir_node
+            .local_rules
+            .as_ref()
+            .expect("should have local rules");
         assert!(local.on_file_add.is_some());
         assert!(local.on_file_delete.is_some());
         assert!(local.on_file_update.is_some());

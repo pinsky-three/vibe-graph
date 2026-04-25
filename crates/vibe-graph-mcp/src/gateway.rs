@@ -413,10 +413,8 @@ impl McpGateway {
             project.workspace_path.clone(),
         );
         #[cfg(feature = "semantic")]
-        let executor = executor.with_semantic(
-            project.semantic_index.clone(),
-            project.embedder.clone(),
-        );
+        let executor =
+            executor.with_semantic(project.semantic_index.clone(), project.embedder.clone());
         executor
     }
 
@@ -772,8 +770,7 @@ impl McpGateway {
                         #[cfg(feature = "semantic")]
                         {
                             let output = executor.semantic_search(input);
-                            let text =
-                                serde_json::to_string_pretty(&output).unwrap_or_default();
+                            let text = serde_json::to_string_pretty(&output).unwrap_or_default();
                             CallToolResult::success(vec![Content::text(text)])
                         }
                         #[cfg(not(feature = "semantic"))]

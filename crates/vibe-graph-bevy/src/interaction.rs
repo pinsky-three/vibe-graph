@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::graph::GraphLayout;
+use crate::graph::{GraphLayout, LayoutSettings};
+use crate::node_visual::scaled_node_radius;
 use crate::render::{GraphNode, Hovered, Selected};
 
 // =============================================================================
@@ -216,8 +217,7 @@ fn click_selection(
 
         // Immediate ECS sync so highlight feels instant (apply_selection_state
         // will reconcile on the same frame via generation check).
-        let effective_set: HashSet<usize> =
-            sel_state.base_selection.iter().copied().collect();
+        let effective_set: HashSet<usize> = sel_state.base_selection.iter().copied().collect();
         for (entity, node) in selected_q.iter() {
             if !effective_set.contains(&node.index) {
                 commands.entity(entity).remove::<Selected>();
@@ -253,6 +253,7 @@ fn node_hover_highlight(
     node_q: Query<(Entity, &GraphNode, &Transform)>,
     mut commands: Commands,
     layout: Res<GraphLayout>,
+    settings: Res<LayoutSettings>,
     hovered_q: Query<Entity, With<Hovered>>,
     lasso: Res<LassoState>,
     mut contexts: bevy_egui::EguiContexts,
@@ -291,13 +292,7 @@ fn node_hover_highlight(
         return;
     };
 
-    let node_radius = if layout.node_count >= 5000 {
-        0.3
-    } else if layout.node_count >= 1000 {
-        0.5
-    } else {
-        0.8
-    };
+    let node_radius = scaled_node_radius(layout.node_count, settings.node_size);
     let hit_radius = node_radius * 3.0;
 
     let mut closest: Option<(Entity, f32)> = None;
@@ -406,7 +401,8 @@ fn handle_semantic_search(
 ) {
     // Process any incoming search results (from WASM fetch)
     while let Ok(hits) = search.rx.try_recv() {
-        let hit_ids: std::collections::HashSet<_> = hits.into_iter().map(vibe_graph_core::NodeId).collect();
+        let hit_ids: std::collections::HashSet<_> =
+            hits.into_iter().map(vibe_graph_core::NodeId).collect();
         for entity in selected_q.iter() {
             commands.entity(entity).remove::<Selected>();
         }
@@ -476,7 +472,7 @@ fn handle_semantic_search(
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsCast;
-        
+
         // For WASM, we call the backend API endpoint
         let query = search.query.clone();
         let tx = search.tx.clone();
@@ -484,20 +480,31 @@ fn handle_semantic_search(
             let window = web_sys::window().expect("no window");
             let encoded_query = js_sys::encode_uri_component(&query);
             let url = format!("/api/semantic/search?q={}", encoded_query);
-            
-            if let Ok(resp_value) = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(&url)).await {
+
+            if let Ok(resp_value) =
+                wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(&url)).await
+            {
                 if let Ok(resp) = resp_value.dyn_into::<web_sys::Response>() {
-                    if let Ok(json_value) = wasm_bindgen_futures::JsFuture::from(resp.text().unwrap()).await {
+                    if let Ok(json_value) =
+                        wasm_bindgen_futures::JsFuture::from(resp.text().unwrap()).await
+                    {
                         if let Some(json_str) = json_value.as_string() {
                             #[derive(serde::Deserialize)]
-                            struct Hit { node_id: u64 }
+                            struct Hit {
+                                node_id: u64,
+                            }
                             #[derive(serde::Deserialize)]
-                            struct Data { hits: Vec<Hit> }
+                            struct Data {
+                                hits: Vec<Hit>,
+                            }
                             #[derive(serde::Deserialize)]
-                            struct ApiResp { data: Data }
-                            
+                            struct ApiResp {
+                                data: Data,
+                            }
+
                             if let Ok(api_resp) = serde_json::from_str::<ApiResp>(&json_str) {
-                                let ids = api_resp.data.hits.into_iter().map(|h| h.node_id).collect();
+                                let ids =
+                                    api_resp.data.hits.into_iter().map(|h| h.node_id).collect();
                                 let _ = tx.send(ids);
                             }
                         }
@@ -678,7 +685,11 @@ pub fn expand_neighborhood(
             for _ in 0..abs_depth {
                 let mut next = HashSet::new();
                 for &node in &frontier {
-                    let neighbors = if go_up { &parents[node] } else { &children[node] };
+                    let neighbors = if go_up {
+                        &parents[node]
+                    } else {
+                        &children[node]
+                    };
                     for &n in neighbors {
                         if result.insert(n) {
                             next.insert(n);
@@ -698,7 +709,11 @@ pub fn expand_neighborhood(
             for _ in 0..abs_depth {
                 let mut next = HashSet::new();
                 for &node in &frontier {
-                    let neighbors = if go_up { &parents[node] } else { &children[node] };
+                    let neighbors = if go_up {
+                        &parents[node]
+                    } else {
+                        &children[node]
+                    };
                     for &n in neighbors {
                         if visited.insert(n) {
                             next.insert(n);
@@ -718,7 +733,11 @@ pub fn expand_neighborhood(
             for _ in 0..abs_depth {
                 let mut next = HashSet::new();
                 for &node in &frontier {
-                    let neighbors = if go_up { &parents[node] } else { &children[node] };
+                    let neighbors = if go_up {
+                        &parents[node]
+                    } else {
+                        &children[node]
+                    };
                     for &n in neighbors {
                         if result.insert(n) {
                             next.insert(n);

@@ -93,9 +93,9 @@ impl ScriptFeedback {
     /// Check if a given file path has errors (substring match).
     pub fn has_errors_for(&self, path: &str) -> bool {
         let lower = path.to_lowercase();
-        self.errors
-            .iter()
-            .any(|e| lower.contains(&e.file.to_lowercase()) || e.file.to_lowercase().contains(&lower))
+        self.errors.iter().any(|e| {
+            lower.contains(&e.file.to_lowercase()) || e.file.to_lowercase().contains(&lower)
+        })
     }
 
     /// Get the first error message for a file path.
@@ -103,7 +103,9 @@ impl ScriptFeedback {
         let lower = path.to_lowercase();
         self.errors
             .iter()
-            .find(|e| lower.contains(&e.file.to_lowercase()) || e.file.to_lowercase().contains(&lower))
+            .find(|e| {
+                lower.contains(&e.file.to_lowercase()) || e.file.to_lowercase().contains(&lower)
+            })
             .map(|e| e.message.as_str())
     }
 
@@ -113,11 +115,7 @@ impl ScriptFeedback {
             .iter()
             .map(|r| {
                 let status = if r.success() { "OK" } else { "FAIL" };
-                let errors: Vec<_> = self
-                    .errors
-                    .iter()
-                    .filter(|e| e.script == r.name)
-                    .collect();
+                let errors: Vec<_> = self.errors.iter().filter(|e| e.script == r.name).collect();
                 if errors.is_empty() {
                     format!("{}: {} ({:.1}s)", r.name, status, r.duration.as_secs_f64())
                 } else {

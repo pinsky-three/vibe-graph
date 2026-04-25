@@ -89,18 +89,23 @@ impl GraphLayout {
         }
     }
 
-    pub fn from_source_code_graph(g: &vibe_graph_core::SourceCodeGraph, settings: &LayoutSettings) -> Self {
+    pub fn from_source_code_graph(
+        g: &vibe_graph_core::SourceCodeGraph,
+        settings: &LayoutSettings,
+    ) -> Self {
         let node_count = g.nodes.len();
-        
+
         let mut idx_map = std::collections::HashMap::new();
         let mut labels = Vec::with_capacity(node_count);
-        
+
         for (i, node) in g.nodes.iter().enumerate() {
             idx_map.insert(node.id, i);
             labels.push(node.name.clone());
         }
 
-        let edges: Vec<(usize, usize)> = g.edges.iter()
+        let edges: Vec<(usize, usize)> = g
+            .edges
+            .iter()
             .filter_map(|e| {
                 let src = idx_map.get(&e.from)?;
                 let tgt = idx_map.get(&e.to)?;
@@ -124,7 +129,11 @@ impl GraphLayout {
     }
 }
 
-pub fn init_graph(mut commands: Commands, settings: Res<LayoutSettings>, initial_graph: Option<Res<crate::InitialGraph>>) {
+pub fn init_graph(
+    mut commands: Commands,
+    settings: Res<LayoutSettings>,
+    initial_graph: Option<Res<crate::InitialGraph>>,
+) {
     let layout = if let Some(init_graph) = initial_graph {
         GraphLayout::from_source_code_graph(&init_graph.0, &settings)
     } else if let Some(path) = &settings.custom_graph_path {
@@ -160,7 +169,7 @@ pub fn step_layout(mut layout: ResMut<GraphLayout>) {
     if !layout.running {
         return;
     }
-    
+
     // Scale down iterations per frame for large graphs to maintain FPS
     let iters = if layout.node_count >= 5000 {
         layout.iterations_per_frame.min(2)
@@ -169,7 +178,7 @@ pub fn step_layout(mut layout: ResMut<GraphLayout>) {
     } else {
         layout.iterations_per_frame
     };
-    
+
     for _ in 0..iters {
         layout.layout.step();
     }
