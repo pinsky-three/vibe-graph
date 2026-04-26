@@ -9150,7 +9150,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-graph-cli"
-version = "1.5.4"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "askama",
