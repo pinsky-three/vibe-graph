@@ -352,6 +352,10 @@ enum Commands {
         #[arg(long, default_value = "10")]
         top: usize,
 
+        /// Per-script timeout in seconds when --scripts is enabled.
+        #[arg(long, default_value = "60")]
+        script_timeout_secs: u64,
+
         /// Rebuild graph and automaton description before calculating.
         #[arg(long)]
         force: bool,
@@ -1115,9 +1119,20 @@ async fn main() -> Result<()> {
             json,
             output,
             top,
+            script_timeout_secs,
             force,
         } => {
-            commands::quality::execute(&ctx, &path, scripts, json, output, top, force).await?;
+            commands::quality::execute(
+                &ctx,
+                &path,
+                scripts,
+                json,
+                output,
+                top,
+                force,
+                std::time::Duration::from_secs(script_timeout_secs),
+            )
+            .await?;
         }
 
         Commands::Semantic(semantic_cmd) => match semantic_cmd {

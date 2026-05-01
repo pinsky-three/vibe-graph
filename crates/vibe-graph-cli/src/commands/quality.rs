@@ -4,12 +4,13 @@
 //! graph-based stability score, validation feedback, and merge/readiness gates.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 use vibe_graph_automaton::{
-    run_evolution_plan, run_watch_scripts, AutomatonStore, DescriptionGenerator, GeneratorConfig,
-    ProjectConfig,
+    parse_errors, run_evolution_plan, run_script_with_timeout, AutomatonStore,
+    DescriptionGenerator, GeneratorConfig, ProjectConfig, ScriptError, ScriptFeedback, Severity,
 };
 use vibe_graph_ops::{GraphRequest, OpsContext, Store};
 
@@ -77,6 +78,7 @@ pub struct QualityRisk {
 }
 
 /// Execute `vg quality`.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     ctx: &OpsContext,
     path: &Path,
@@ -85,9 +87,10 @@ pub async fn execute(
     output: Option<PathBuf>,
     top: usize,
     force: bool,
+    script_timeout: Duration,
 ) -> Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let report = calculate(ctx, &path, run_scripts, top, force).await?;
+    let report = calculate(ctx, &path, run_scripts, top, force, script_timeout).await?;
 
     if json_output {
         let json = serde_json::to_string_pretty(&report)?;
@@ -120,6 +123,7 @@ async fn calculate(
     run_scripts: bool,
     top: usize,
     force: bool,
+    script_timeout: Duration,
 ) -> Result<QualityReport> {
     let graph = load_or_build_graph(ctx, path, force).await?;
     let description = load_or_generate_description(path, &graph, force)?;
@@ -127,12 +131,7 @@ async fn calculate(
     let objective = project_config.stability_objective();
 
     let script_feedback = if run_scripts && project_config.has_watch_scripts() {
-        eprintln!("Running quality scripts...");
-        let feedback = run_watch_scripts(&project_config, path);
-        if !feedback.results.is_empty() {
-            eprintln!("{}", feedback.summary_line());
-        }
-        Some(feedback)
+        Some(run_quality_scripts(&project_config, path, script_timeout))
     } else {
         None
     };
@@ -221,6 +220,58 @@ async fn calculate(
         gates,
         top_risks,
     })
+}
+
+fn run_quality_scripts(
+    project_config: &ProjectConfig,
+    path: &Path,
+    script_timeout: Duration,
+) -> ScriptFeedback {
+    let scripts = project_config.watch_scripts();
+    eprintln!(
+        "Running {} quality script(s) with {}s timeout each:",
+        scripts.len(),
+        script_timeout.as_secs()
+    );
+
+    let mut feedback = ScriptFeedback::default();
+    for (index, (name, cmd)) in scripts.iter().enumerate() {
+        eprintln!("  [{}/{}] {}: {}", index + 1, scripts.len(), name, cmd);
+        let result = run_script_with_timeout(name, cmd, path, script_timeout);
+        let mut errors = parse_errors(&result);
+        if !result.success() && errors.is_empty() {
+            errors.push(ScriptError {
+                file: format!("<script:{}>", result.name),
+                line: 0,
+                message: diagnostic_line(&result.stderr)
+                    .unwrap_or("Script failed without parseable diagnostics")
+                    .to_string(),
+                script: result.name.clone(),
+                severity: Severity::Error,
+            });
+        }
+
+        if result.success() {
+            feedback.passed += 1;
+            eprintln!("       OK ({:.1}s)", result.duration.as_secs_f64());
+        } else {
+            feedback.failed += 1;
+            eprintln!(
+                "       FAIL ({} error(s), {:.1}s)",
+                errors.len(),
+                result.duration.as_secs_f64()
+            );
+        }
+
+        feedback.errors.extend(errors);
+        feedback.results.push(result);
+    }
+
+    if !feedback.results.is_empty() {
+        eprintln!("  {}", feedback.summary_line());
+    }
+
+    feedback
 }
 
 async fn load_or_build_graph(
@@ -389,6 +440,13 @@ fn display_path(root: &Path, path: &str) -> String {
     path.strip_prefix(root)
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| path.display().to_string())
+}
+
+fn diagnostic_line(text: &str) -> Option<&str> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| line.to_ascii_lowercase().contains("timed out"))
+        .or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty()))
 }
 
 #[cfg(test)]

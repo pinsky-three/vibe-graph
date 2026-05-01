@@ -4,8 +4,12 @@
 //! and parses stderr/stdout for file:line error patterns. The resulting
 //! `ScriptFeedback` feeds into the evolution plan as a perturbation signal.
 
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -180,7 +184,7 @@ pub fn run_script(name: &str, cmd: &str, cwd: &Path) -> ScriptResult {
     info!(script = name, cmd = cmd, cwd = %cwd.display(), "Running script");
     let start = Instant::now();
 
-    let output = std::process::Command::new("sh")
+    let output = Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .current_dir(cwd)
@@ -224,8 +228,153 @@ pub fn run_script(name: &str, cmd: &str, cwd: &Path) -> ScriptResult {
     }
 }
 
+/// Run a single script command with a wall-clock timeout, capturing output.
+pub fn run_script_with_timeout(
+    name: &str,
+    cmd: &str,
+    cwd: &Path,
+    timeout: Duration,
+) -> ScriptResult {
+    info!(
+        script = name,
+        cmd = cmd,
+        cwd = %cwd.display(),
+        timeout_secs = timeout.as_secs(),
+        "Running script with timeout"
+    );
+    let start = Instant::now();
+
+    let (stdout_path, stderr_path) = script_output_paths(name);
+    let stdout_file = match File::create(&stdout_path) {
+        Ok(file) => file,
+        Err(e) => {
+            return ScriptResult {
+                name: name.to_string(),
+                cmd: cmd.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("Failed to create stdout capture file: {}", e),
+                duration: start.elapsed(),
+            };
+        }
+    };
+    let stderr_file = match File::create(&stderr_path) {
+        Ok(file) => file,
+        Err(e) => {
+            let _ = fs::remove_file(&stdout_path);
+            return ScriptResult {
+                name: name.to_string(),
+                cmd: cmd.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("Failed to create stderr capture file: {}", e),
+                duration: start.elapsed(),
+            };
+        }
+    };
+
+    let mut child = match Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd)
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            cleanup_script_output(&stdout_path, &stderr_path);
+            return ScriptResult {
+                name: name.to_string(),
+                cmd: cmd.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("Failed to execute: {}", e),
+                duration: start.elapsed(),
+            };
+        }
+    };
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let duration = start.elapsed();
+                let stdout = read_script_output(&stdout_path);
+                let stderr = read_script_output(&stderr_path);
+                cleanup_script_output(&stdout_path, &stderr_path);
+                return ScriptResult {
+                    name: name.to_string(),
+                    cmd: cmd.to_string(),
+                    exit_code: status.code().unwrap_or(-1),
+                    stdout,
+                    stderr,
+                    duration,
+                };
+            }
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let duration = start.elapsed();
+                let stdout = read_script_output(&stdout_path);
+                let mut stderr = read_script_output(&stderr_path);
+                if !stderr.is_empty() && !stderr.ends_with('\n') {
+                    stderr.push('\n');
+                }
+                stderr.push_str(&format!(
+                    "Script '{}' timed out after {} seconds",
+                    name,
+                    timeout.as_secs()
+                ));
+                cleanup_script_output(&stdout_path, &stderr_path);
+                return ScriptResult {
+                    name: name.to_string(),
+                    cmd: cmd.to_string(),
+                    exit_code: -1,
+                    stdout,
+                    stderr,
+                    duration,
+                };
+            }
+            Ok(None) => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let duration = start.elapsed();
+                let stdout = read_script_output(&stdout_path);
+                let stderr = format!("Failed while waiting for script: {}", e);
+                cleanup_script_output(&stdout_path, &stderr_path);
+                return ScriptResult {
+                    name: name.to_string(),
+                    cmd: cmd.to_string(),
+                    exit_code: -1,
+                    stdout,
+                    stderr,
+                    duration,
+                };
+            }
+        }
+    }
+}
+
 /// Run all watch scripts defined in the config, sequentially.
 pub fn run_watch_scripts(config: &ProjectConfig, cwd: &Path) -> ScriptFeedback {
+    run_watch_scripts_impl(config, cwd, None)
+}
+
+/// Run all watch scripts with a per-script timeout.
+pub fn run_watch_scripts_with_timeout(
+    config: &ProjectConfig,
+    cwd: &Path,
+    timeout: Duration,
+) -> ScriptFeedback {
+    run_watch_scripts_impl(config, cwd, Some(timeout))
+}
+
+fn run_watch_scripts_impl(
+    config: &ProjectConfig,
+    cwd: &Path,
+    timeout: Option<Duration>,
+) -> ScriptFeedback {
     let watch = config.watch_scripts();
     if watch.is_empty() {
         return ScriptFeedback::default();
@@ -234,8 +383,23 @@ pub fn run_watch_scripts(config: &ProjectConfig, cwd: &Path) -> ScriptFeedback {
     let mut feedback = ScriptFeedback::default();
 
     for (name, cmd) in &watch {
-        let result = run_script(name, cmd, cwd);
-        let errors = parse_errors(&result);
+        let result = if let Some(timeout) = timeout {
+            run_script_with_timeout(name, cmd, cwd, timeout)
+        } else {
+            run_script(name, cmd, cwd)
+        };
+        let mut errors = parse_errors(&result);
+        if !result.success() && errors.is_empty() {
+            errors.push(ScriptError {
+                file: format!("<script:{}>", result.name),
+                line: 0,
+                message: diagnostic_line(&result.stderr)
+                    .unwrap_or("Script failed without parseable diagnostics")
+                    .to_string(),
+                script: result.name.clone(),
+                severity: Severity::Error,
+            });
+        }
 
         if result.success() {
             feedback.passed += 1;
@@ -255,6 +419,47 @@ pub fn run_watch_scripts(config: &ProjectConfig, cwd: &Path) -> ScriptFeedback {
     );
 
     feedback
+}
+
+fn script_output_paths(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let safe_name: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let base = format!("vg-script-{}-{}-{}", std::process::id(), safe_name, unique);
+    let dir = std::env::temp_dir();
+    (
+        dir.join(format!("{}.stdout", base)),
+        dir.join(format!("{}.stderr", base)),
+    )
+}
+
+fn read_script_output(path: &Path) -> String {
+    let mut output = String::new();
+    if let Ok(mut file) = File::open(path) {
+        let _ = file.read_to_string(&mut output);
+    }
+    output
+}
+
+fn cleanup_script_output(stdout_path: &Path, stderr_path: &Path) {
+    let _ = fs::remove_file(stdout_path);
+    let _ = fs::remove_file(stderr_path);
+}
+
+fn first_non_empty_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+fn diagnostic_line(text: &str) -> Option<&str> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| line.to_ascii_lowercase().contains("timed out"))
+        .or_else(|| first_non_empty_line(text))
 }
 
 // =============================================================================

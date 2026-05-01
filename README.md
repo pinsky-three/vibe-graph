@@ -137,6 +137,7 @@ make build FEATURES=semantic      # With embedding search
 - `--json` — Output the quality report as JSON
 - `--output <path>` — Save the report to a file
 - `--top <N>` — Show top N risk items (default: 10)
+- `--script-timeout-secs <N>` — Per-script timeout when `--scripts` is enabled (default: 60)
 - `--force` — Rebuild graph and automaton description first
 
 `vg quality` exits non-zero when any quality gate fails, so it can be used as a CI check.

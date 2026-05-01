@@ -241,6 +241,14 @@ For machine-readable output:
 vg quality --scripts --json
 ```
 
+When scripts are enabled, each configured watch script prints start/finish
+progress and has a timeout. The default is 60 seconds and can be changed when a
+project has slower checks:
+
+```sh
+vg quality --scripts --script-timeout-secs 600
+```
+
 `vg quality` exits with code `0` only when all quality gates pass. A non-zero
 exit means the report was calculated but at least one gate failed, which makes
 the command suitable for CI.

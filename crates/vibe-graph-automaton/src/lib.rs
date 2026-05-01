@@ -118,8 +118,9 @@ pub use temporal::SourceCodeTemporalGraph;
 pub use inference::{detect_project_type, generate_toml, infer_config, infer_process, ProjectType};
 pub use project_config::{ProcessSection, ProjectConfig, RestartPolicy, CONFIG_FILENAME};
 pub use script::{
-    parse_errors, run_script, run_watch_scripts, ProcessFeedback, ScriptError, ScriptFeedback,
-    ScriptResult, Severity,
+    parse_errors, run_script, run_script_with_timeout, run_watch_scripts,
+    run_watch_scripts_with_timeout, ProcessFeedback, ScriptError, ScriptFeedback, ScriptResult,
+    Severity,
 };
 
 // LLM runner re-exports (when feature enabled)
