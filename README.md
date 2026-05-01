@@ -96,6 +96,7 @@ make build FEATURES=semantic      # With embedding search
 | `vg run` | **Default.** Start the automaton runtime (interactive watch loop) |
 | `vg run --once` | Single-pass analysis + task generation (CI mode) |
 | `vg run --goal "..."` | Direct evolution toward a specific feature or goal |
+| `vg quality` | Calculate the standard code quality KPI bundle |
 | `vg exec <name>` | Run a named script from `vg.toml` (like `npm run`) |
 | `vg exec` | List all available scripts |
 | `vg init` | Generate `vg.toml` project config from detected project type |
@@ -130,6 +131,15 @@ make build FEATURES=semantic      # With embedding search
 - `--interval <secs>` — Poll interval for change detection (default: 5)
 - `--snapshot` — Save snapshot after each analysis pass
 - `--top <N>` — Show top N impacted files (default: 20)
+
+**Quality Options:**
+- `--scripts` — Run configured watch scripts before calculating quality
+- `--json` — Output the quality report as JSON
+- `--output <path>` — Save the report to a file
+- `--top <N>` — Show top N risk items (default: 10)
+- `--force` — Rebuild graph and automaton description first
+
+`vg quality` exits non-zero when any quality gate fails, so it can be used as a CI check.
 
 **Semantic Options:**
 - `--top <N>` — Number of results to return (default: 10)

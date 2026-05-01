@@ -118,7 +118,8 @@ stability_coverage = at_target / total_nodes
 
 ### Average Gap
 
-`avg_gap` measures typical distance from the stability objective.
+`avg_gap` measures the workspace-weighted distance from the stability objective
+across all analyzed nodes.
 
 - Strong: `<= 0.03`
 - Acceptable: `<= 0.05`
@@ -126,6 +127,9 @@ stability_coverage = at_target / total_nodes
 
 Use this to track whether routine improvements are moving the whole codebase in
 the right direction.
+
+`avg_gap_below_target` is also reported as a diagnostic. It measures only nodes
+that are below target and should not be used as the main workspace gate.
 
 ### Maximum Gap
 
@@ -226,6 +230,22 @@ When discussing a risky file, include:
 ## Runbook
 
 Run a one-shot local quality pass:
+
+```sh
+vg quality --scripts
+```
+
+For machine-readable output:
+
+```sh
+vg quality --scripts --json
+```
+
+`vg quality` exits with code `0` only when all quality gates pass. A non-zero
+exit means the report was calculated but at least one gate failed, which makes
+the command suitable for CI.
+
+Run the full automaton task-generation loop:
 
 ```sh
 cargo run -- run --once --scripts

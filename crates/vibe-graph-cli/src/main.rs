@@ -321,6 +321,42 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Calculate the standard code quality KPI bundle.
+    ///
+    /// Computes the metrics defined in QUALITY_STANDARD.md: health score,
+    /// stability coverage, gap statistics, script errors, quality gates, and
+    /// top risk items.
+    ///
+    /// Examples:
+    ///   vg quality                    # current directory
+    ///   vg quality --scripts          # include configured check/test/lint scripts
+    ///   vg quality --json             # machine-readable report
+    Quality {
+        /// Path to project (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Run configured watch scripts before calculating quality.
+        #[arg(long)]
+        scripts: bool,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Output report to a file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Show top N risk items.
+        #[arg(long, default_value = "10")]
+        top: usize,
+
+        /// Rebuild graph and automaton description before calculating.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Semantic search and embedding management.
     ///
     /// Build a local embedding index over your codebase and search by meaning.
@@ -1071,6 +1107,17 @@ async fn main() -> Result<()> {
                     std::process::exit(status.code().unwrap_or(1));
                 }
             }
+        }
+
+        Commands::Quality {
+            path,
+            scripts,
+            json,
+            output,
+            top,
+            force,
+        } => {
+            commands::quality::execute(&ctx, &path, scripts, json, output, top, force).await?;
         }
 
         Commands::Semantic(semantic_cmd) => match semantic_cmd {
