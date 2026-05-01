@@ -65,6 +65,7 @@ vg serve --mcp
 - **🌐 Interactive Visualization** — D3.js or embedded egui/WASM graph explorer
 - **💾 Local-first Persistence** — All data stored in `.self/` folder, works offline
 - **📝 Documentation Generation** — Export markdown or JSON from your codebase structure
+- **📏 Code Quality Standard** — Shared vocabulary and KPIs for graph-based quality evaluation
 - **🐙 GitHub Integration** — Clone and analyze entire organizations
 
 ## Installation
@@ -196,6 +197,8 @@ env = { RUST_LOG = "info" }
 **Script feedback loop:** During `vg run`, watch scripts execute on every file change. Script errors are parsed (Rust, GCC/ESLint, Python, Go, TypeScript patterns) and errored files receive a 5x priority boost in the evolution plan, with `suggested_action` set to the actual error message.
 
 **Process management:** When `[process]` is configured, `vg run` spawns the program as a managed child. On code changes it restarts the process (per restart policy). Crashes are captured and parsed for errors, which feed back into the evolution plan. Press `r` in the watch loop to manually restart. Use `vg exec <name>` to run any one-off script.
+
+See [`QUALITY_STANDARD.md`](QUALITY_STANDARD.md) for the shared code quality vocabulary, KPI targets, and release/PR gates used by the graph-based evaluator.
 
 ## 🧬 Automaton Runtime (`vg run`)
 
