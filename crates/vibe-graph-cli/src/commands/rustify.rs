@@ -32,6 +32,27 @@ pub async fn plan(
     Ok(())
 }
 
+/// Execute `vg rustify inspect`.
+pub async fn inspect(
+    ctx: &OpsContext,
+    path: &Path,
+    target: &Path,
+    json_output: bool,
+    force: bool,
+) -> Result<()> {
+    let workspace = WorkspaceInfo::detect(path)?;
+    let graph = load_or_build_graph(ctx, &workspace, force).await?;
+    let report = build_inspection(&workspace, &graph, target)?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", format_inspection(&report));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 struct RustifyPlanReport {
     project_name: String,
@@ -67,6 +88,51 @@ struct RustifyCandidate {
     out_degree: usize,
     has_test_signal: bool,
     reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RustifyInspectionReport {
+    project_name: String,
+    repo: String,
+    target: String,
+    language: String,
+    is_candidate: bool,
+    strategy: RustifyStrategy,
+    impact_score: f32,
+    cost_score: f32,
+    roi: f32,
+    in_degree: usize,
+    out_degree: usize,
+    has_test_signal: bool,
+    functions: Vec<PythonSymbol>,
+    classes: Vec<PythonSymbol>,
+    imports: Vec<String>,
+    dependencies: Vec<String>,
+    dependents: Vec<String>,
+    nearby_tests: Vec<String>,
+    risk_signals: Vec<RiskSignal>,
+    recommendation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PythonSymbol {
+    name: String,
+    kind: PythonSymbolKind,
+    line: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PythonSymbolKind {
+    Function,
+    AsyncFunction,
+    Class,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RiskSignal {
+    category: String,
+    detail: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -271,6 +337,92 @@ fn build_plan(workspace: &WorkspaceInfo, graph: &SourceCodeGraph, top: usize) ->
     }
 }
 
+fn build_inspection(
+    workspace: &WorkspaceInfo,
+    graph: &SourceCodeGraph,
+    target: &Path,
+) -> Result<RustifyInspectionReport> {
+    let target_node = find_target_node(workspace, graph, target)?;
+    let target_path = node_path(target_node).context("Target node has no path metadata")?;
+    let repo_lookup = RepoLookup::new(workspace);
+    let repo = repo_lookup.repo_for_path(Path::new(&target_path));
+    let degrees = DegreeIndex::from_graph(graph);
+    let test_nodes: HashSet<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|node| is_test_node(node))
+        .map(|node| node.id)
+        .collect();
+    let nearby_tests = nearby_tests_for(target_node, graph, &test_nodes, &workspace.root);
+    let has_test_signal = has_test_signal(target_node, graph, &test_nodes);
+    let in_degree = degrees.in_degree(target_node.id);
+    let out_degree = degrees.out_degree(target_node.id);
+    let impact_score = impact_score(&target_path, in_degree, degrees.max_in, has_test_signal);
+    let cost_score = cost_score(&target_path, out_degree, degrees.max_out, has_test_signal);
+    let roi = impact_score / cost_score.max(0.1);
+    let language = target_node
+        .metadata
+        .get("language")
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+    let is_candidate = is_python_candidate(target_node);
+    let strategy = if is_candidate {
+        strategy_for(&target_path, has_test_signal, cost_score)
+    } else {
+        RustifyStrategy::Defer
+    };
+    let (functions, classes, imports, risk_signals) = if language == "python" {
+        let content = std::fs::read_to_string(&target_path).unwrap_or_default();
+        let (functions, classes, imports) = extract_python_contract(&content);
+        let risk_signals = extract_risk_signals(&target_path, &content);
+        (functions, classes, imports, risk_signals)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    };
+    let dependencies = related_paths(
+        graph,
+        target_node.id,
+        RelationDirection::Outgoing,
+        &workspace.root,
+    );
+    let dependents = related_paths(
+        graph,
+        target_node.id,
+        RelationDirection::Incoming,
+        &workspace.root,
+    );
+    let recommendation = inspection_recommendation(
+        is_candidate,
+        &language,
+        strategy,
+        has_test_signal,
+        &risk_signals,
+    );
+
+    Ok(RustifyInspectionReport {
+        project_name: workspace.name.clone(),
+        repo,
+        target: display_path(&workspace.root, &target_path),
+        language,
+        is_candidate,
+        strategy,
+        impact_score,
+        cost_score,
+        roi,
+        in_degree,
+        out_degree,
+        has_test_signal,
+        functions,
+        classes,
+        imports,
+        dependencies,
+        dependents,
+        nearby_tests,
+        risk_signals,
+        recommendation,
+    })
+}
+
 fn format_report(report: &RustifyPlanReport) -> String {
     let mut out = String::new();
     out.push_str(&format!("Rustify Plan: {}\n", report.project_name));
@@ -326,6 +478,374 @@ fn format_report(report: &RustifyPlanReport) -> String {
     }
 
     out
+}
+
+fn format_inspection(report: &RustifyInspectionReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Rustify Inspect: {}\n", report.target));
+    out.push_str("--------------------------------------------------\n");
+    out.push_str(&format!("Project: {}\n", report.project_name));
+    out.push_str(&format!("Repo: {}\n", report.repo));
+    out.push_str(&format!("Language: {}\n", report.language));
+    out.push_str(&format!("Candidate: {}\n", yes_no(report.is_candidate)));
+    out.push_str(&format!("Strategy: {}\n", report.strategy));
+    out.push_str(&format!(
+        "Impact: {:.2}, Cost: {:.2}, ROI: {:.2}\n",
+        report.impact_score, report.cost_score, report.roi
+    ));
+    out.push_str(&format!(
+        "Graph: {} dependents, {} dependencies, tests: {}\n\n",
+        report.in_degree,
+        report.out_degree,
+        if report.has_test_signal {
+            "nearby"
+        } else {
+            "missing"
+        }
+    ));
+
+    out.push_str("Python Contract\n");
+    out.push_str(&format!(
+        "- Functions: {}\n",
+        format_symbols(&report.functions)
+    ));
+    out.push_str(&format!("- Classes: {}\n", format_symbols(&report.classes)));
+    out.push_str(&format!(
+        "- Imports: {}\n",
+        if report.imports.is_empty() {
+            "none".to_string()
+        } else {
+            report.imports.join("; ")
+        }
+    ));
+
+    out.push_str("\nGraph Context\n");
+    out.push_str(&format!(
+        "- Dependencies: {}\n",
+        format_list(&report.dependencies)
+    ));
+    out.push_str(&format!(
+        "- Dependents: {}\n",
+        format_list(&report.dependents)
+    ));
+    out.push_str(&format!(
+        "- Nearby tests: {}\n",
+        format_list(&report.nearby_tests)
+    ));
+
+    out.push_str("\nRisk Signals\n");
+    if report.risk_signals.is_empty() {
+        out.push_str("- none\n");
+    } else {
+        for risk in &report.risk_signals {
+            out.push_str(&format!("- {}: {}\n", risk.category, risk.detail));
+        }
+    }
+
+    out.push_str("\nRecommendation\n");
+    out.push_str(&format!("{}\n", report.recommendation));
+    out
+}
+
+fn find_target_node<'a>(
+    workspace: &WorkspaceInfo,
+    graph: &'a SourceCodeGraph,
+    target: &Path,
+) -> Result<&'a GraphNode> {
+    let target_text = target.to_string_lossy();
+    let absolute_target = if target.is_absolute() {
+        Some(target.to_path_buf())
+    } else {
+        Some(workspace.root.join(target))
+    };
+
+    graph
+        .nodes
+        .iter()
+        .filter(|node| is_python_node(node) || node_path(node).is_some())
+        .find(|node| {
+            let Some(path) = node_path(node) else {
+                return false;
+            };
+            let node_path = Path::new(&path);
+            let display = display_path(&workspace.root, &path);
+            path == target_text
+                || display == target_text
+                || node_path.ends_with(target)
+                || absolute_target
+                    .as_ref()
+                    .map(|abs| node_path == abs.as_path())
+                    .unwrap_or(false)
+        })
+        .with_context(|| format!("Target not found in graph: {}", target.display()))
+}
+
+fn extract_python_contract(content: &str) -> (Vec<PythonSymbol>, Vec<PythonSymbol>, Vec<String>) {
+    let mut functions = Vec::new();
+    let mut classes = Vec::new();
+    let mut imports = Vec::new();
+
+    for (index, line) in content.lines().enumerate() {
+        let line_no = index + 1;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
+            imports.push(trimmed.to_string());
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("async def ") {
+            if let Some(name) = parse_python_name(rest) {
+                functions.push(PythonSymbol {
+                    name,
+                    kind: PythonSymbolKind::AsyncFunction,
+                    line: line_no,
+                });
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("def ") {
+            if let Some(name) = parse_python_name(rest) {
+                functions.push(PythonSymbol {
+                    name,
+                    kind: PythonSymbolKind::Function,
+                    line: line_no,
+                });
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("class ") {
+            if let Some(name) = parse_python_name(rest) {
+                classes.push(PythonSymbol {
+                    name,
+                    kind: PythonSymbolKind::Class,
+                    line: line_no,
+                });
+            }
+        }
+    }
+
+    (functions, classes, imports)
+}
+
+fn parse_python_name(rest: &str) -> Option<String> {
+    let name = rest
+        .split(['(', ':'])
+        .next()
+        .map(str::trim)
+        .unwrap_or_default();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn extract_risk_signals(path: &str, content: &str) -> Vec<RiskSignal> {
+    let mut risks = Vec::new();
+    let lower_path = path.to_ascii_lowercase();
+    let lower = content.to_ascii_lowercase();
+
+    push_risk_if(
+        &mut risks,
+        lower.contains("async def ") || lower.contains("await "),
+        "async",
+        "async runtime behavior needs explicit Rust/Python boundary design",
+    );
+    push_risk_if(
+        &mut risks,
+        lower.contains("open(")
+            || lower.contains("pathlib")
+            || lower.contains("subprocess")
+            || lower_path.contains("/io"),
+        "io",
+        "filesystem or subprocess side effects make shadow comparison harder",
+    );
+    push_risk_if(
+        &mut risks,
+        lower.contains("requests")
+            || lower.contains("httpx")
+            || lower.contains("urllib")
+            || lower.contains("socket"),
+        "network",
+        "network calls should stay in Python orchestration or be mocked first",
+    );
+    push_risk_if(
+        &mut risks,
+        lower.contains("sqlalchemy")
+            || lower.contains("sqlite3")
+            || lower.contains("psycopg")
+            || lower.contains("django.db"),
+        "database",
+        "database coupling raises migration cost",
+    );
+    push_risk_if(
+        &mut risks,
+        lower.contains("fastapi")
+            || lower.contains("flask")
+            || lower.contains("django")
+            || lower_path.contains("/routes")
+            || lower_path.contains("/api"),
+        "framework",
+        "framework boundary should usually be deferred",
+    );
+    push_risk_if(
+        &mut risks,
+        lower.contains("eval(")
+            || lower.contains("exec(")
+            || lower.contains("getattr(")
+            || lower.contains("setattr(")
+            || lower.contains("importlib")
+            || lower.contains("globals()")
+            || lower.contains("locals()"),
+        "dynamic_python",
+        "dynamic behavior needs AST/runtime analysis before generation",
+    );
+
+    risks
+}
+
+fn push_risk_if(risks: &mut Vec<RiskSignal>, condition: bool, category: &str, detail: &str) {
+    if condition {
+        risks.push(RiskSignal {
+            category: category.to_string(),
+            detail: detail.to_string(),
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RelationDirection {
+    Incoming,
+    Outgoing,
+}
+
+fn related_paths(
+    graph: &SourceCodeGraph,
+    node_id: NodeId,
+    direction: RelationDirection,
+    root: &Path,
+) -> Vec<String> {
+    let node_map: HashMap<NodeId, &GraphNode> = graph.nodes.iter().map(|n| (n.id, n)).collect();
+    let mut paths: Vec<String> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.relationship != "contains")
+        .filter_map(|edge| match direction {
+            RelationDirection::Incoming if edge.to == node_id => node_map.get(&edge.from),
+            RelationDirection::Outgoing if edge.from == node_id => node_map.get(&edge.to),
+            _ => None,
+        })
+        .filter_map(|node| node_path(node).map(|path| display_path(root, &path)))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn nearby_tests_for(
+    node: &GraphNode,
+    graph: &SourceCodeGraph,
+    test_nodes: &HashSet<NodeId>,
+    root: &Path,
+) -> Vec<String> {
+    let node_map: HashMap<NodeId, &GraphNode> = graph.nodes.iter().map(|n| (n.id, n)).collect();
+    let mut tests: Vec<String> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.to == node.id && test_nodes.contains(&edge.from))
+        .filter_map(|edge| node_map.get(&edge.from))
+        .filter_map(|test| node_path(test).map(|path| display_path(root, &path)))
+        .collect();
+
+    if let Some(path) = node_path(node) {
+        let stem = Path::new(&path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
+        if !stem.is_empty() {
+            tests.extend(graph.nodes.iter().filter_map(|candidate| {
+                if !test_nodes.contains(&candidate.id) {
+                    return None;
+                }
+                node_path(candidate).and_then(|test_path| {
+                    if test_path.contains(stem) {
+                        Some(display_path(root, &test_path))
+                    } else {
+                        None
+                    }
+                })
+            }));
+        }
+    }
+
+    tests.sort();
+    tests.dedup();
+    tests
+}
+
+fn inspection_recommendation(
+    is_candidate: bool,
+    language: &str,
+    strategy: RustifyStrategy,
+    has_test_signal: bool,
+    risks: &[RiskSignal],
+) -> String {
+    if language != "python" {
+        return "Not a Python target. Use `vg rustify plan` to find Python candidates.".to_string();
+    }
+    if !is_candidate {
+        return "Target is not a migration candidate; inspect a non-test Python source module."
+            .to_string();
+    }
+    if !has_test_signal {
+        return "Transpile or port tests first, then re-run inspection before generating Rust."
+            .to_string();
+    }
+    if risks.iter().any(|risk| {
+        matches!(
+            risk.category.as_str(),
+            "database" | "framework" | "dynamic_python"
+        )
+    }) {
+        return "Defer automatic Rust generation until framework/database/dynamic behavior is isolated."
+            .to_string();
+    }
+    match strategy {
+        RustifyStrategy::Pyo3ShadowModule => {
+            "Good POC target: generate a PyO3 shadow module and compare against existing tests."
+                .to_string()
+        }
+        RustifyStrategy::RustHelperModule => {
+            "Good helper target: generate a Rust helper module behind the existing Python API."
+                .to_string()
+        }
+        RustifyStrategy::TranspileTestsFirst => {
+            "Port behavior tests before attempting implementation generation.".to_string()
+        }
+        RustifyStrategy::Defer => "Defer until cost signals are reduced.".to_string(),
+    }
+}
+
+fn format_symbols(symbols: &[PythonSymbol]) -> String {
+    if symbols.is_empty() {
+        return "none".to_string();
+    }
+    symbols
+        .iter()
+        .map(|symbol| format!("{}@{}", symbol.name, symbol.line))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_list(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 #[derive(Debug, Default)]
@@ -689,5 +1209,39 @@ mod tests {
             display_path(root, "/workspace/repo/app/score.py"),
             "repo/app/score.py"
         );
+    }
+
+    #[test]
+    fn extracts_python_contract_from_source_text() {
+        let source = r#"
+import math
+from app.models import Item
+
+class Scorer:
+    def score(self, value):
+        return value
+
+async def normalize(value):
+    return value
+"#;
+
+        let (functions, classes, imports) = extract_python_contract(source);
+
+        assert_eq!(imports.len(), 2);
+        assert_eq!(classes[0].name, "Scorer");
+        assert_eq!(functions[0].name, "score");
+        assert!(matches!(functions[1].kind, PythonSymbolKind::AsyncFunction));
+    }
+
+    #[test]
+    fn risk_signals_identify_framework_and_dynamic_python() {
+        let risks = extract_risk_signals(
+            "/repo/app/api/routes.py",
+            "from fastapi import APIRouter\nvalue = getattr(obj, name)\n",
+        );
+        let categories: Vec<&str> = risks.iter().map(|risk| risk.category.as_str()).collect();
+
+        assert!(categories.contains(&"framework"));
+        assert!(categories.contains(&"dynamic_python"));
     }
 }

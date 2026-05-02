@@ -690,6 +690,28 @@ enum RustifyCommands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Inspect one Python module and produce a migration contract.
+    ///
+    /// This is read-only. It extracts functions/classes, imports, graph
+    /// dependencies, nearby tests, and migration risk signals for one target.
+    Inspect {
+        /// Path to project or workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Target Python file to inspect.
+        #[arg(long)]
+        target: PathBuf,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Force graph rebuild before inspection.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Remote repository commands.
@@ -1252,6 +1274,14 @@ async fn main() -> Result<()> {
                 force,
             } => {
                 commands::rustify::plan(&ctx, &path, json, top, force).await?;
+            }
+            RustifyCommands::Inspect {
+                path,
+                target,
+                json,
+                force,
+            } => {
+                commands::rustify::inspect(&ctx, &path, &target, json, force).await?;
             }
         },
 
