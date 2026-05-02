@@ -4,9 +4,10 @@
 //! candidates and explains tradeoffs, but never generates or applies code.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use vibe_graph_core::{GraphNode, GraphNodeKind, NodeId, SourceCodeGraph};
 use vibe_graph_ops::{GraphRequest, OpsContext, Store, SyncRequest, WorkspaceInfo, WorkspaceKind};
@@ -50,6 +51,54 @@ pub async fn inspect(
         print!("{}", format_inspection(&report));
     }
 
+    Ok(())
+}
+
+/// Execute `vg rustify tests`.
+pub async fn generate_tests(
+    ctx: &OpsContext,
+    path: &Path,
+    target: &Path,
+    output: &Path,
+    force: bool,
+) -> Result<()> {
+    let workspace = WorkspaceInfo::detect(path)?;
+    let graph = load_or_build_graph(ctx, &workspace, force).await?;
+    let report = build_inspection(&workspace, &graph, target)?;
+    ensure_python_generation_target(&report)?;
+
+    let target_dir = rustify_target_dir(&workspace.root, output, &report.target);
+    write_test_scaffold(&report, &target_dir)?;
+
+    println!("Rustify tests scaffold written to {}", target_dir.display());
+    println!(
+        "Next: run `cargo test --manifest-path {}/Cargo.toml` after filling ignored TODO cases.",
+        target_dir.display()
+    );
+    Ok(())
+}
+
+/// Execute `vg rustify shadow`.
+pub async fn generate_shadow(
+    ctx: &OpsContext,
+    path: &Path,
+    target: &Path,
+    output: &Path,
+    force: bool,
+) -> Result<()> {
+    let workspace = WorkspaceInfo::detect(path)?;
+    let graph = load_or_build_graph(ctx, &workspace, force).await?;
+    let report = build_inspection(&workspace, &graph, target)?;
+    ensure_python_generation_target(&report)?;
+
+    let target_dir = rustify_target_dir(&workspace.root, output, &report.target);
+    write_shadow_scaffold(&report, &target_dir)?;
+
+    println!(
+        "Rustify shadow scaffold written to {}",
+        target_dir.join("shadow").display()
+    );
+    println!("Next: implement stubs, then compare through the generated test scaffold.");
     Ok(())
 }
 
@@ -848,6 +897,482 @@ fn yes_no(value: bool) -> &'static str {
     }
 }
 
+fn ensure_python_generation_target(report: &RustifyInspectionReport) -> Result<()> {
+    if report.language != "python" {
+        bail!(
+            "rustify generation requires a Python target; got `{}` for {}",
+            report.language,
+            report.target
+        );
+    }
+    if !report.is_candidate {
+        bail!(
+            "rustify generation requires a non-test Python source candidate; got {}",
+            report.target
+        );
+    }
+    Ok(())
+}
+
+fn rustify_target_dir(workspace_root: &Path, output: &Path, target: &str) -> PathBuf {
+    let base = if output.is_absolute() {
+        output.to_path_buf()
+    } else {
+        workspace_root.join(output)
+    };
+    base.join(slugify_path(target))
+}
+
+fn write_test_scaffold(report: &RustifyInspectionReport, target_dir: &Path) -> Result<()> {
+    let artifacts = vec![
+        "manifest.json".to_string(),
+        "Cargo.toml".to_string(),
+        "tests/equivalence.rs".to_string(),
+        "scripts/capture_python.py".to_string(),
+        "README.md".to_string(),
+    ];
+    write_manifest(
+        report,
+        "tests",
+        &artifacts,
+        &target_dir.join("manifest.json"),
+    )?;
+    write_file(
+        &target_dir.join("Cargo.toml"),
+        &test_cargo_toml(&slugify_path(&report.target)),
+    )?;
+    write_file(
+        &target_dir.join("tests/equivalence.rs"),
+        &equivalence_test_rs(report),
+    )?;
+    write_file(
+        &target_dir.join("scripts/capture_python.py"),
+        &capture_python_py(report)?,
+    )?;
+    write_file(&target_dir.join("README.md"), &tests_readme(report))?;
+    Ok(())
+}
+
+fn write_shadow_scaffold(report: &RustifyInspectionReport, target_dir: &Path) -> Result<()> {
+    let shadow_dir = target_dir.join("shadow");
+    let artifacts = vec![
+        "manifest.json".to_string(),
+        "Cargo.toml".to_string(),
+        "src/lib.rs".to_string(),
+        "python_adapter.py".to_string(),
+        "README.md".to_string(),
+    ];
+    write_manifest(
+        report,
+        "shadow",
+        &artifacts,
+        &shadow_dir.join("manifest.json"),
+    )?;
+    write_file(
+        &shadow_dir.join("Cargo.toml"),
+        &shadow_cargo_toml(&slugify_path(&report.target)),
+    )?;
+    write_file(&shadow_dir.join("src/lib.rs"), &shadow_lib_rs(report))?;
+    write_file(
+        &shadow_dir.join("python_adapter.py"),
+        &shadow_python_adapter_py(report)?,
+    )?;
+    write_file(&shadow_dir.join("README.md"), &shadow_readme(report))?;
+    Ok(())
+}
+
+fn write_manifest(
+    report: &RustifyInspectionReport,
+    artifact_type: &str,
+    artifacts: &[String],
+    path: &Path,
+) -> Result<()> {
+    let manifest = serde_json::json!({
+        "schema": "vibe-graph.rustify.v1",
+        "artifact_type": artifact_type,
+        "deterministic": true,
+        "source": {
+            "project": report.project_name,
+            "repo": report.repo,
+            "target": report.target,
+        },
+        "inspection": report,
+        "artifacts": artifacts,
+        "notes": [
+            "Generated files are scaffolds only.",
+            "Original Python source is not modified.",
+            "Fill TODO behavior cases before using this for migration decisions."
+        ],
+    });
+    let content = format!("{}\n", serde_json::to_string_pretty(&manifest)?);
+    write_file(path, &content)
+}
+
+fn write_file(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))
+}
+
+fn test_cargo_toml(slug: &str) -> String {
+    format!(
+        r#"[package]
+name = "rustify-tests-{slug}"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+serde_json = "1"
+"#
+    )
+}
+
+fn equivalence_test_rs(report: &RustifyInspectionReport) -> String {
+    let symbol_count = report.functions.len() + report.classes.len();
+    format!(
+        r#"const MANIFEST: &str = include_str!("../manifest.json");
+
+#[test]
+fn manifest_is_valid() {{
+    let manifest: serde_json::Value =
+        serde_json::from_str(MANIFEST).expect("manifest should be valid JSON");
+    assert_eq!(manifest["schema"], "vibe-graph.rustify.v1");
+    assert_eq!(manifest["artifact_type"], "tests");
+    assert_eq!(manifest["source"]["target"], "{target}");
+}}
+
+#[test]
+fn discovered_python_contract_is_recorded() {{
+    let manifest: serde_json::Value =
+        serde_json::from_str(MANIFEST).expect("manifest should be valid JSON");
+    let functions = manifest["inspection"]["functions"].as_array().unwrap();
+    let classes = manifest["inspection"]["classes"].as_array().unwrap();
+    assert_eq!(functions.len() + classes.len(), {symbol_count});
+}}
+
+#[test]
+#[ignore = "Fill concrete input/output fixtures after running scripts/capture_python.py"]
+fn compare_python_and_rust_behavior() {{
+    // TODO: Load captured Python fixtures and compare them against the shadow crate.
+    // This is intentionally ignored until deterministic fixtures are committed.
+}}
+"#,
+        target = report.target,
+        symbol_count = symbol_count,
+    )
+}
+
+fn capture_python_py(report: &RustifyInspectionReport) -> Result<String> {
+    let functions = serde_json::to_string(&symbol_names(&report.functions))?;
+    let classes = serde_json::to_string(&symbol_names(&report.classes))?;
+    Ok(format!(
+        r#"#!/usr/bin/env python3
+"""Deterministic capture scaffold for {target}.
+
+This script imports the target module and records the discovered public symbols.
+It does not call functions automatically because inputs must be explicit.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+import sys
+
+TARGET = pathlib.Path("{target}").resolve()
+FUNCTIONS = {functions}
+CLASSES = {classes}
+
+
+def load_module(path: pathlib.Path):
+    spec = importlib.util.spec_from_file_location("rustify_target", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot import {{path}}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def main() -> int:
+    module = load_module(TARGET)
+    payload = {{
+        "target": str(TARGET),
+        "functions": [
+            {{"name": name, "present": callable(getattr(module, name, None))}}
+            for name in FUNCTIONS
+        ],
+        "classes": [
+            {{"name": name, "present": isinstance(getattr(module, name, None), type)}}
+            for name in CLASSES
+        ],
+        "todo": "Add explicit fixtures and expected outputs before equivalence checks.",
+    }}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"#,
+        target = report.target,
+        functions = functions,
+        classes = classes,
+    ))
+}
+
+fn tests_readme(report: &RustifyInspectionReport) -> String {
+    format!(
+        r#"# Rustify Test Scaffold
+
+Target: `{target}`
+
+This directory is deterministic scaffolding for behavior capture and future
+Python/Rust equivalence checks. It does not modify source files.
+
+## Files
+
+- `manifest.json` records the migration contract from `vg rustify inspect`.
+- `scripts/capture_python.py` imports the Python module and records discovered symbols.
+- `tests/equivalence.rs` validates the manifest and contains an ignored TODO comparison test.
+
+## Next Commands
+
+```sh
+python scripts/capture_python.py
+cargo test
+```
+"#,
+        target = report.target
+    )
+}
+
+fn shadow_cargo_toml(slug: &str) -> String {
+    format!(
+        r#"[package]
+name = "rustify-shadow-{slug}"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+"#
+    )
+}
+
+fn shadow_lib_rs(report: &RustifyInspectionReport) -> String {
+    let mut out = String::new();
+    out.push_str("// Deterministic Rust shadow scaffold generated by `vg rustify shadow`.\n");
+    out.push_str("// Original Python source is not modified.\n\n");
+    out.push_str(&format!(
+        "pub const TARGET: &str = {:?};\n\n",
+        report.target
+    ));
+    out.push_str("pub fn manifest() -> &'static str {\n");
+    out.push_str("    include_str!(\"../manifest.json\")\n");
+    out.push_str("}\n\n");
+    out.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
+    out.push_str("pub struct RustifyShadowError {\n");
+    out.push_str("    pub symbol: &'static str,\n");
+    out.push_str("    pub message: &'static str,\n");
+    out.push_str("}\n\n");
+    out.push_str("impl std::fmt::Display for RustifyShadowError {\n");
+    out.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+    out.push_str("        write!(f, \"{}: {}\", self.symbol, self.message)\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+    out.push_str("impl std::error::Error for RustifyShadowError {}\n\n");
+
+    let functions = unique_rust_functions(report);
+    if functions.is_empty() {
+        out.push_str("pub fn rustify_shadow_placeholder(_input_json: &str) -> Result<String, RustifyShadowError> {\n");
+        out.push_str("    Err(RustifyShadowError {\n");
+        out.push_str("        symbol: \"rustify_shadow_placeholder\",\n");
+        out.push_str("        message: \"no Python functions were discovered for this target\",\n");
+        out.push_str("    })\n");
+        out.push_str("}\n\n");
+    } else {
+        for (python_name, rust_name) in functions {
+            out.push_str(&format!(
+                "pub fn {rust_name}(_input_json: &str) -> Result<String, RustifyShadowError> {{\n"
+            ));
+            out.push_str("    Err(RustifyShadowError {\n");
+            out.push_str(&format!("        symbol: {:?},\n", python_name));
+            out.push_str("        message: \"TODO: implement Rust behavior and compare with Python fixtures\",\n");
+            out.push_str("    })\n");
+            out.push_str("}\n\n");
+        }
+    }
+
+    out.push_str("#[cfg(test)]\n");
+    out.push_str("mod tests {\n");
+    out.push_str("    #[test]\n");
+    out.push_str("    fn manifest_is_embedded() {\n");
+    out.push_str("        assert!(super::manifest().contains(\"vibe-graph.rustify.v1\"));\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+    out
+}
+
+fn shadow_python_adapter_py(report: &RustifyInspectionReport) -> Result<String> {
+    let functions = serde_json::to_string(&symbol_names(&report.functions))?;
+    Ok(format!(
+        r#""""Opt-in Python adapter scaffold for the Rust shadow crate.
+
+The original target module is not modified. Wire this adapter manually only
+after equivalence tests pass.
+"""
+
+from __future__ import annotations
+
+FUNCTIONS = {functions}
+TARGET = "{target}"
+
+
+def call_shadow(symbol: str, input_json: str) -> str:
+    if symbol not in FUNCTIONS:
+        raise ValueError(f"Unknown rustify symbol: {{symbol}}")
+    raise NotImplementedError(
+        "Build and load the generated Rust crate before routing calls through shadow code."
+    )
+"#,
+        target = report.target,
+        functions = functions,
+    ))
+}
+
+fn shadow_readme(report: &RustifyInspectionReport) -> String {
+    format!(
+        r#"# Rustify Shadow Scaffold
+
+Target: `{target}`
+
+This is a deterministic Rust helper crate scaffold. It intentionally returns
+TODO errors until behavior is implemented and compared against Python fixtures.
+
+## Files
+
+- `manifest.json` records the migration contract from `vg rustify inspect`.
+- `src/lib.rs` contains Rust stubs for discovered Python functions.
+- `python_adapter.py` is an opt-in adapter template; it does not patch source.
+
+## Next Commands
+
+```sh
+cargo test --manifest-path Cargo.toml
+```
+"#,
+        target = report.target
+    )
+}
+
+fn symbol_names(symbols: &[PythonSymbol]) -> Vec<String> {
+    symbols.iter().map(|symbol| symbol.name.clone()).collect()
+}
+
+fn unique_rust_functions(report: &RustifyInspectionReport) -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    let mut functions = Vec::new();
+    for symbol in &report.functions {
+        let base = rust_identifier(&symbol.name);
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        while !seen.insert(candidate.clone()) {
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        functions.push((symbol.name.clone(), candidate));
+    }
+    functions
+}
+
+fn slugify_path(path: &str) -> String {
+    let mut slug = String::new();
+    for ch in path.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('_') {
+            slug.push('_');
+        }
+    }
+    let slug = slug.trim_matches('_');
+    if slug.is_empty() {
+        "target".to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
+fn rust_identifier(name: &str) -> String {
+    let mut ident = String::new();
+    for (index, ch) in name.chars().enumerate() {
+        let valid = ch == '_' || ch.is_ascii_alphanumeric();
+        if !valid {
+            ident.push('_');
+            continue;
+        }
+        if index == 0 && ch.is_ascii_digit() {
+            ident.push_str("symbol_");
+        }
+        ident.push(ch.to_ascii_lowercase());
+    }
+    let ident = ident.trim_matches('_');
+    let ident = if ident.is_empty() { "symbol" } else { ident };
+    if is_rust_keyword(ident) {
+        format!("{ident}_symbol")
+    } else {
+        ident.to_string()
+    }
+}
+
+fn is_rust_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "as" | "async"
+            | "await"
+            | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "dyn"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+    )
+}
+
 #[derive(Debug, Default)]
 struct RepoStats {
     python_files: usize,
@@ -1243,5 +1768,97 @@ async def normalize(value):
 
         assert!(categories.contains(&"framework"));
         assert!(categories.contains(&"dynamic_python"));
+    }
+
+    #[test]
+    fn slug_and_rust_identifiers_are_stable() {
+        assert_eq!(slugify_path("repo/src/scoring.py"), "repo_src_scoring_py");
+        assert_eq!(rust_identifier("type"), "type_symbol");
+        assert_eq!(rust_identifier("2score!"), "symbol_2score");
+    }
+
+    #[test]
+    fn shadow_functions_are_unique_after_sanitizing() {
+        let report = RustifyInspectionReport {
+            project_name: "demo".to_string(),
+            repo: "demo".to_string(),
+            target: "src/scoring.py".to_string(),
+            language: "python".to_string(),
+            is_candidate: true,
+            strategy: RustifyStrategy::RustHelperModule,
+            impact_score: 1.0,
+            cost_score: 1.0,
+            roi: 1.0,
+            in_degree: 0,
+            out_degree: 0,
+            has_test_signal: true,
+            functions: vec![
+                PythonSymbol {
+                    name: "score-value".to_string(),
+                    kind: PythonSymbolKind::Function,
+                    line: 1,
+                },
+                PythonSymbol {
+                    name: "score_value".to_string(),
+                    kind: PythonSymbolKind::Function,
+                    line: 2,
+                },
+            ],
+            classes: Vec::new(),
+            imports: Vec::new(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
+            nearby_tests: Vec::new(),
+            risk_signals: Vec::new(),
+            recommendation: "test".to_string(),
+        };
+
+        let functions = unique_rust_functions(&report);
+        assert_eq!(functions[0].1, "score_value");
+        assert_eq!(functions[1].1, "score_value_2");
+    }
+
+    #[test]
+    fn scaffold_writers_create_expected_files() {
+        let report = RustifyInspectionReport {
+            project_name: "demo".to_string(),
+            repo: "demo".to_string(),
+            target: "src/scoring.py".to_string(),
+            language: "python".to_string(),
+            is_candidate: true,
+            strategy: RustifyStrategy::Pyo3ShadowModule,
+            impact_score: 1.0,
+            cost_score: 0.5,
+            roi: 2.0,
+            in_degree: 1,
+            out_degree: 1,
+            has_test_signal: true,
+            functions: vec![PythonSymbol {
+                name: "score".to_string(),
+                kind: PythonSymbolKind::Function,
+                line: 10,
+            }],
+            classes: Vec::new(),
+            imports: Vec::new(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
+            nearby_tests: Vec::new(),
+            risk_signals: Vec::new(),
+            recommendation: "test".to_string(),
+        };
+        let dir =
+            std::env::temp_dir().join(format!("vibe_graph_rustify_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+
+        write_test_scaffold(&report, &dir).unwrap();
+        write_shadow_scaffold(&report, &dir).unwrap();
+
+        assert!(dir.join("manifest.json").exists());
+        assert!(dir.join("tests/equivalence.rs").exists());
+        assert!(dir.join("scripts/capture_python.py").exists());
+        assert!(dir.join("shadow/manifest.json").exists());
+        assert!(dir.join("shadow/src/lib.rs").exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

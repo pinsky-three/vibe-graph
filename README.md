@@ -99,6 +99,8 @@ make build FEATURES=semantic      # With embedding search
 | `vg quality` | Calculate the standard code quality KPI bundle |
 | `vg rustify plan` | Plan progressive Python-to-Rust optimization candidates |
 | `vg rustify inspect --target <file.py>` | Inspect one Python candidate before generation |
+| `vg rustify tests --target <file.py>` | Generate deterministic test/equivalence scaffolds |
+| `vg rustify shadow --target <file.py>` | Generate a deterministic Rust shadow/helper scaffold |
 | `vg exec <name>` | Run a named script from `vg.toml` (like `npm run`) |
 | `vg exec` | List all available scripts |
 | `vg init` | Generate `vg.toml` project config from detected project type |
@@ -149,9 +151,11 @@ make build FEATURES=semantic      # With embedding search
 - `plan --top <N>` — Show top N global candidates (default: 10)
 - `inspect --target <file.py>` — Produce a migration contract for one candidate
 - `inspect --json` — Output the migration contract as JSON
+- `tests --target <file.py> --output rustify/` — Generate a manifest, Rust test scaffold, and Python capture runner
+- `shadow --target <file.py> --output rustify/` — Generate a Rust helper crate scaffold and opt-in Python adapter template
 - `--force` — Rebuild graph before planning or inspection
 
-`vg rustify plan` and `vg rustify inspect` are read-only for source files. `plan` ranks Python migration candidates by impact/cost; `inspect` expands one candidate into functions/classes, imports, graph dependencies, nearby tests, risk signals, and a recommended strategy. See [`RUSTIFY_POC.md`](RUSTIFY_POC.md) for the POC scope and safety model.
+`vg rustify plan` and `vg rustify inspect` are read-only for source files. `vg rustify tests` and `vg rustify shadow` write deterministic scaffolds only under `--output`; they do not patch the Python project. `plan` ranks Python migration candidates by impact/cost; `inspect` expands one candidate into functions/classes, imports, graph dependencies, nearby tests, risk signals, and a recommended strategy. See [`RUSTIFY_POC.md`](RUSTIFY_POC.md) for the POC scope and safety model.
 
 **Semantic Options:**
 - `--top <N>` — Number of results to return (default: 10)

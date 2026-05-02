@@ -15,19 +15,22 @@ vg rustify plan ./workspace
 vg rustify plan ./workspace --json
 vg rustify inspect ./python-project --target src/scoring.py
 vg rustify inspect ./workspace --target repo/src/scoring.py --json
+vg rustify tests ./python-project --target src/scoring.py --output rustify/
+vg rustify shadow ./python-project --target src/scoring.py --output rustify/
 ```
 
-The commands may build or refresh `.self` graph data, but they do not modify
-source files.
+The commands may build or refresh `.self` graph data. `plan` and `inspect` do
+not write source artifacts. `tests` and `shadow` write only under the explicit
+`--output` directory and do not patch the Python project.
 
 ## Progressive Migration Ladder
 
 1. Observe the project graph, languages, tests, and dependencies.
 2. Rank Python candidates by impact/cost ratio.
 3. Inspect one chosen target and produce a migration contract.
-4. Transpile or port tests first for the chosen target.
-5. Generate a Rust shadow module in a future phase.
-6. Compare Python and Rust behavior.
+4. Generate deterministic test scaffolds and capture runners.
+5. Generate a deterministic Rust shadow/helper scaffold.
+6. Fill fixtures and compare Python and Rust behavior.
 7. Route traffic through Rust only when tests and equivalence checks pass.
 8. Expand from function to module to package only after confidence grows.
 
@@ -63,6 +66,32 @@ migration contract. It reports:
 
 Inspection is still read-only. If tests are missing, the recommended next action
 is to port or transpile tests before generating Rust.
+
+## Deterministic Scaffolds
+
+`vg rustify tests --target <file.py> --output rustify/` writes:
+
+- `rustify/<target-slug>/manifest.json`
+- `rustify/<target-slug>/Cargo.toml`
+- `rustify/<target-slug>/tests/equivalence.rs`
+- `rustify/<target-slug>/scripts/capture_python.py`
+- `rustify/<target-slug>/README.md`
+
+The generated Rust test crate validates the manifest and contains an ignored
+TODO equivalence test. The Python capture runner imports the target and records
+discovered symbols, but it does not call functions without explicit fixtures.
+
+`vg rustify shadow --target <file.py> --output rustify/` writes:
+
+- `rustify/<target-slug>/shadow/manifest.json`
+- `rustify/<target-slug>/shadow/Cargo.toml`
+- `rustify/<target-slug>/shadow/src/lib.rs`
+- `rustify/<target-slug>/shadow/python_adapter.py`
+- `rustify/<target-slug>/shadow/README.md`
+
+The shadow crate contains Rust stubs for discovered Python functions. Stubs
+return TODO errors until behavior is implemented and compared against captured
+Python fixtures.
 
 ## Candidate Scoring
 
@@ -108,8 +137,8 @@ The POC succeeds when:
 ## Deferred Work
 
 - Python AST extraction.
-- Test transpilation.
-- Rust/PyO3 code generation.
+- Full pytest-to-Rust test translation.
+- Rust/PyO3 implementation generation.
 - Python/Rust equivalence comparison.
 - Profiling ingestion.
 - `compare` and `apply` commands.

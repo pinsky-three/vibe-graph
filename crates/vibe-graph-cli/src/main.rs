@@ -712,6 +712,48 @@ enum RustifyCommands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Generate deterministic test scaffolds for one Python target.
+    ///
+    /// Writes only under the explicit output directory.
+    Tests {
+        /// Path to project or workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Target Python file to scaffold tests for.
+        #[arg(long)]
+        target: PathBuf,
+
+        /// Output directory for generated rustify artifacts.
+        #[arg(long, default_value = "rustify")]
+        output: PathBuf,
+
+        /// Force graph rebuild before generation.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Generate a deterministic Rust shadow/helper crate scaffold.
+    ///
+    /// Writes only under the explicit output directory.
+    Shadow {
+        /// Path to project or workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Target Python file to scaffold a shadow crate for.
+        #[arg(long)]
+        target: PathBuf,
+
+        /// Output directory for generated rustify artifacts.
+        #[arg(long, default_value = "rustify")]
+        output: PathBuf,
+
+        /// Force graph rebuild before generation.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Remote repository commands.
@@ -1282,6 +1324,22 @@ async fn main() -> Result<()> {
                 force,
             } => {
                 commands::rustify::inspect(&ctx, &path, &target, json, force).await?;
+            }
+            RustifyCommands::Tests {
+                path,
+                target,
+                output,
+                force,
+            } => {
+                commands::rustify::generate_tests(&ctx, &path, &target, &output, force).await?;
+            }
+            RustifyCommands::Shadow {
+                path,
+                target,
+                output,
+                force,
+            } => {
+                commands::rustify::generate_shadow(&ctx, &path, &target, &output, force).await?;
             }
         },
 
