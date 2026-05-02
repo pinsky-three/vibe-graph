@@ -9347,7 +9347,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-graph-viz"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
