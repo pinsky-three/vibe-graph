@@ -386,6 +386,10 @@ enum Commands {
     #[command(subcommand)]
     Remote(RemoteCommands),
 
+    /// Plan progressive Python-to-Rust optimization candidates.
+    #[command(subcommand)]
+    Rustify(RustifyCommands),
+
     /// Manage CLI configuration.
     #[command(subcommand)]
     Config(ConfigCommands),
@@ -660,6 +664,32 @@ enum SemanticCommands {
     /// Set `VG_EMBED_MODEL` to one of the listed model codes to override
     /// the default (BGE-Small-EN v1.5).
     Models,
+}
+
+/// Python-to-Rust optimization planning commands.
+#[derive(Subcommand, Debug)]
+enum RustifyCommands {
+    /// Build a read-only Rustification migration plan.
+    ///
+    /// Ranks Python source files by impact/cost ratio. In workspace mode, groups
+    /// candidates by repository and ranks them globally.
+    Plan {
+        /// Path to project or workspace (defaults to current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Show top N global candidates.
+        #[arg(long, default_value = "10")]
+        top: usize,
+
+        /// Force graph rebuild before planning.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Remote repository commands.
@@ -1213,6 +1243,17 @@ async fn main() -> Result<()> {
                 }
             }
         }
+
+        Commands::Rustify(rustify_cmd) => match rustify_cmd {
+            RustifyCommands::Plan {
+                path,
+                json,
+                top,
+                force,
+            } => {
+                commands::rustify::plan(&ctx, &path, json, top, force).await?;
+            }
+        },
 
         Commands::Config(config_cmd_inner) => {
             let mut cli_config = cli_config;

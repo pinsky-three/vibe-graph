@@ -97,6 +97,7 @@ make build FEATURES=semantic      # With embedding search
 | `vg run --once` | Single-pass analysis + task generation (CI mode) |
 | `vg run --goal "..."` | Direct evolution toward a specific feature or goal |
 | `vg quality` | Calculate the standard code quality KPI bundle |
+| `vg rustify plan` | Plan progressive Python-to-Rust optimization candidates |
 | `vg exec <name>` | Run a named script from `vg.toml` (like `npm run`) |
 | `vg exec` | List all available scripts |
 | `vg init` | Generate `vg.toml` project config from detected project type |
@@ -141,6 +142,13 @@ make build FEATURES=semantic      # With embedding search
 - `--force` — Rebuild graph and automaton description first
 
 `vg quality` exits non-zero when any quality gate fails, so it can be used as a CI check.
+
+**Rustify Options:**
+- `--json` — Output the Rustification plan as JSON
+- `--top <N>` — Show top N global candidates (default: 10)
+- `--force` — Rebuild graph before planning
+
+`vg rustify plan` is read-only for source files. It ranks Python migration candidates by impact/cost and, in workspace mode, groups candidates by repository. See [`RUSTIFY_POC.md`](RUSTIFY_POC.md) for the POC scope and safety model.
 
 **Semantic Options:**
 - `--top <N>` — Number of results to return (default: 10)

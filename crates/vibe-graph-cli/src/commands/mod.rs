@@ -8,6 +8,7 @@ pub mod process;
 pub mod quality;
 pub mod remote;
 pub mod run;
+pub mod rustify;
 pub mod semantic;
 pub mod serve;
 
